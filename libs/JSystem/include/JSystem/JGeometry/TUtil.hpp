@@ -2,6 +2,9 @@
 
 #include "JSystem/JMath/JMATrigonometric.hpp"
 #include <cmath>
+#ifdef PETARI_NATIVE
+#include <cfloat>
+#endif
 #include <revolution/types.h>
 
 namespace JGeometry {

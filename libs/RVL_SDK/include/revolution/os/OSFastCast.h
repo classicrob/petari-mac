@@ -22,10 +22,18 @@ static inline u16 __OSf32tou16(register f32 in) {
 static inline void OSf32tou16(register f32* in, volatile register u16* out) {
     *out = __OSf32tou16(*in);
 }
+#elif defined(PETARI_NATIVE)
+static inline void OSf32tou16(const f32* in, volatile u16* out) {
+    *out = !(*in > 0.0f) ? 0 : *in >= 65535.0f ? 65535 : (u16)*in;
+}
 #else
 #define OSf32tou16(in, out) asm volatile("psq_st   %1, 0(%0), 1, 3 " : : "b"(out), "f"(*(in)) : "memory")
 #endif
+#ifdef PETARI_NATIVE
+static inline void OSu16tof32(const u16* in, f32* out) { *out = (f32)*in; }
+#else
 #define OSu16tof32(in, out) asm volatile("psq_l   %0, 0(%1), 1, 3  " : "=f"(*(out)) : "b"(in))
+#endif
 
 static inline void OSInitFastCast(void) {
 #ifdef __MWERKS__

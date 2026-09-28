@@ -13,6 +13,12 @@ public:
     virtual void executeOnEnd(Spine* pSpine) const;
 };
 
+#ifdef PETARI_NATIVE
+#define NERVE_INSTANCE(name) inline name name::sInstance;
+#else
+#define NERVE_INSTANCE(name) name name::sInstance ATTRIBUTE_WEAK;
+#endif
+
 #define NEW_NERVE(name, parent_class, executor_name)                                                                                                 \
     class name : public Nerve {                                                                                                                      \
     public:                                                                                                                                          \
@@ -22,7 +28,7 @@ public:
         };                                                                                                                                           \
         static name sInstance;                                                                                                                       \
     };                                                                                                                                               \
-    name name::sInstance ATTRIBUTE_WEAK;
+    NERVE_INSTANCE(name)
 
 #define NEW_NERVE_ONEND(name, parent_class, executor_name, executorOnEnd_name)                                                                       \
     class name : public Nerve {                                                                                                                      \
@@ -37,7 +43,7 @@ public:
         };                                                                                                                                           \
         static name sInstance;                                                                                                                       \
     };                                                                                                                                               \
-    name name::sInstance ATTRIBUTE_WEAK;
+    NERVE_INSTANCE(name)
 
 /* easy alternative to get a nerve instance (in the standard format) */
 #define GET_NERVE(cls, nerve) (&Nrv##cls::nerve::sInstance)

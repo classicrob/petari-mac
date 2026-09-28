@@ -34,6 +34,8 @@ void JMAQuatLerp(__REGISTER const Quaternion* p, __REGISTER const Quaternion* q,
         
         ps_sum0     dp, dp, dp, dp
     }
+#elif defined(PETARI_NATIVE)
+    dp = PSQUATDotProduct(p, q);
 #endif  // clang-format on
     f32 local_78 = dp;
 
@@ -67,6 +69,8 @@ void JMAVECScaleAdd(__REGISTER const Vec* vec1, __REGISTER const Vec* vec2, __RE
         ps_madds0 rz, v1z,  scale, v2z
         psq_st rz, 8(dst), 1, 0
 	}
+#elif defined(PETARI_NATIVE)
+    *dst = {vec1->x * scale + vec2->x, vec1->y * scale + vec2->y, vec1->z * scale + vec2->z};
 #endif  // clang-format on
 }
 
@@ -85,6 +89,8 @@ void JMAVECLerp(__REGISTER const Vec* a, __REGISTER const Vec* b, __REGISTER Vec
         psq_st bxy, 0(dst), 0, 0
         stfs bz, 8(dst)
     }
+#elif defined(PETARI_NATIVE)
+    *dst = {a->x + (b->x - a->x) * t, a->y + (b->y - a->y) * t, a->z + (b->z - a->z) * t};
 #endif
 }
 

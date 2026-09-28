@@ -1,6 +1,11 @@
 #pragma once
 
+#ifdef PETARI_NATIVE
+#include <revolution/types.h>
+#include <cstring>
+#else
 #include <revolution.h>
+#endif
 
 namespace JMath {
     class TRandom_fast_ {
@@ -15,6 +20,12 @@ namespace JMath {
         }
 
         inline float getRandF() {
+            #ifdef PETARI_NATIVE
+            const u32 bits = (rand() >> 9) | 0x3f800000;
+            f32 result;
+            std::memcpy(&result, &bits, sizeof(result));
+            return result - 1.0f;
+            #else
             // !@bug UB: in C++ it's not legal to read from an union member other
             // than the last one that was written to.
             union {
@@ -23,6 +34,7 @@ namespace JMath {
             } out;
             out.s = (rand() >> 9) | 0x3f800000;
             return out.f - 1;
+            #endif
         }
 
         inline u32 getRand(u32 range) {

@@ -227,7 +227,15 @@ public:
     u8 _69;
 };
 
-#ifdef __MWERKS__
+#ifdef PETARI_NATIVE
+#include <cstddef>
+#include <new>
+void* operator new(std::size_t, int);
+void* operator new(std::size_t, JKRHeap*);
+void* operator new(std::size_t, JKRHeap*, int);
+void* operator new[](std::size_t, int);
+void* operator new[](std::size_t, JKRHeap*, int);
+#elif defined(__MWERKS__)
 void* operator new(u32, int);
 void* operator new(u32, JKRHeap*);
 void* operator new(u32, JKRHeap*, int);

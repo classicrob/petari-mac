@@ -22,7 +22,13 @@ namespace JGeometry {
     }
 
 #else
+#ifdef PETARI_NATIVE
+    inline void negateInternal(const f32* src, f32* dst) {
+        for (int i = 0; i < 3; ++i) dst[i] = -src[i];
+    }
+#else
     inline void negateInternal(const f32* rSrc, f32* rDest);
+#endif
 #endif
 
 #ifdef __MWERKS__
@@ -41,7 +47,13 @@ namespace JGeometry {
     }
 
 #else
+#ifdef PETARI_NATIVE
+    inline void subInternal(const f32* a, const f32* b, f32* dst) {
+        for (int i = 0; i < 3; ++i) dst[i] = a[i] - b[i];
+    }
+#else
     static void subInternal(const f32* vec1, const f32* vec2, f32* dst);
+#endif
 #endif
 
 #ifdef __MWERKS__
@@ -58,7 +70,13 @@ namespace JGeometry {
     }
 
 #else
+#ifdef PETARI_NATIVE
+    inline void mulInternal(const f32* a, const f32* b, f32* dst) {
+        for (int i = 0; i < 3; ++i) dst[i] = a[i] * b[i];
+    }
+#else
     void mulInternal(const f32* vec1, const f32* vec2, f32* dst);
+#endif
 #endif
 
     template < typename T >
@@ -302,7 +320,9 @@ namespace JGeometry {
         s16 x, y, z;
 
         TVec3() {
+#ifndef PETARI_NATIVE
             x = x;  // TODO: This shouldn't be here, but it's the only way to get a Ctor generated in OceanRingPipe.cpp
+#endif
         }
 
         template < typename J >
@@ -344,7 +364,11 @@ namespace JGeometry {
         }
 
 #else
+#ifdef PETARI_NATIVE
+        TVec3(const Vec& vec) { x = vec.x; y = vec.y; z = vec.z; }
+#else
         TVec3(const Vec& vec);
+#endif
 #endif
 #ifdef __MWERKS__
         // Used inlined and non-inlined?
@@ -365,7 +389,11 @@ namespace JGeometry {
         }
 
 #else
+#ifdef PETARI_NATIVE
+        TVec3(const TVec3< f32 >& vec) { x = vec.x; y = vec.y; z = vec.z; }
+#else
         TVec3(const TVec3< f32 >& vec);
+#endif
 #endif
 
         template < typename T >
@@ -422,6 +450,8 @@ namespace JGeometry {
             stfs b_x, 8(v_b)
             }
             ;
+#elif defined(PETARI_NATIVE)
+            x = vec.x; y = vec.y; z = vec.z;
 #endif
         }
 
@@ -465,7 +495,11 @@ namespace JGeometry {
         }
 
         void setTrans(MtxPtr mtx) {
+#ifdef PETARI_NATIVE
+            set< f32 >(mtx[0][3], mtx[1][3], mtx[2][3]);
+#else
             set< f32 >((*mtx)[3], (*mtx)[7], (*mtx)[11]);
+#endif
         }
 
         TVec3 operator+(const TVec3& op) const {
@@ -640,7 +674,11 @@ namespace JGeometry {
         }
 
 #else
+#ifdef PETARI_NATIVE
+        void setPSZeroVec() { zero(); }
+#else
         void setPSZeroVec();
+#endif
 #endif
         f32 dot(const TVec3& rOther) const NO_INLINE {
             // TODO: this is *never* uninlined except in the specific
@@ -666,6 +704,8 @@ namespace JGeometry {
             }
 
             return _fp1;
+#elif defined(PETARI_NATIVE)
+            return PSVECDotProduct(this, &rOther);
 #endif
         }
 
@@ -808,7 +848,11 @@ namespace JGeometry {
             return sqdist;
         };
 #else
+#ifdef PETARI_NATIVE
+        f32 squared(const TVec3& rB) const { return JMathInlineVEC::PSVECSquareDistance(this, &rB); }
+#else
         f32 squared(const TVec3& rB) const;
+#endif
 #endif
 
         bool isZero() const {
@@ -1127,7 +1171,7 @@ namespace JGeometry {
             f32 crossPart = dir.length();
 
             if (crossPart <= JGeometry::TUtil< f32 >::epsilon()) {
-                set< f32 >(0.0f, 0.0f, 0.0f, 1.0f);
+                this->template set< f32 >(0.0f, 0.0f, 0.0f, 1.0f);
             } else {
                 f32 dotPart = rA.dot(rB);
                 f32 halfAngle = ratio * (JMAATan2(crossPart, dotPart) * 0.5f);

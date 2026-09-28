@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "macos-arm64",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/macos-arm64",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PETARI_SANITIZERS": "ON",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "macos-arm64-release",
+      "inherits": "macos-arm64",
+      "binaryDir": "${sourceDir}/build/macos-arm64-release",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release", "PETARI_SANITIZERS": "OFF"}
+    }
+  ],
+  "buildPresets": [
+    {"name": "macos-arm64", "configurePreset": "macos-arm64", "jobs": 8},
+    {"name": "macos-arm64-release", "configurePreset": "macos-arm64-release", "jobs": 8}
+  ],
+  "testPresets": [
+    {"name": "macos-arm64", "configurePreset": "macos-arm64", "output": {"outputOnFailure": true}},
+    {"name": "macos-arm64-release", "configurePreset": "macos-arm64-release", "output": {"outputOnFailure": true}}
+  ]
+}

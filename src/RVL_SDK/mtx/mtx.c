@@ -3,6 +3,7 @@
 
 static f32 Unit01[] = {0.0f, 1.0f};
 
+#ifndef PETARI_NATIVE
 // clang-format off
 void PSMTXIdentity(register Mtx m) {
     register f32 c_zero = 0.0F;
@@ -594,6 +595,7 @@ void PSMTXQuat ( register Mtx m, const register Quaternion *q )
     }
 }
 // clang-format on
+#endif
 
 void C_MTXLookAt(Mtx m, const Point3d* camPos, const Vec* camUp, const Point3d* target) {
     Vec vLook, vRight, vUp;

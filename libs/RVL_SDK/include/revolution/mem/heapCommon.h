@@ -31,7 +31,11 @@ struct MEMiHeapHead {
 
 typedef MEMiHeapHead* MEMHeapHandle;
 
+#ifdef PETARI_NATIVE
+typedef uintptr_t UIntPtr;
+#else
 typedef u32 UIntPtr;
+#endif
 
 static inline UIntPtr GetUIntPtr(const void* ptr) {
     return (UIntPtr)(ptr);

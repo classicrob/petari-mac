@@ -337,7 +337,11 @@ namespace nw4r {
 
                 TItC_base_ it_;
 
+#ifdef PETARI_NATIVE
+                friend Self;
+#else
                 friend class Self;
+#endif
             };
             explicit LinkList() {
             }

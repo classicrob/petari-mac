@@ -11,6 +11,12 @@ class JASDisposer;
 class JKRHeap;
 class JKRSolidHeap;
 
+#ifdef PETARI_NATIVE
+typedef std::size_t JASAllocationSize;
+#else
+typedef u32 JASAllocationSize;
+#endif
+
 extern JKRSolidHeap* JASDram;
 
 class JASHeap {
@@ -292,11 +298,11 @@ namespace JASKernel {
 template < typename T >
 class JASPoolAllocObject {
 public:
-    static void* operator new(u32 size) {
+    static void* operator new(JASAllocationSize size) {
         return memPool_.alloc(size);
     }
 
-    static void operator delete(void* addr, u32 size) {
+    static void operator delete(void* addr, JASAllocationSize size) {
         memPool_.free(addr, size);
     }
 
@@ -331,11 +337,11 @@ public:
 template < typename T >
 class JASPoolAllocObject_MultiThreaded {
 public:
-    static void* operator new(u32 size) {
+    static void* operator new(JASAllocationSize size) {
         return memPool_.alloc(size);
     }
 
-    static void operator delete(void* addr, u32 size) {
+    static void operator delete(void* addr, JASAllocationSize size) {
         memPool_.free(addr, size);
     }
 

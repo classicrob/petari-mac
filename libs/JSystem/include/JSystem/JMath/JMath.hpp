@@ -2,6 +2,10 @@
 
 #include <revolution/mtx.h>
 #include <revolution/types.h>
+#ifdef PETARI_NATIVE
+#include <cmath>
+#include <cstring>
+#endif
 
 void JMAMTXApplyScale(const Mtx, Mtx, f32, f32, f32);
 void JMAVECLerp(const Vec*, const Vec*, Vec*, f32);
@@ -20,6 +24,8 @@ inline f32 JMAFastSqrt(__REGISTER const f32 input) {
     } else {
         return input;
     }
+#elif defined(PETARI_NATIVE)
+    return input > 0.0f ? std::sqrt(input) : input;
 #endif
 }
 
@@ -52,6 +58,12 @@ inline f32 JMAHermiteInterpolation(__REGISTER f32 p1, __REGISTER f32 p2, __REGIS
     }
     // clang-format on
     return ff25;
+#elif defined(PETARI_NATIVE)
+    const f32 duration = p5 - p2;
+    const f32 t = (p1 - p2) / duration;
+    const f32 t2 = t * t, t3 = t2 * t;
+    return (2*t3 - 3*t2 + 1)*p3 + (t3 - 2*t2 + t)*duration*p4
+         + (-2*t3 + 3*t2)*p6 + (t3 - t2)*duration*p7;
 #endif
 }
 
@@ -81,6 +93,8 @@ namespace JMath {
             psq_st x, 0(dest), 0, 0
             stfs y, 8(dest)
         }
+#elif defined(PETARI_NATIVE)
+        std::memmove(dest, src, 3 * sizeof(f32));
 #endif
     }
 
@@ -95,6 +109,8 @@ namespace JMath {
             psq_st y, 8(dest), 0, 0
             psq_st z, 16(dest), 0, 0
         }
+#elif defined(PETARI_NATIVE)
+        std::memmove(dest, src, 6 * sizeof(f32));
 #endif
     }
 
@@ -117,6 +133,8 @@ namespace JMath {
                 psq_st    f_5, 0x28(pDest), 0, 0
         }
         ;
+#elif defined(PETARI_NATIVE)
+        std::memmove(pDest, pSrc, 12 * sizeof(f32));
 #endif
     }
 
@@ -143,6 +161,8 @@ namespace JMath {
                 psq_st    f_7, 0x38(pDest), 0, 0
         }
         ;
+#elif defined(PETARI_NATIVE)
+        std::memmove(pDest, pSrc, 16 * sizeof(f32));
 #endif
     }
 };  // namespace JMath

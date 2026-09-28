@@ -30,11 +30,11 @@ public:
         ALLOC_DIRECTION_BACKWARD = 2,
     };
 
-    static void* loadToMainRAM(const char*, unsigned char*, JKRExpandSwitch, unsigned long, JKRHeap*, EAllocDirection, unsigned long, int*,
-                               unsigned long*);
-    static void* loadToMainRAM(long, unsigned char*, JKRExpandSwitch, unsigned long, JKRHeap*, EAllocDirection, unsigned long, int*, unsigned long*);
-    static void* loadToMainRAM(JKRDvdFile*, unsigned char*, JKRExpandSwitch, unsigned long, JKRHeap*, EAllocDirection, unsigned long, int*,
-                               unsigned long*);
+    static void* loadToMainRAM(const char*, unsigned char*, JKRExpandSwitch, u32, JKRHeap*, EAllocDirection, u32, int*,
+                               u32*);
+    static void* loadToMainRAM(s32, unsigned char*, JKRExpandSwitch, u32, JKRHeap*, EAllocDirection, u32, int*, u32*);
+    static void* loadToMainRAM(JKRDvdFile*, unsigned char*, JKRExpandSwitch, u32, JKRHeap*, EAllocDirection, u32, int*,
+                               u32*);
 
     static bool isErrorRetry(void) {
         return errorRetry;

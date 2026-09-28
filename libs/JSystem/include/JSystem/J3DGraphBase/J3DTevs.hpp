@@ -16,12 +16,21 @@ extern const J3DIndTexMtxInfo j3dDefaultIndTexMtxInfo;
 extern const J3DTevStageInfo j3dDefaultTevStageInfo;
 extern const J3DIndTevStageInfo j3dDefaultIndTevStageInfo;
 
+#ifdef PETARI_NATIVE
+extern const J3DTevSwapModeInfo j3dDefaultTevSwapMode;
+namespace J3DTevsDefault {
+    using ::j3dDefaultIndTevStageInfo;
+    using ::j3dDefaultTevStageInfo;
+    using ::j3dDefaultTevSwapMode;
+}
+#else
 // doing this matches. figure out why
 namespace J3DTevsDefault {
     extern "C" J3DIndTevStageInfo j3dDefaultIndTevStageInfo;
     extern "C" J3DTevStageInfo j3dDefaultTevStageInfo;
     extern "C" J3DTevSwapModeInfo j3dDefaultTevSwapMode;
 }  // namespace J3DTevsDefault
+#endif
 extern const J3DFogInfo j3dDefaultFogInfo;
 extern const J3DNBTScaleInfo j3dDefaultNBTScaleInfo;
 
