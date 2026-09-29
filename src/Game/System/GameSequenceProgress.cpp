@@ -113,6 +113,10 @@ void GameSequenceProgress::startScene() {
 #ifdef PETARI_NATIVE
         if (MR::isEqualStageName("PeachCastleGardenGalaxy")) {
             petari_milestone("Stage.PeachCastleGardenGalaxy");
+        } else if (MR::isEqualStageName("HeavensDoorGalaxy")) {
+            petari_milestone("Stage.HeavensDoorGalaxy");
+        } else if (MR::isEqualStageName("AstroGalaxy")) {
+            petari_milestone("Stage.AstroGalaxy");
         }
 #endif
         mStorySequenceExecutor->setNerveSceneStart();

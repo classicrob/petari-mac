@@ -65,8 +65,15 @@ void startSmoke() {
     const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 7200);
     const unsigned long stall = environmentNumber("PETARI_SMOKE_STALL_SECONDS", 60);
     gSmoke = new Smoke::Driver(frames, script);
-    std::fprintf(stderr, "PETARI SMOKE: script %s, frame limit %lu, stall limit %lu s\n",
-                 script == Smoke::Script::Playable ? "playable" : "title", frames, stall);
+    const char* scriptName = "title";
+    switch (script) {
+    case Smoke::Script::Title: break;
+    case Smoke::Script::Playable: scriptName = "playable"; break;
+    case Smoke::Script::Gameplay: scriptName = "gameplay"; break;
+    case Smoke::Script::Reload: scriptName = "reload"; break;
+    case Smoke::Script::Story: scriptName = "story"; break;
+    }
+    std::fprintf(stderr, "PETARI SMOKE: script %s, frame limit %lu, stall limit %lu s\n", scriptName, frames, stall);
     std::fflush(stderr);
     Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
 }

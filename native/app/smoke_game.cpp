@@ -6,10 +6,12 @@
 #include "Game/System/GameSystem.hpp"
 #include "Game/System/GameSystemFunction.hpp"
 #include "Game/System/GameSystemSceneController.hpp"
+#include "Game/Player/Mario.hpp"
 #include "Game/Player/MarioActor.hpp"
 #include "Game/Player/MarioHolder.hpp"
 #include "Game/Scene/GameScene.hpp"
 #include "Game/Scene/SceneObjHolder.hpp"
+#include "Game/Util/CameraUtil.hpp"
 #include "Game/Util/DemoUtil.hpp"
 #include "Game/Util/GamePadUtil.hpp"
 #include "Game/Util/PlayerUtil.hpp"
@@ -85,10 +87,17 @@ Observation observeGame(bool wantPlayer) {
             observation.playerZ = pMario->mPosition.z;
             // The MR:: player queries go through the same MarioHolder actor.
             observation.playerOnGround = MR::isOnGroundPlayer();
-            if (const TVec3f* pGravity = MR::getPlayerGravity()) {
-                observation.gravityX = pGravity->x;
-                observation.gravityY = pGravity->y;
-                observation.gravityZ = pGravity->z;
+            // The gravity FIELD at Mario (Mario::mAirGravityVec, from the gravity
+            // system). MR::getPlayerGravity() is contact-relative instead: on
+            // the ground it is the negated ground normal, so it tilts on slopes.
+            // No Mario core: the gravity stays zero, which the story route
+            // reports as "no gravity direction" rather than guessing.
+            observation.gravityX = observation.gravityY = observation.gravityZ = 0.0f;
+            if (const Mario* pCore = pMario->getMario()) {
+                const TVec3f& gravity = pCore->getAirGravityVec();
+                observation.gravityX = gravity.x;
+                observation.gravityY = gravity.y;
+                observation.gravityZ = gravity.z;
             }
             observation.demoActive = MR::isDemoActive();
             observation.padA = MR::testCorePadButtonA(WPAD_CHAN0);
@@ -96,6 +105,17 @@ Observation observeGame(bool wantPlayer) {
             observation.padPlus = MR::testCorePadButtonPlus(WPAD_CHAN0);
             observation.padMinus = MR::testCorePadButtonMinus(WPAD_CHAN0);
             observation.padOperating = MR::isOperatingWPad(WPAD_CHAN0);
+            // CameraContext and TalkDirector are Game-scene SceneObjs: safe here.
+            const TVec3f camX = MR::getCamXdir();
+            const TVec3f camZ = MR::getCamZdir();
+            observation.camXx = camX.x;
+            observation.camXy = camX.y;
+            observation.camXz = camX.z;
+            observation.camZx = camZ.x;
+            observation.camZy = camZ.y;
+            observation.camZz = camZ.z;
+            observation.talkActive = MR::isSystemTalking();
+            observation.playerDead = MR::isPlayerDead();
             // The Game scene is a GameScene (SceneFactory: "Game").
             if (pController->mScene != nullptr) {
                 observation.pausePermitted = static_cast< const GameScene* >(pController->mScene)->isPermitToPauseMenu();

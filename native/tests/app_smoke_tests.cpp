@@ -2,6 +2,8 @@
 // (petari/milestone.hpp): the presses the script makes for each observed game
 // state, their timing, and its pass/fail/blocked decisions.
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -973,6 +975,321 @@ void testReleaseOnFailure() {
     check(run.driver.result() == Result::Fail && released, "a failure releases the held stick at once");
 }
 
+// A simulated PeachCastleGarden for the story route: Mario moves at 15 units
+// per frame relative to a slowly turning camera, whose reported axes may have
+// either sign; the plaza area starts PrologueA, which leaves him at the
+// restart point; the castle box starts PrologueB, then HeavensDoorGalaxy.
+struct StorySim {
+    float x = 13550.0f, z = 11900.0f, yaw = 0.3f;
+    float zSign = 1.0f, xSign = 1.0f;  // reported camera axes vs the stick's forward/right
+    bool held[8] = {};
+    bool pressedA = false;
+    int movie = -1;             // playing movie (0 A, 1 B)
+    int movieFrames = 0;
+    int afterMovie = -1;        // frames since PrologueA ended
+    bool heavensDoor = false;
+    std::vector<std::string> pending;
+    // Faults.
+    bool wall = false, talk = false, dies = false, noTriggerA = false, badRestart = false, noEndB = false;
+    // Hill gravity on the segment-A climb (x 6000-11500), as measured in story-1:
+    // up (-0.28168, 0.896431, -0.342151); the camera pitches with it.
+    bool hill = false;
+    int triggerDelay = 0;       // frames Mario must stand in the castle box before PrologueB
+    int inBox = 0;
+    float hillUpY = 0.896431f;  // overridable for a too-steep case
+    bool zeroGravity = false, cameraAlongGravity = false, nanPosition = false;
+    float speed = 15.0f;
+
+    Observation observe() {
+        Observation o;
+        o.scene = "Game";
+        o.stage = heavensDoor ? "HeavensDoorGalaxy" : "PeachCastleGardenGalaxy";
+        o.sceneReady = true;
+        o.playerValid = true;
+        o.playerX = x;
+        o.playerY = 0.0f;
+        o.playerZ = z;
+        o.playerOnGround = true;
+        o.gravityY = -1.0f;
+        const bool onHill = hill && afterMovie < 0 && x > 6000.0f && x < 11500.0f;
+        float upX = 0.0f, upY = 1.0f, upZ = 0.0f;
+        if (onHill) {
+            // The measured tilt, rescaled so up.y is hillUpY.
+            const float tx = -0.28168f, tz = -0.342151f;
+            const float side = std::sqrt(std::max(0.0f, 1.0f - hillUpY * hillUpY)) / std::sqrt(tx * tx + tz * tz);
+            upX = tx * side;
+            upY = hillUpY;
+            upZ = tz * side;
+            o.gravityX = -upX;
+            o.gravityY = -upY;
+            o.gravityZ = -upZ;
+        }
+        if (zeroGravity && x < 12000.0f) {
+            o.gravityX = o.gravityY = o.gravityZ = 0.0f;
+        }
+        if (nanPosition && x < 12000.0f) {
+            o.playerX = std::nanf("");
+        }
+        const bool inMovie = movie >= 0 || (afterMovie >= 0 && afterMovie < 60);
+        o.demoActive = inMovie;
+        o.pausePermitted = !inMovie;
+        const float fx = std::sin(yaw), fz = std::cos(yaw);   // forward
+        const float rx = std::cos(yaw), rz = -std::sin(yaw);  // right
+        o.camZx = fx * zSign;
+        o.camZz = fz * zSign;
+        o.camXx = rx * xSign;
+        o.camXz = rz * xSign;
+        if (onHill) {
+            // The camera looks slightly down the slope: its Z axis gains the
+            // up component, so only the projection onto the plane is level.
+            o.camZy = 0.3f * zSign;
+        }
+        if (cameraAlongGravity && x < 12000.0f) {
+            o.camZx = upX;
+            o.camZy = upY;
+            o.camZz = upZ;
+        }
+        o.talkActive = talk && x < 12000.0f;
+        o.playerDead = dies && x < 8000.0f;
+        o.milestones = pending;
+        pending.clear();
+        return o;
+    }
+    void apply(const Smoke::Step& step) {
+        for (const Smoke::Press& p : step.presses) {
+            const int i = static_cast<int>(p.button);
+            if (p.down && !held[i] && p.button == Button::A) {
+                pressedA = true;
+            }
+            held[i] = p.down;
+        }
+    }
+    void advance() {
+        yaw += 0.002f;
+        if (movie >= 0) {
+            if (++movieFrames == 300) {
+                pending.push_back(movie == 0 ? "Movie.PrologueA.End" : "Movie.PrologueB.End");
+                if (movie == 0) {
+                    x = badRestart ? 9000.0f : -500.0f;
+                    z = badRestart ? 9000.0f : 6250.0f;
+                    afterMovie = 0;
+                } else {
+                    heavensDoor = true;
+                    if (noEndB) {
+                        pending.pop_back();  // the stage changed before MovieStarter saw the end
+                    }
+                    pending.push_back("Stage.HeavensDoorGalaxy");
+                }
+                movie = -1;
+            }
+            return;
+        }
+        if (afterMovie >= 0) {
+            ++afterMovie;
+        }
+        const float fx = std::sin(yaw), fz = std::cos(yaw);
+        const float rx = std::cos(yaw), rz = -std::sin(yaw);
+        float dx = 0.0f, dz = 0.0f;
+        if (held[2]) { dx += fx; dz += fz; }
+        if (held[3]) { dx -= fx; dz -= fz; }
+        if (held[7]) { dx += rx; dz += rz; }
+        if (held[6]) { dx -= rx; dz -= rz; }
+        const float n = std::sqrt(dx * dx + dz * dz);
+        if (n > 0.0f && !(wall && x < 12200.0f)) {
+            x += dx / n * speed;
+            z += dz / n * speed;
+        }
+        pressedA = false;
+        const bool plaza = afterMovie < 0 && std::hypot(x + 650.0f, z - 4350.0f) < 700.0f;
+        const bool castle = afterMovie >= 60 && x >= -7650.0f && x < -6350.0f && z >= -11408.0f && z < -6408.0f;
+        if (plaza && !noTriggerA) {
+            movie = 0;
+            movieFrames = 0;
+            pending.push_back("Movie.PrologueA.Start");
+        } else if (castle && !heavensDoor && ++inBox > triggerDelay) {
+            movie = 1;
+            movieFrames = 0;
+            pending.push_back("Movie.PrologueB.Start");
+        }
+    }
+};
+
+// The reload path to the file's start (as in testReload), for the story script.
+void toStoryStart(Run& run) {
+    toFileSelect(run);
+    run.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.3f, 0.5f, kSel | kPoint), 3);
+    run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+    run.frames(target(fileSelect(true), "FileSelect.Start", 0, 0.5f, 0.5f, kSel | kPoint), 3);
+    run.frame(with(garden(), "FileSelector.DemoStartWait"));
+    run.frame(with(garden(), "Prologue.GameStart"));
+}
+
+void simulateStory(Run& run, StorySim& sim, unsigned long frames) {
+    for (unsigned long i = 0; i < frames && run.driver.result() == Result::Running; i++) {
+        const Smoke::Step step = run.driver.step(sim.observe());
+        for (const Smoke::Press& press : step.presses) {
+            run.events.push_back({run.driver.frame(), press.button, press.down, step.assertFocus});
+        }
+        for (const std::string& line : run.driver.log()) {
+            run.log.push_back(line);
+        }
+        run.quits += step.requestQuit ? 1 : 0;
+        sim.apply(step);
+        sim.advance();
+    }
+}
+
+bool allKeysReleased(const Run& run) {
+    for (int b = 0; b < 8; b++) {
+        int balance = 0;
+        for (const Event& e : run.events) {
+            if (static_cast<int>(e.button) == b) {
+                balance += e.down ? 1 : -1;
+            }
+        }
+        if (balance != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void testStickKeys() {
+    const Smoke::StickKeys up = Smoke::stickKeysFor(0.0f, 1.0f);
+    check(up.up && !up.down && !up.left && !up.right, "straight ahead: up");
+    const Smoke::StickKeys diag = Smoke::stickKeysFor(1.0f, 1.0f);
+    check(diag.up && diag.right && !diag.left && !diag.down, "45 degrees: up and right");
+    const Smoke::StickKeys near = Smoke::stickKeysFor(0.2f, 1.0f);
+    check(near.up && !near.right, "11 degrees off: up only");
+    const Smoke::StickKeys back = Smoke::stickKeysFor(-1.0f, -0.1f);
+    check(back.left && !back.down && !back.up, "left");
+    const Smoke::StickKeys none = Smoke::stickKeysFor(0.0f, 0.0f);
+    check(!none.up && !none.down && !none.left && !none.right, "no direction: no keys");
+}
+
+void testStoryRoute() {
+    for (int signs = 0; signs < 4; signs++) {
+        Run run(10000000, Smoke::Script::Story);
+        toStoryStart(run);
+        StorySim sim;
+        sim.zSign = (signs & 1) ? -1.0f : 1.0f;
+        sim.xSign = (signs & 2) ? -1.0f : 1.0f;
+        simulateStory(run, sim, 40000);
+        const std::string label = " (camera signs " + std::to_string(signs) + ")";
+        check(run.driver.result() == Result::Pass && run.driver.reason().find("HeavensDoorGalaxy") != std::string::npos,
+              "the story route reaches HeavensDoorGalaxy" + label + ": " + run.driver.reason());
+        // The movies start as Mario enters their trigger areas, which can be
+        // before the last waypoint.
+        check(run.logged("calibration: stick up moves along") && run.logged("segment 0 waypoint 6 reached") &&
+                  run.logged("segment 1 waypoint 16 reached"),
+              "calibrated and walked both routes" + label);
+        check(run.logged("Movie.PrologueA.Start at") && run.logged("Movie.PrologueA.End after") &&
+                  run.logged("units from the restart point") && run.logged("Movie.PrologueB.End after"),
+              "both movies and the restart point logged" + label);
+        check(allKeysReleased(run), "every key released" + label);
+    }
+    // Tilted gravity on the hill (the story-1 failure) is walked through.
+    for (int signs = 0; signs < 2; signs++) {
+        Run hill(10000000, Smoke::Script::Story);
+        toStoryStart(hill);
+        StorySim tilted;
+        tilted.hill = true;
+        tilted.zSign = signs ? -1.0f : 1.0f;
+        simulateStory(hill, tilted, 40000);
+        check(hill.driver.result() == Result::Pass,
+              "the route passes on a hill with gravity tilted 26 degrees: " + hill.driver.reason());
+    }
+
+    // PrologueB starting some frames after Mario stopped at the last waypoint
+    // (inside the box) is still recognised.
+    Run delayed(10000000, Smoke::Script::Story);
+    toStoryStart(delayed);
+    StorySim late;
+    late.triggerDelay = 300;
+    simulateStory(delayed, late, 40000);
+    check(delayed.driver.result() == Result::Pass && delayed.logged("Movie.PrologueB.Start at"),
+          "a movie starting while the driver waits at the last waypoint is recognised: " + delayed.driver.reason());
+
+    // The stage change can come without Movie.PrologueB.End.
+    Run noEnd(10000000, Smoke::Script::Story);
+    toStoryStart(noEnd);
+    StorySim sim;
+    sim.noEndB = true;
+    simulateStory(noEnd, sim, 40000);
+    check(noEnd.driver.result() == Result::Pass && noEnd.logged("without Movie.PrologueB.End"),
+          "HeavensDoorGalaxy after PrologueB passes without its End milestone");
+    // Reload behaviour stays: a new file or a rewrite is refused.
+    Run created(1000000, Smoke::Script::Story);
+    toFileSelect(created);
+    created.frame(with(fileSelect(true), "FileSelector.Create"));
+    check(created.driver.result() == Result::Fail, "the story route never creates a file");
+}
+
+void testStoryFaults() {
+    auto runWith = [](void (*fault)(StorySim&)) {
+        auto run = std::make_unique<Run>(10000000, Smoke::Script::Story);
+        toStoryStart(*run);
+        StorySim sim;
+        fault(sim);
+        simulateStory(*run, sim, 40000);
+        return run;
+    };
+    auto wall = runWith([](StorySim& s) { s.wall = true; });
+    check(wall->driver.result() == Result::Fail && wall->driver.reason().find("stuck near segment 0") != std::string::npos,
+          "a wall fails as stuck, with the waypoint: " + wall->driver.reason());
+    check(wall->logged("stuck: sidestep") && wall->logged("stuck: jump"), "recoveries tried before failing");
+    check(allKeysReleased(*wall), "keys released after being stuck");
+    auto talk = runWith([](StorySim& s) { s.talk = true; });
+    check(talk->driver.result() == Result::Fail && talk->driver.reason().find("a talk opened") != std::string::npos,
+          "an open talk fails");
+    auto dies = runWith([](StorySim& s) { s.dies = true; });
+    check(dies->driver.result() == Result::Fail && dies->driver.reason().find("Mario died") != std::string::npos,
+          "death fails");
+    auto noMovie = runWith([](StorySim& s) { s.noTriggerA = true; });
+    check(noMovie->driver.result() == Result::Fail &&
+              noMovie->driver.reason().find("no Movie.PrologueA.Start") != std::string::npos,
+          "no movie at the trigger fails");
+    auto restart = runWith([](StorySim& s) { s.badRestart = true; });
+    check(restart->driver.result() == Result::Fail &&
+              restart->driver.reason().find("from the restart point") != std::string::npos,
+          "a wrong position after PrologueA fails");
+    auto zero = runWith([](StorySim& s) { s.zeroGravity = true; });
+    check(zero->driver.result() == Result::Fail && zero->driver.reason().find("no gravity direction") != std::string::npos,
+          "zero gravity fails: " + zero->driver.reason());
+    auto alongGravity = runWith([](StorySim& s) {
+        s.hill = true;
+        s.cameraAlongGravity = true;
+    });
+    check(alongGravity->driver.result() == Result::Fail &&
+              alongGravity->driver.reason().find("camera axis along gravity") != std::string::npos,
+          "a camera axis along gravity fails: " + alongGravity->driver.reason());
+    auto steep = runWith([](StorySim& s) {
+        s.hill = true;
+        s.hillUpY = 0.3f;
+    });
+    check(steep->driver.result() == Result::Fail && steep->driver.reason().find("more than 60 degrees") != std::string::npos,
+          "gravity beyond 60 degrees fails: " + steep->driver.reason());
+    auto nan = runWith([](StorySim& s) { s.nanPosition = true; });
+    check(nan->driver.result() == Result::Fail && nan->driver.reason().find("non-finite") != std::string::npos,
+          "a non-finite position fails: " + nan->driver.reason());
+    check(allKeysReleased(*steep) && allKeysReleased(*nan), "keys released after geometry failures");
+
+    auto slow = runWith([](StorySim& s) { s.speed = 0.9f; });
+    check(slow->driver.result() == Result::Fail &&
+              (slow->driver.reason().find("took over") != std::string::npos ||
+               slow->driver.reason().find("stuck") != std::string::npos),
+          "a segment that cannot finish in time fails: " + slow->driver.reason());
+
+    Run prompt(10000000, Smoke::Script::Story);
+    toStoryStart(prompt);
+    StorySim sim;
+    simulateStory(prompt, sim, 200);
+    Observation withPrompt = sim.observe();
+    withPrompt.prompts.push_back({"System_FileSelect001", 2});
+    prompt.frame(withPrompt);
+    check(prompt.driver.result() == Result::Blocked, "any prompt stops the story route");
+}
+
 void testMilestones() {
     const unsigned long start = petari_milestone_count();
     check(petari_milestone_at(start) == nullptr, "no milestone beyond the count");
@@ -1009,6 +1326,9 @@ int main() {
     testGameplayFaults();
     testReload();
     testReleaseOnFailure();
+    testStickKeys();
+    testStoryRoute();
+    testStoryFaults();
     testPlayableGuards();
     testMilestones();
     std::printf("native app smoke tests passed (%d checks)\n", checks);

@@ -77,6 +77,24 @@
 //    units: PASS.
 // Every position is logged. When the result is decided, inputs still held
 // are released at once.
+//
+// Script "story" (PETARI_SMOKE=story), for a copied save: the reload path to
+// gameplay, then input-only walks along waypoint routes (native/app/smoke.cpp
+// kRoutes): from the start to the plaza, where the PrologueA movie starts;
+// after it and the attack, to the castle, where PrologueB starts; PASS when
+// the Game scene is ready on HeavensDoorGalaxy. Each walk starts with a
+// calibration (stick up, then right, 20 frames each) that learns how the
+// camera axes relate to the stick, then steers each frame toward the next
+// waypoint with 8-way keys relative to the camera. A waypoint counts within
+// 600 units on the town road and 200 on the castle walk, a segment's last one
+// (inside the movie trigger) within 200 and 150. Stuck (less than 50 units
+// closer in 180 frames): a sidestep,
+// then a jump; the fifth time on one waypoint FAILs. FAIL also on any prompt,
+// an open talk, an unexpected scene or stage, or a segment/movie timeout.
+// Steering and distances use the plane perpendicular to the observed gravity
+// field at Mario. Non-finite or degenerate gravity/camera axes FAIL. So does
+// gravity tilted beyond 60 degrees from the stage's down: a limitation of this
+// route's ground-plane waypoints, not a game fault.
 
 #include <string>
 #include <vector>
@@ -109,22 +127,40 @@ struct Observation {
     bool playerValid = false;     // filled only while the driver wants it (wantsPlayer)
     float playerX = 0.0f, playerY = 0.0f, playerZ = 0.0f;
     bool playerOnGround = false;  // with playerValid: MR::isOnGroundPlayer
-    float gravityX = 0.0f, gravityY = -1.0f, gravityZ = 0.0f;  // MR::getPlayerGravity
+    float gravityX = 0.0f, gravityY = -1.0f, gravityZ = 0.0f;  // gravity field at Mario (Mario::getAirGravityVec)
     bool demoActive = false;      // MR::isDemoActive
     bool pausePermitted = false;  // GameScene::isPermitToPauseMenu
     // The game's view of the Wii Remote (channel 0), with playerValid.
     bool padA = false, padB = false, padPlus = false, padMinus = false;
     bool padOperating = false;  // MR::isOperatingWPad: blocks the pause button
+    // Camera axes (MR::getCamXdir / getCamZdir), with playerValid; the story
+    // route steers relative to them.
+    float camXx = 1.0f, camXy = 0.0f, camXz = 0.0f;
+    float camZx = 0.0f, camZy = 0.0f, camZz = 1.0f;
+    bool talkActive = false;  // MR::isSystemTalking: a talk window is open (story route FAILs)
+    bool playerDead = false;  // MR::isPlayerDead
 };
+
+// A point on the story route, on the ground plane (gravity is -y there).
+struct Waypoint {
+    float x, z;
+};
+
+// Keys for a desired direction in the camera frame: x right, y forward
+// (unit-free). 8-way, as digital W/A/S/D keys can express.
+struct StickKeys {
+    bool up = false, down = false, left = false, right = false;
+};
+StickKeys stickKeysFor(float x, float y);
 
 // Target flags (petari/ui_observe.hpp).
 constexpr unsigned kTargetPointing = 1u;
 constexpr unsigned kTargetEmpty = 2u;
 constexpr unsigned kTargetSelectable = 4u;
 
-enum class Script { Title, Playable, Gameplay, Reload };
+enum class Script { Title, Playable, Gameplay, Reload, Story };
 
-enum class Button { A, B, StickUp, StickDown, Plus, Minus };
+enum class Button { A, B, StickUp, StickDown, Plus, Minus, StickLeft, StickRight };
 
 struct Press {
     Button button;
@@ -174,6 +210,8 @@ private:
         ChooseSlot, WaitMiiSelect, ChooseMario, WaitFileConfirm, ChooseStart, WaitDemo, Prologue, Move,
         // gameplay and reload (after the prologue); keep these last before Done
         Ready, Idle, Jump, Forward, Backward, PauseOpen, Paused, PauseClose, Resume,
+        // story route
+        Calibrate, Route, WaitMovie, MovieEnd, WaitStage,
         Done
     };
     enum class Slot { Any, Empty, NonEmpty };
@@ -182,6 +220,11 @@ private:
     bool aimAndPress(const Observation& observation, const char* id, Slot slot, Step& step);
     void playable(const Observation& observation, Step& step);
     void gameplay(const Observation& observation, Step& step);
+    void story(const Observation& observation, Step& step);
+    bool loadsSave() const { return mScript == Script::Reload || mScript == Script::Story; }
+    // Holds exactly these steering keys (presses for the changes).
+    void steer(const StickKeys& keys, Step& step);
+    void startSegment(int segment);
     bool gameplayReady(const Observation& observation);
     bool seen(const std::string& milestone) const;
     // How often a milestone was recorded so far (new events after an input are
@@ -238,12 +281,22 @@ private:
     unsigned long mPauseOpenCount = 0;   // PauseMenu.Open events before our Plus
     unsigned long mPauseCloseCount = 0;  // PauseMenu.Close events before our second Plus
     std::string mPadDuringHold;          // game buttons while the pause button was held
+    // story route
+    int mSegment = 0;                    // 0: plaza (PrologueA), 1: castle (PrologueB)
+    size_t mWaypoint = 0;
+    StickKeys mHeld;                     // steering keys held now
+    float mSignForward = 0.0f, mSignRight = 0.0f;  // camera axis signs from calibration
+    float mBestDistance = 0.0f;          // closest to the waypoint in the stuck window
+    unsigned long mStuckFrames = 0;
+    int mRecoveries = 0;
+    unsigned long mRecoverUntil = 0;
+    unsigned long mSegmentFrames = 0;
 };
 
 // --- Process-wide state for the app (smoke.cpp) ---
 
 // Whether PETARI_SMOKE selects a known script ("title", "playable",
-// "gameplay" or "reload"), and which; prints why not otherwise.
+// "gameplay", "reload" or "story"), and which; prints why not otherwise.
 bool enabledFromEnvironment(Script* script);
 // Exit status the power exit handler uses: the smoke result, or 0 when the
 // smoke is not running or has not decided.

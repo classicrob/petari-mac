@@ -49,7 +49,8 @@ void setImage(const Rect& image, float windowWidth, float windowHeight);
 // Smoke run only (smoke.hpp): press or release the input bound to a Wii
 // Remote/Nunchuk action, tell the input layer the window has focus (it ignores
 // presses while unfocused), and move the pointer.
-// button: 0 A, 1 B, 2 stick up, 3 stick down, 4 Plus, 5 Minus (Smoke::Button order).
+// button: 0 A, 1 B, 2 stick up, 3 stick down, 4 Plus, 5 Minus, 6 stick left,
+// 7 stick right (Smoke::Button order).
 void pressButton(int button, bool down);
 void assertFocus();
 // Moves the pointer to a window point.
