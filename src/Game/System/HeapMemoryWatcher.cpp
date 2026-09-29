@@ -163,7 +163,17 @@ void HeapMemoryWatcher::createHeaps() {
 #else
     mAudSystemHeap = ::createSolidHeap(0x1E0000, JKRHeap::sRootHeap);
 #endif
+#ifdef PETARI_NATIVE
+    // Stationed resources get native-only memory on top of the Wii 0x900000: same-size host
+    // images of every J3D file and of the particle container, plus larger native objects.
+    // Measured on the disc with the native loaders: player J3D loading 3.23 MiB, other NAPA
+    // J3D about 0.2 MiB, particles (created here by initAfterStationedResourceLoaded)
+    // 4.36 MiB; at most 7.8 MiB more than the Wii, of which at least 5.2 MiB host images.
+    // adjustStationedHeaps() trims the unused tail once loading ends.
+    mStationedHeapNapa = ::createExpHeap(0x900000 + 0x900000, JKRHeap::sRootHeap, false);
+#else
     mStationedHeapNapa = ::createExpHeap(0x900000, JKRHeap::sRootHeap, false);
+#endif
     JKRHeap* pRootHeapGDDR = HeapMemoryWatcher::sRootHeapGDDR3;
 #ifdef PETARI_NATIVE
     // Wii 0xD0 is the 0x90 heap object, one 0x10 block header and 0x30 usable bytes.
@@ -174,7 +184,15 @@ void HeapMemoryWatcher::createHeaps() {
 #endif
     mWPadHeap = ::createExpHeap(wpadHeapSize, pRootHeapGDDR, false);
     mHomeButtonLayoutHeap = ::createExpHeap(0x80000, HeapMemoryWatcher::sRootHeapGDDR3, false);
+#ifdef PETARI_NATIVE
+    // Measured on the disc: native J3D loading of the GDDR stationed archives uses 7.55 MiB,
+    // of which 6.49 MiB are host images the Wii never allocates; the rest bounds native
+    // object growth. The extra 0xA00000 covers that plus margin for unmeasured native growth
+    // (layouts, tables). adjustStationedHeaps() trims the unused tail once loading ends.
+    mStationedHeapGDDR = ::createExpHeap(0x1400000 + 0xA00000, HeapMemoryWatcher::sRootHeapGDDR3, false);
+#else
     mStationedHeapGDDR = ::createExpHeap(0x1400000, HeapMemoryWatcher::sRootHeapGDDR3, false);
+#endif
     createGameHeap();
 }
 

@@ -116,12 +116,23 @@ LiveActorGroup* LiveActorGroupArray::entry(LiveActor* pActor, const JMapInfoIter
     s32 groupID = -1;
     MR::getJMapInfoGroupID(rIter, &groupID);
 
+#ifdef PETARI_NATIVE
+    // pName is used after the block (createGroup copies it), so the buffer must outlive
+    // the block; Clang reuses block-local stack slots.
+    char defaultName[32];
+    if (pName == nullptr) {
+        snprintf(defaultName, sizeof(defaultName), "group%02d", groupID);
+
+        pName = defaultName;
+    }
+#else
     if (pName == nullptr) {
         char defaultName[32];
         snprintf(defaultName, sizeof(defaultName), "group%02d", groupID);
 
         pName = defaultName;
     }
+#endif
 
     LiveActorGroup* pGroup = findGroup(rIter);
 

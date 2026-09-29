@@ -131,6 +131,17 @@ namespace {
 LayoutManager::LayoutManager(const char* pLayoutName, bool useArchiveNamePrefix, u32 rootPaneAnimLayerNum, u32 textBoxBufferLength)
     : mLayoutHolder(), mLayout(), mAnimTransList(), mDrawInfo(), mIsScreenHidden(), _61(true), mIndDummyTexMap(), mPaneCount(), mPaneInfoList(),
       mGroupCtrlCount(), mGroupCtrlList(), mLayoutName() {
+#ifdef PETARI_NATIVE
+    // pLayoutName points into fileNameWithoutExtension after the conversion, so the
+    // buffers must outlive the block (Clang reuses block-local stack slots).
+    char fileNameWithoutExtension[0x60];
+    char fileNameFromPrefix[0x80];
+    if (useArchiveNamePrefix) {
+        MR::makeLayoutArchiveFileNameFromPrefix(fileNameFromPrefix, sizeof(fileNameFromPrefix), pLayoutName, true);
+        MR::removeExtensionString(fileNameWithoutExtension, sizeof(fileNameWithoutExtension), fileNameFromPrefix);
+        pLayoutName = MR::getBasename(fileNameWithoutExtension);
+    }
+#else
     if (useArchiveNamePrefix) {
         char fileNameWithoutExtension[0x60];
         char fileNameFromPrefix[0x80];
@@ -138,6 +149,7 @@ LayoutManager::LayoutManager(const char* pLayoutName, bool useArchiveNamePrefix,
         MR::removeExtensionString(fileNameWithoutExtension, sizeof(fileNameWithoutExtension), fileNameFromPrefix);
         pLayoutName = MR::getBasename(fileNameWithoutExtension);
     }
+#endif
 
     char archiveName[0x40];
     snprintf(archiveName, sizeof(archiveName), "%s.arc", pLayoutName);
@@ -502,6 +514,22 @@ void LayoutManager::initArc(const char* pArchiveName, const char* pLayoutName) {
     char layoutResName[0x80];
     snprintf(layoutResName, sizeof(layoutResName), "%s.brlyt", pLayoutName);
     void* pLayoutRes = mLayoutHolder->GetResource('blyt', layoutResName, nullptr);
+#ifdef PETARI_NATIVE
+    if (pLayoutRes == nullptr) {
+        // Layout::Build would dereference the null resource; list what the holder
+        // indexed and stop with the requested names instead.
+        OSReport("LayoutManager::initArc: no layout \"%s\" in archive \"%s\" (language %s; %u layouts, %u animations, %u other)\n",
+                 layoutResName, pArchiveName, MR::getCurrentLanguagePrefix(), mLayoutHolder->mLayoutRes.mCount, mLayoutHolder->mAnimRes.mCount,
+                 mLayoutHolder->mResOther.mCount);
+        for (u32 i = 0; i < mLayoutHolder->mLayoutRes.mCount; i++) {
+            OSReport("  layout[%u] \"%s\"\n", i, mLayoutHolder->mLayoutRes.getResName(i));
+        }
+        for (u32 i = 0; i < mLayoutHolder->mResOther.mCount; i++) {
+            OSReport("  other[%u] \"%s\"\n", i, mLayoutHolder->mResOther.getResName(i));
+        }
+        OSPanic(__FILE__, __LINE__, "LayoutManager: layout \"%s\" missing from \"%s\"", layoutResName, pArchiveName);
+    }
+#endif
 
     mLayout = new nw4r::lyt::Layout();
     mLayout->Build(pLayoutRes, mLayoutHolder);

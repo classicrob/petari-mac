@@ -468,6 +468,42 @@ void testDvdFileRead() {
     JKRHeap::HostAllocationScope host;
     std::filesystem::remove_all(root);
 }
+
+// Loads archives from the real disc through the platform DVD layer, the way the
+// game does: JKRArchive::mount (MEM mode) reads and Yaz0-expands the file with
+// JKRDvdRipper, then resources are found by path and type.
+void testDiscMount(const char* discRoot, JKRHeap* heap) {
+    {
+        JKRHeap::HostAllocationScope host;
+        PetariNative::Platform::DVD::MountOptions options;
+        options.root = discRoot;
+        std::string error;
+        bool mounted = PetariNative::Platform::DVD::mount(options, &error);
+        CHECK(mounted);
+        if (!mounted) {
+            std::fprintf(stderr, "  disc mount failed: %s\n", error.c_str());
+            return;
+        }
+    }
+    DVDInit();
+
+    const char* path = "/UsEnglish/LayoutData/WiiRemoteStrapReplace.arc";
+    CHECK(DVDConvertPathToEntrynum(path) >= 0);
+    JKRArchive* archive = JKRArchive::mount(path, JKRArchive::MOUNT_MODE_MEM, heap, JKRArchive::MOUNT_DIRECTION_1);
+    CHECK(archive != nullptr);
+    if (archive == nullptr) {
+        return;
+    }
+    void* layout = archive->getResource("/blyt/wiiremotestrapreplace.brlyt");
+    CHECK(layout != nullptr && std::memcmp(layout, "RLYT", 4) == 0);
+    CHECK(archive->getResource('BLYT', "WiiRemoteStrapReplace.brlyt") == layout);
+    CHECK(archive->countResource() == 6);
+    // The Yaz0-decompressed file must be whole: the BRLYT header records its own size.
+    const u8* header = static_cast< const u8* >(layout);
+    CHECK(layout != nullptr && static_cast< u32 >((header[8] << 24) | (header[9] << 16) | (header[10] << 8) | header[11]) == archive->getResSize(layout));
+    std::printf("disc mount: %s -> brlyt %p (%d bytes)\n", path, layout, archive->getResSize(layout));
+    archive->unmount();
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -485,9 +521,21 @@ int main(int argc, char** argv) {
     heap->becomeCurrentHeap();
     JKRDecomp::create(8);
 
+    const char* discRoot = nullptr;
+    for (int i = 1; i + 1 < argc; i++) {
+        if (std::strcmp(argv[i], "--disc") == 0) {
+            discRoot = argv[i + 1];
+        }
+    }
+
     testSyntheticArchive(heap);
     testUnitHeap(heap);
-    testDvdFileRead();
+    // The platform DVD layer mounts once per process.
+    if (discRoot != nullptr) {
+        testDiscMount(discRoot, heap);
+    } else {
+        testDvdFileRead();
+    }
 
     for (int i = 1; i + 1 < argc; i++) {
         if (std::strcmp(argv[i], "--assets") == 0) {
