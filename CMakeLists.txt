@@ -103,6 +103,13 @@ if(BUILD_TESTING)
     add_executable(petari_core_tests native/tests/core_tests.cpp)
     target_link_libraries(petari_core_tests PRIVATE petari_core)
     add_test(NAME native_core COMMAND petari_core_tests)
+    add_executable(petari_light_function_tests native/tests/light_function_tests.cpp src/Game/Map/LightFunction.cpp)
+    petari_encode_target_sources(petari_light_function_tests)
+    target_link_libraries(petari_light_function_tests PRIVATE petari_native_config)
+    # Match the optimized actor-light stack layout used by the regression's poison.
+    target_compile_options(petari_light_function_tests PRIVATE -O3 -fno-sanitize=address)
+    target_link_options(petari_light_function_tests PRIVATE -Wl,-dead_strip)
+    add_test(NAME native_light_function COMMAND petari_light_function_tests)
     add_executable(petari_nw4r_resource_tests native/tests/nw4r_resource_tests.cpp
         src/nw4r/lyt/lyt_nativeResource.cpp src/nw4r/lyt/lyt_common.cpp src/nw4r/lyt/lyt_texMap.cpp
         src/nw4r/lyt/lyt_layout.cpp src/nw4r/lyt/lyt_animation.cpp src/nw4r/lyt/lyt_pane.cpp

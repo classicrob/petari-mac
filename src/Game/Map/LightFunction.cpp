@@ -160,7 +160,14 @@ void LightFunction::blendActorLightInfo(ActorLightInfo* pResult, const ActorLigh
 
 namespace {
     void loadLightDiffuse(GXColor color, const TVec3f& rPos, GXLightID lightID) NO_INLINE {
+#ifdef PETARI_NATIVE
+        // The direction is never set. The spot attenuation (1, 0, 0) ignores any finite
+        // direction, but native stack garbage can be large enough for cos^2 to overflow,
+        // and 0 * inf removes the light (all actor materials use spot attenuation).
+        GXLightObj lightObj = {};
+#else
         GXLightObj lightObj;
+#endif
 
         GXInitLightPos(&lightObj, rPos.x, rPos.y, rPos.z);
         GXInitLightAttn(&lightObj, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f);
@@ -210,7 +217,12 @@ void LightFunction::loadLightInfoCoin(const LightInfoCoin* pInfo) {
 void LightFunction::loadPointLightInfo(const PointLightInfo* pInfo) {
     TVec3f v7(pInfo->mPos);
     MR::getCameraViewMtx().mult(v7, v7);
+#ifdef PETARI_NATIVE
+    // As in loadLightDiffuse: GX_SP_OFF ignores the unset direction only while it is finite.
+    GXLightObj obj = {};
+#else
     GXLightObj obj;
+#endif
     GXInitLightPos(&obj, v7.x, v7.y, v7.z);
     GXInitLightDistAttn(&obj, pInfo->mRefDistance, pInfo->mRefBrightness, pInfo->mDistAttnFn);
     GXInitLightSpot(&obj, 0.0, GX_SP_OFF);
@@ -222,7 +234,12 @@ void LightFunction::loadAllLightWhite() {
     const GXLightID cLightDataIDs[8] = {GX_LIGHT0, GX_LIGHT1, GX_LIGHT2, GX_LIGHT3, GX_LIGHT4, GX_LIGHT5, GX_LIGHT6, GX_LIGHT7};
 
     for (u32 i = 0; i < ARRAY_SIZE(cLightDataIDs); i++) {
+#ifdef PETARI_NATIVE
+        // Attenuation and direction are never set; load zeros rather than stack contents.
+        GXLightObj lightObj = {};
+#else
         GXLightObj lightObj;
+#endif
         GXInitLightPos(&lightObj, 0.0f, 0.0f, 0.0f);
 
         GXColor color = {255, 255, 255, 255};
