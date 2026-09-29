@@ -30,7 +30,8 @@ enum : std::uint32_t {
     kBitShake = 1u << 20,
     kBitTiltHold = 1u << 21,
     kBitPostureToggle = 1u << 22,
-    kBitCount = 23,
+    kBitWalk = 1u << 23,
+    kBitCount = 24,
 };
 std::uint32_t actionBits(Action action);
 
@@ -129,6 +130,10 @@ private:
     float mPitch = 0.0f;  // radians, tip up
     float mRoll = 0.0f;   // radians about the axis toward the screen, counterclockwise from behind
     int mShakeReport = -1;  // report index within the current shake, or -1
+    std::uint64_t mReportIndex = 0;
+    std::uint64_t mLastButtonReport = 0;  // report of the last A or B press (0: none)
+    std::uint64_t mShakeStart = 0;        // the pending shake starts at this report (0: none)
+    std::uint64_t mLastShakeStart = 0;    // report the last shake started (0: none)
 };
 
 }  // namespace PetariNative::Input::Detail

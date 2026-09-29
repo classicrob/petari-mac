@@ -63,6 +63,7 @@ enum class Action : std::uint8_t {
     Shake,           // flick the remote: the game reads a swing (Mario spins)
     TiltHold,        // while held, the stick keys tilt the remote instead of the stick
     PostureToggle,   // switch the remote between pointing at the screen and upright
+    Walk,            // while held, the stick moves at Settings::walkStickScale
     Count
 };
 
@@ -140,6 +141,17 @@ struct Settings {
     // quick tap spans a KPADRead at 60 frames per second (KPAD compares only
     // the newest report with the previous read).
     int minimumPulseReports = 4;
+    // Stick length while Walk is held (the keys otherwise give a full stick).
+    float walkStickScale = 0.5f;
+    // Mario ignores a swing that starts within 10 frames of pressing A or B
+    // (MarioActor::updateControllerSwing). A keyboard shake that soon after a
+    // jump is delayed until that window has passed, so jump-then-spin works.
+    // Reports from the A or B press; 0 disables the delay.
+    // Shake presses also start at least 250 ms apart (a flick must return
+    // before the next, or the game sees one long swing). A press while the
+    // previous flick is returning waits; at most one waits, and losing focus
+    // cancels it.
+    int shakeDelayAfterButtonReports = 36;
 };
 
 // --- Host events (any thread) ---

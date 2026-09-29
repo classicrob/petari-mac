@@ -46,7 +46,23 @@ swing by comparing the accelerometer with its value 20 reports earlier.
     (`WPadHVSwing`: 1 g against 20 reports earlier), one flick gives one
     `isCorePadSwing` rising edge and one `mIsTriggerSwing`. Mario's
     `updateControllerSwing` sees it within 2 frames. Holding F is one spin.
-    The game's own 10-frame cooldown after A or B still applies.
+    - Mario ignores a swing that starts within 10 frames of pressing A or B.
+      A flick pressed within `Settings::shakeDelayAfterButtonReports`
+      (36 reports, 180 ms) of an A or B press starts when that window ends,
+      so Space then F spins, at most 13 frames after the jump. Later presses
+      do not extend the delay.
+    - Flicks start at least 250 ms (50 reports) apart, after the previous
+      one has fully returned; overlapping flicks would read as one long
+      swing. A press during a flick waits for its turn; at most one waits,
+      and further presses are dropped. Mashing F therefore gives a swing
+      every 250 ms.
+    - Only presses schedule flicks: holding F is one flick, and a tap's
+      release does not cancel the flick waiting for it. Losing focus cancels
+      a waiting flick, so nothing fires after focus returns. A flick already
+      under way finishes its return, because cutting it off would itself read
+      as a swing.
+- **Walk.** While Walk (Left Alt) is held, the stick has
+  `Settings::walkStickScale` (0.5) of its length.
   - **Tilt** (hold Tab, then WASD) turns the remote up to
     `Settings::maxTiltDegrees` (45 degrees) at 360 degrees per second.
     - Forward tips it toward the screen.
@@ -86,6 +102,7 @@ output:
 | F1 | HOME | provisional |
 | Tab (hold) | WASD tilt the remote | provisional |
 | T | Toggle upright posture | provisional |
+| Left Alt (hold) | Walk: half stick | provisional |
 
 All bindings are remappable: `Bindings::bind/unbind/clear`, with a text form
 (`serialize`/`parse`, one `Action=Key:Name,Mouse:Button` line per action) for
@@ -154,7 +171,7 @@ close. Backspace sends B for going back in menus.
 
 ## Tests
 
-`native/tests/input_tests.cpp` (`ctest -R native_input`, 271 checks) runs the
+`native/tests/input_tests.cpp` (`ctest -R native_input`, 416 checks) runs the
 SDK's KPAD.c and the game's `WPad`, `WPadButton`, `WPadStick`, `WPadPointer`,
 `WPadAcceleration`, and `WPadHVSwing`. It pumps 10 reports per 3 frames and
 covers:
@@ -178,9 +195,22 @@ covers:
   - The game's 5-report in-screen delay, smoothing, and motion flag.
   - `KPADSetSensorHeight` honoured.
   - Position while the remote is twisted.
-- **Shake.** One swing and one Mario spin request per tap, within 2 frames. A
-  held key is one spin. Repeated taps each spin. The game's cooldown after A
-  is honoured. Tilting and walking make no swing.
+- **Shake.**
+  - One swing and one Mario spin request per tap, within 2 frames.
+  - A held key is one spin; taps 0.6 s apart each spin; tilting and walking
+    make no swing.
+  - Space then F after 0 to 12 frames, at each frame phase: exactly one spin
+    by Mario's `updateControllerSwing` rules. With the delay off, all
+    seven cases of F within 6 frames lose the spin.
+  - Mashing every 50 to 300 ms: swing rising edges at least 250 ms apart,
+    about one per 250 ms, each one a spin request under Mario's cooldown,
+    and none trailing the last press by more than one wait.
+  - Six presses within 200 ms give two flicks. Holding F for 2 s gives one.
+  - A released tap still flicks in its turn. Focus loss cancels the waiting
+    flick, checked against a control with focus kept.
+  - Space then mashed F: the first spin comes after the lockout, then
+    further spins every 250 ms.
+- **Walk.** Half-length straight and diagonal sticks.
 - **Tilt.** The Ray and Star Ball checks above; no pointer while upright.
 - **Device.** Rumble; the SC motor setting; status requests; speaker commands,
   pacing, the sink, and mute.

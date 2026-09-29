@@ -177,6 +177,7 @@ void testBindings() {
     check(hasBinding(d, Action::Plus, Binding::key(In::Key::Escape)), "Escape pauses");
     check(!hasBinding(d, Action::B, Binding::key(In::Key::Escape)), "Escape does not hold B, which blocks pause");
     check(hasBinding(d, Action::B, Binding::key(In::Key::Backspace)), "Backspace backs out of menus");
+    check(hasBinding(d, Action::Walk, Binding::key(In::Key::LeftAlt)), "Left Alt walks");
 
     const std::string text = d.serialize();
     In::Bindings parsed;
@@ -433,6 +434,24 @@ void testStick() {
               "stick axis " + std::to_string(v));
     }
     check(Det::rawStickAxis(0.0f) == 0, "zero stick");
+
+    // Walk (Left Alt) shortens the stick.
+    press(In::Key::LeftAlt);
+    press(In::Key::W);
+    rig.frame();
+    check(near(stick.mStick.y, 0.5f, 0.01f) && stick.mStick.x == 0.0f, "Alt+W: half stick (" +
+                                                                          std::to_string(stick.mStick.y) + ")");
+    press(In::Key::D);
+    rig.frame();
+    check(near(stick.mStick.x, stick.mStick.y, 1e-6f) && near(std::hypot(stick.mStick.x, stick.mStick.y), 0.5f, 0.01f),
+          "Alt+W+D: half-length diagonal");
+    lift(In::Key::LeftAlt);
+    rig.frames_(2);
+    check(near(std::hypot(stick.mStick.x, stick.mStick.y), 1.0f, 0.02f), "releasing Alt runs again");
+    lift(In::Key::W);
+    lift(In::Key::D);
+    rig.frames_(2);
+    check(stick.mStick.x == 0.0f && stick.mStick.y == 0.0f, "released");
 }
 
 // --- Focus ----------------------------------------------------------------
@@ -627,15 +646,17 @@ void testShake() {
     }
     check(spin.requests == 5 && counter.swingEdges == 5, "taps 0.6 s apart: one spin each");
 
-    // Jump then spin within 10 frames: the game's own cooldown drops it.
+    // Jump then spin at once: the flick waits out Mario's post-A lockout.
     press(In::Key::Space);
+    const int jumpFrame = frame;
     run(1);
     lift(In::Key::Space);
     press(In::Key::F);
     run(1);
     lift(In::Key::F);
     run(60);
-    check(spin.requests == 5, "shake right after A is ignored by Mario's cooldown");
+    check(spin.requests == 6 && spin.lastRequestFrame - jumpFrame <= 13,
+          "shake right after A still spins, once the game's lockout has passed");
 
     // Walking and tilting are not swings.
     press(In::Key::Tab);
@@ -650,7 +671,189 @@ void testShake() {
     run(60);
     lift(In::Key::W);
     run(60);
-    check(spin.requests == 5 && counter.swingEdges == 6, "full tilts and walking make no swing");
+    check(spin.requests == 6 && counter.swingEdges == 6, "full tilts and walking make no swing");
+}
+
+// Space then F after 0..12 frames, at each frame phase of the 10-reports-
+// per-3-frames cadence: exactly one spin, at most 13 frames after the jump.
+// With the delay off, the game's lockout (MarioActor::updateControllerSwing)
+// eats the quick cases, which is what the delay exists for.
+int jumpThenSpin(int gapFrames, int phase, int delayReports, int* latency) {
+    Rig rig;
+    In::Settings settings = In::settings();
+    settings.shakeDelayAfterButtonReports = delayReports;
+    In::setSettings(settings);
+    rig.frames_(30 + phase);
+    SpinDetector spin;
+    int frame = 0;
+    auto run = [&](int count) {
+        for (int i = 0; i < count; ++i, ++frame) {
+            rig.frame();
+            spin.update(*rig.pad, frame);
+        }
+    };
+    run(20);
+    press(In::Key::Space);
+    const int jumpFrame = frame;
+    run(1);
+    lift(In::Key::Space);
+    run(gapFrames);
+    press(In::Key::F);
+    run(1);
+    lift(In::Key::F);
+    run(60);
+    *latency = spin.lastRequestFrame - jumpFrame;
+    return spin.requests;
+}
+
+void testJumpThenSpin() {
+    int worst = 0;
+    for (int gap = 0; gap <= 12; ++gap) {
+        for (int phase = 0; phase < 3; ++phase) {
+            int latency = 0;
+            const int requests = jumpThenSpin(gap, phase, 36, &latency);
+            check(requests == 1, "Space, then F after " + std::to_string(gap) + " frames (phase " + std::to_string(phase) +
+                                     "): one spin, got " + std::to_string(requests));
+            check(latency <= std::max(13, gap + 3), "spin arrives promptly (" + std::to_string(latency) + " frames)");
+            worst = std::max(worst, latency);
+        }
+    }
+    int lost = 0;
+    for (int gap = 0; gap <= 6; ++gap) {
+        int latency = 0;
+        lost += jumpThenSpin(gap, 0, 0, &latency) == 0 ? 1 : 0;
+    }
+    check(lost == 7, "without the delay, F within 6 frames of Space never spins (" + std::to_string(lost) + " of 7 lost)");
+    std::printf("jump then spin: every gap spins; latest spin %d frames after the jump\n", worst);
+}
+
+// Scripted key events at frame numbers; records the frames of real swing
+// rising edges (WPadHVSwing) and of Mario's spin requests (cooldown replica).
+struct ShakeRun {
+    std::vector<int> swings;
+    std::vector<int> spins;
+};
+
+struct KeyStep {
+    int frame;
+    In::KeyCode key;
+    bool down;
+};
+
+ShakeRun runShakeScript(const std::vector<KeyStep>& steps, int frames, int focusLossFrame = -1, int focusBackFrame = -1) {
+    Rig rig;
+    rig.frames_(30);
+    SpinDetector spin;
+    spin.cooldown = 0;  // past Mario's reset lockout
+    bool previous = false;
+    ShakeRun result;
+    for (int frame = 0; frame < frames; ++frame) {
+        for (const KeyStep& step : steps) {
+            if (step.frame == frame) {
+                In::keyEvent(step.key, step.down, false);
+            }
+        }
+        if (frame == focusLossFrame) {
+            In::focusChanged(false);
+        }
+        if (frame == focusBackFrame) {
+            In::focusChanged(true);
+        }
+        rig.frame();
+        const int before = spin.requests;
+        spin.update(*rig.pad, frame);
+        if (spin.requests != before) {
+            result.spins.push_back(frame);
+        }
+        const bool swing = rig.pad->mCorePadSwing->mIsSwing;
+        if (swing && !previous) {
+            result.swings.push_back(frame);
+        }
+        previous = swing;
+    }
+    return result;
+}
+
+std::vector<KeyStep> taps(In::KeyCode key, int first, int interval, int count) {
+    std::vector<KeyStep> steps;
+    for (int i = 0; i < count; ++i) {
+        steps.push_back({first + i * interval, key, true});
+        steps.push_back({first + i * interval + 1, key, false});
+    }
+    return steps;
+}
+
+std::string frameList(const std::vector<int>& frames) {
+    std::string text;
+    for (int f : frames) {
+        text += (text.empty() ? "" : " ") + std::to_string(f);
+    }
+    return text;
+}
+
+// Flicks at least 250 ms (15 frames) apart, and each one a swing edge.
+bool spacedAtLeast(const std::vector<int>& frames, int minimum) {
+    for (std::size_t i = 1; i < frames.size(); ++i) {
+        if (frames[i] - frames[i - 1] < minimum) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void testRapidShake() {
+    // Mashing F: a flick every 250 ms while presses keep coming, and each is
+    // a swing edge Mario turns into a spin request (his cooldown only follows
+    // A and B).
+    for (int interval : {3, 6, 9, 12, 15, 18}) {
+        const ShakeRun run = runShakeScript(taps(In::Key::F, 10, interval, 8), 10 + 8 * interval + 60);
+        const int lastTap = 10 + 7 * interval;
+        std::printf("F every %2d frames (%3d ms): 8 taps -> swings at %s\n", interval, interval * 1000 / 60,
+                    frameList(run.swings).c_str());
+        const int expected = interval >= 15 ? 8 : 1 + (7 * interval + 14) / 15;  // one per 250 ms, plus the one waiting
+        check(static_cast<int>(run.swings.size()) >= std::min(expected, 8) - 1 &&
+                  static_cast<int>(run.swings.size()) <= std::min(expected, 8),
+              "mashing every " + std::to_string(interval) + " frames: about one swing per 250 ms (" +
+                  std::to_string(run.swings.size()) + ", expected " + std::to_string(std::min(expected, 8)) + ")");
+        check(spacedAtLeast(run.swings, 14), "swings at least 250 ms apart: " + frameList(run.swings));
+        check(run.spins == run.swings, "every swing is a spin request under Mario's cooldown");
+        check(run.swings.empty() || run.swings.back() <= lastTap + 20, "no swing trails the last press by more than one wait");
+        if (interval <= 12) {
+            check(run.swings.size() >= 2, "mashing gives more than one spin");
+        }
+    }
+
+    // Many presses inside one flick: only one waits.
+    const ShakeRun burst = runShakeScript(taps(In::Key::F, 10, 2, 6), 120);
+    check(burst.swings.size() == 2, "six presses within 200 ms: the flick and one waiting flick (" +
+                                        frameList(burst.swings) + ")");
+
+    // Holding F does not repeat.
+    const ShakeRun held = runShakeScript({{10, In::Key::F, true}, {130, In::Key::F, false}}, 180);
+    check(held.swings.size() == 1, "holding F for 2 s is one swing (" + frameList(held.swings) + ")");
+
+    // A tap's release does not cancel the flick waiting for it.
+    const ShakeRun released = runShakeScript(taps(In::Key::F, 10, 5, 2), 90);
+    check(released.swings.size() == 2 && released.swings[1] - released.swings[0] >= 14,
+          "second tap released before its turn still flicks, 250 ms later (" + frameList(released.swings) + ")");
+
+    // Losing focus cancels the waiting flick; nothing fires after focus returns.
+    // (The second tap, at frame 12, waits until about frame 25; focus goes at 14.)
+    const ShakeRun waiting = runShakeScript(taps(In::Key::F, 10, 2, 2), 150);
+    check(waiting.swings.size() == 2, "control: with focus kept, the second tap flicks (" + frameList(waiting.swings) + ")");
+    const ShakeRun lost = runShakeScript(taps(In::Key::F, 10, 2, 2), 150, 14, 60);
+    check(lost.swings.size() == 1 && lost.swings[0] <= 13, "focus loss cancels the waiting flick (" +
+                                                               frameList(lost.swings) + ")");
+
+    // After Space, the first flick waits out Mario's lockout, the next is 250 ms later.
+    std::vector<KeyStep> jumpMash = {{10, In::Key::Space, true}, {11, In::Key::Space, false}};
+    for (const KeyStep& step : taps(In::Key::F, 11, 4, 6)) {
+        jumpMash.push_back(step);
+    }
+    const ShakeRun jump = runShakeScript(jumpMash, 120);
+    check(jump.spins.size() >= 2 && jump.spins[0] >= 20 && jump.spins[0] <= 23 && spacedAtLeast(jump.swings, 14),
+          "Space then mashed F: first spin after the lockout, then spaced (swings " + frameList(jump.swings) +
+              ", spins " + frameList(jump.spins) + ")");
 }
 
 // --- Tilt -----------------------------------------------------------------
@@ -943,6 +1146,8 @@ int main() {
     testFocusLoss();
     testPointer();
     testShake();
+    testJumpThenSpin();
+    testRapidShake();
     testTilt();
     testDevice();
 #ifdef PETARI_INPUT_TEST_SDL3

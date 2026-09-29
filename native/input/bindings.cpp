@@ -15,7 +15,7 @@ constexpr int kActionCount = static_cast<int>(Action::Count);
 const char* const kActionNames[kActionCount] = {
     "StickUp", "StickDown", "StickLeft", "StickRight", "A",        "B",        "Plus",     "Minus",     "Home",   "One",
     "Two",     "DpadUp",    "DpadDown",  "DpadLeft",   "DpadRight", "NunchukC", "NunchukZ", "Shake",     "TiltHold",
-    "PostureToggle",
+    "PostureToggle", "Walk",
 };
 
 const char* const kMouseNames[static_cast<int>(MouseButton::Count)] = {"Left", "Middle", "Right", "X1", "X2"};
@@ -121,6 +121,7 @@ Bindings Bindings::defaults() {
     b.bind(Action::Home, Binding::key(Key::F1));
     b.bind(Action::TiltHold, Binding::key(Key::Tab));
     b.bind(Action::PostureToggle, Binding::key(Key::T));
+    b.bind(Action::Walk, Binding::key(Key::LeftAlt));
     return b;
 }
 

@@ -39,6 +39,12 @@ int shakeReports() {
     return kShakeFlickReports + kShakeReturnReports - 1;
 }
 
+// Shakes start at least 250 ms apart, after the previous flick has fully
+// returned (43 reports). A flick that starts while the previous one is still
+// returning keeps the filtered value high, and the game sees one long swing.
+constexpr std::uint64_t kShakeSpacingReports = 50;
+static_assert(kShakeSpacingReports >= kShakeFlickReports + kShakeReturnReports - 1, "flicks must not overlap");
+
 float approach(float value, float target, float step) {
     if (value < target) {
         return std::min(value + step, target);
@@ -78,6 +84,7 @@ std::uint32_t actionBits(Action action) {
     case Action::Shake: return kBitShake;
     case Action::TiltHold: return kBitTiltHold;
     case Action::PostureToggle: return kBitPostureToggle;
+    case Action::Walk: return kBitWalk;
     case Action::Count: break;
     }
     return 0;
@@ -223,7 +230,10 @@ void RemoteModel::releaseAll() {
     mPendingPresses.fill(0);
     mRaw = 0;
     mMouseInWindow = false;
-    mShakeReport = -1;
+    // A flick in progress finishes its slow return: cutting it off would drop
+    // the acceleration by over 1 g, which the game reads as another swing.
+    // A flick still waiting is cancelled.
+    mShakeStart = 0;
 }
 
 void RemoteModel::focusChanged(bool focused) {
@@ -278,6 +288,11 @@ void RemoteModel::stickVector(float* x, float* y) const {
         *x *= kDiagonal;
         *y *= kDiagonal;
     }
+    if ((mOutput & kBitWalk) != 0) {
+        const float scale = std::clamp(mSettings.walkStickScale, 0.0f, 1.0f);
+        *x *= scale;
+        *y *= scale;
+    }
 }
 
 void RemoteModel::updateMotion(float stickX, float stickY) {
@@ -303,8 +318,30 @@ Report RemoteModel::nextReport(const PointerCalibration& calibration) {
     if ((rising & kBitPostureToggle) != 0) {
         mPosture = mPosture == Posture::Pointing ? Posture::Upright : Posture::Pointing;
     }
-    if ((rising & kBitShake) != 0) {
+    ++mReportIndex;
+    constexpr std::uint32_t kButtonAorB = 0x0800 | 0x0400;
+    if ((rising & kButtonAorB) != 0) {
+        mLastButtonReport = mReportIndex;
+    }
+    if ((rising & kBitShake) != 0 && mShakeStart == 0) {
+        // At most one shake waits: presses while one is pending are dropped.
+        // It starts after Mario's post-A/B swing lockout (the delay is fixed
+        // at the press, so later presses do not extend it) and after the
+        // previous flick has returned.
+        const int delay = std::max(mSettings.shakeDelayAfterButtonReports, 0);
+        std::uint64_t start = mReportIndex;
+        if (mLastButtonReport != 0) {
+            start = std::max(start, mLastButtonReport + delay);
+        }
+        if (mLastShakeStart != 0) {
+            start = std::max(start, mLastShakeStart + kShakeSpacingReports);
+        }
+        mShakeStart = start;
+    }
+    if (mShakeStart != 0 && mReportIndex >= mShakeStart) {
+        mShakeStart = 0;
         mShakeReport = 0;
+        mLastShakeStart = mReportIndex;
     }
 
     float stickX;
