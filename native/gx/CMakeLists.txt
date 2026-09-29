@@ -183,6 +183,16 @@ if(_petari_build_testing)
         "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp" legacy_commands.cpp)
     target_link_libraries(petari_j3d_anim_load_tests PRIVATE petari_j3d)
     target_link_options(petari_j3d_anim_load_tests PRIVATE -Wl,-dead_strip)
+    add_executable(petari_j3d_material_anm_tests EXCLUDE_FROM_ALL
+        "${CMAKE_SOURCE_DIR}/native/tests/j3d_material_anm_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp" legacy_commands.cpp)
+    target_link_libraries(petari_j3d_material_anm_tests PRIVATE petari_j3d)
+    target_link_options(petari_j3d_material_anm_tests PRIVATE -Wl,-dead_strip)
+    add_test(NAME native_j3d_material_anm COMMAND petari_j3d_material_anm_tests)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        add_test(NAME native_j3d_material_anm_assets COMMAND petari_j3d_material_anm_tests
+            --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+    endif()
     file(GLOB PETARI_JPA_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/JSystem/JParticle/*.cpp")
     add_executable(petari_jpa_load_tests EXCLUDE_FROM_ALL
         "${CMAKE_SOURCE_DIR}/native/tests/jpa_load_tests.cpp" "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"

@@ -53,7 +53,14 @@ public:
     s32 newSingleSharedDisplayList(u32);
 
     inline J3DMaterialAnm* getMaterialAnm() {
+#ifdef PETARI_NATIVE
+        // Values from 0xC0000000 in the 32-bit address space are not pointers. Host heap
+        // pointers lie above 4 GiB, so only that 32-bit range is rejected.
+        const uintptr_t address = reinterpret_cast< uintptr_t >(mMaterialAnm);
+        return address >= 0xC0000000 && address <= 0xFFFFFFFF ? nullptr : mMaterialAnm;
+#else
         return reinterpret_cast< uintptr_t >(mMaterialAnm) < 0xC0000000 ? mMaterialAnm : nullptr;
+#endif
     }
 
     bool isDrawModeOpaTexEdge() {
