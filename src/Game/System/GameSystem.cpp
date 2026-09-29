@@ -36,7 +36,76 @@
 #define GX_FIFO_SIZE 0x80000
 
 #ifdef PETARI_NATIVE
+#include <JSystem/JKernel/JKRSolidHeap.hpp>
 #include <petari/app.hpp>
+#include <cstdlib>
+
+// Boot progress diagnostics, enabled by setting PETARI_TRACE_BOOT. They only report;
+// the nerve flow is unchanged. Heartbeats are at most once per second.
+namespace {
+    bool isTraceBoot() {
+        static const bool sEnabled = [] {
+            const char* value = std::getenv("PETARI_TRACE_BOOT");
+            return value != nullptr && value[0] != '\0' && value[0] != '0';
+        }();
+        return sEnabled;
+    }
+
+    // Counts frames in the current boot phase; returns true once per second.
+    bool isTraceBootHeartbeat(const char* pPhase, u32* pFrames, u32* pSeconds) {
+        static const char* sPhase = nullptr;
+        static OSTime sPhaseStart = 0;
+        static OSTime sLastReport = 0;
+        static u32 sFrames = 0;
+        OSTime now = OSGetTime();
+
+        if (sPhase != pPhase) {
+            sPhase = pPhase;
+            sPhaseStart = now;
+            sLastReport = now;
+            sFrames = 0;
+        }
+
+        sFrames++;
+        if (OSTicksToSeconds(now - sLastReport) < 1) {
+            return false;
+        }
+
+        sLastReport = now;
+        *pFrames = sFrames;
+        *pSeconds = static_cast< u32 >(OSTicksToSeconds(now - sPhaseStart));
+        return true;
+    }
+
+    void traceBootHeap(const char* pName, JKRHeap* pHeap) {
+        if (pHeap == nullptr) {
+            OSReport("[boot]   %s: none\n", pName);
+            return;
+        }
+
+        OSReport("[boot]   %s: size %u, free %d, max free %d\n", pName,
+                 static_cast< u32 >(static_cast< u8* >(pHeap->getEndAddr()) - static_cast< u8* >(pHeap->getStartAddr())),
+                 pHeap->getTotalFreeSize(), pHeap->getFreeSize());
+    }
+
+    void traceBootHeaps() {
+        HeapMemoryWatcher* pWatcher = SingletonHolder< HeapMemoryWatcher >::get();
+        traceBootHeap("stationed NAPA", pWatcher->mStationedHeapNapa);
+        traceBootHeap("stationed GDDR", pWatcher->mStationedHeapGDDR);
+        traceBootHeap("game NAPA", pWatcher->mGameHeapNapa);
+        traceBootHeap("game GDDR", pWatcher->mGameHeapGDDR);
+        traceBootHeap("audio system", pWatcher->mAudSystemHeap);
+    }
+}  // namespace
+
+#define TRACE_BOOT(...)               \
+    do {                              \
+        if (isTraceBoot()) {          \
+            OSReport(__VA_ARGS__);    \
+        }                             \
+    } while (0)
+#else
+#define TRACE_BOOT(...)
 #endif
 
 #define INIT_AUDIO_KEY "オーディオ初期化"  // "Audio Initialization"
@@ -117,6 +186,12 @@ bool GameSystem::isDoneLoadSystemArchive() const {
 
 void GameSystem::startToLoadSystemArchive() {
     mIsExecuteLoadSystemArchive = true;
+#ifdef PETARI_NATIVE
+    TRACE_BOOT("[boot] stationed archive loading: start\n");
+    if (isTraceBoot()) {
+        traceBootHeaps();
+    }
+#endif
 
     SingletonHolder< HeapMemoryWatcher >::get()->setCurrentHeapToStationedHeap();
     SingletonHolder< NameObjRegister >::get()->setCurrentHolder(mObjHolder->mObjHolder);
@@ -125,12 +200,24 @@ void GameSystem::startToLoadSystemArchive() {
 
 void GameSystem::exeInitializeAudio() {
     if (MR::isFirstStep(this)) {
+        TRACE_BOOT("[boot] InitializeAudio: starting async audio system creation\n");
         MR::startFunctionAsyncExecute(MR::Functor(mObjHolder, &GameSystemObjHolder::createAudioSystem), 14, INIT_AUDIO_KEY);
     }
 
     updateSceneController();
 
+#ifdef PETARI_NATIVE
+    u32 traceFrames, traceSeconds;
+    if (isTraceBoot() && isTraceBootHeartbeat("InitializeAudio", &traceFrames, &traceSeconds)) {
+        // The wave-data query reads the audio system, so only ask after creation ended.
+        bool isCreated = MR::isEndFunctionAsyncExecute(INIT_AUDIO_KEY);
+        OSReport("[boot] InitializeAudio: waiting %us (%u frames), audio system created %d, system wave data loaded %s\n",
+                 traceSeconds, traceFrames, isCreated, isCreated ? (mObjHolder->mAudioSystem->isLoadDoneWaveDataAtSystemInit() ? "1" : "0") : "-");
+    }
+#endif
+
     if (MR::isEndFunctionAsyncExecute(INIT_AUDIO_KEY) && mObjHolder->mAudioSystem->isLoadDoneWaveDataAtSystemInit()) {
+        TRACE_BOOT("[boot] InitializeAudio: audio system created and system wave data loaded\n");
         MR::waitForEndFunctionAsyncExecute(INIT_AUDIO_KEY);
         setNerve(GET_NERVE(GameSystem, GameSystemInitializeLogoScene));
     }
@@ -138,13 +225,23 @@ void GameSystem::exeInitializeAudio() {
 
 void GameSystem::exeInitializeLogoScene() {
     if (GameSystemFunction::isResetProcessing()) {
+        TRACE_BOOT("[boot] InitializeLogoScene: reset in progress, waiting for reboot\n");
         setNerve(GET_NERVE(GameSystem, GameSystemWaitForReboot));
     } else {
         if (MR::isFirstStep(this)) {
+            TRACE_BOOT("[boot] InitializeLogoScene: requesting scene \"Logo\"\n");
             MR::requestChangeScene("Logo");
         }
 
         updateSceneController();
+
+#ifdef PETARI_NATIVE
+        u32 traceFrames, traceSeconds;
+        if (isTraceBoot() && isTraceBootHeartbeat("InitializeLogoScene", &traceFrames, &traceSeconds)) {
+            OSReport("[boot] InitializeLogoScene: %us (%u frames), stationed loading requested %d\n", traceSeconds, traceFrames,
+                     mIsExecuteLoadSystemArchive);
+        }
+#endif
     }
 }
 
@@ -152,7 +249,20 @@ void GameSystem::exeLoadStationedArchive() {
     mStationedArchiveLoader->update();
     updateSceneController();
 
+#ifdef PETARI_NATIVE
+    u32 traceFrames, traceSeconds;
+    if (isTraceBoot() && isTraceBootHeartbeat("LoadStationedArchive", &traceFrames, &traceSeconds)) {
+        OSReport("[boot] LoadStationedArchive: loading %us (%u frames)\n", traceSeconds, traceFrames);
+    }
+#endif
+
     if (mStationedArchiveLoader->isDone()) {
+#ifdef PETARI_NATIVE
+        TRACE_BOOT("[boot] stationed archive loading: done\n");
+        if (isTraceBoot()) {
+            traceBootHeaps();
+        }
+#endif
         setNerve(GET_NERVE(GameSystem, GameSystemNormal));
     }
 }
@@ -174,6 +284,7 @@ void GameSystem::initGX() {
 }
 
 void GameSystem::initAfterStationedResourceLoaded() {
+    TRACE_BOOT("[boot] initAfterStationedResourceLoaded: start\n");
     mFontHolder->createFontFromFile();
     mObjHolder->initAfterStationedResourceLoaded();
     mHomeButtonLayout->initWithoutIter();
@@ -181,6 +292,12 @@ void GameSystem::initAfterStationedResourceLoaded() {
     mSystemWipeHolder = MR::createSystemWipeHolder();
     mSceneController->initAfterStationedResourceLoaded();
     mSequenceDirector->initAfterResourceLoaded();
+#ifdef PETARI_NATIVE
+    TRACE_BOOT("[boot] initAfterStationedResourceLoaded: done\n");
+    if (isTraceBoot()) {
+        traceBootHeaps();
+    }
+#endif
 }
 
 void GameSystem::prepareReset() {

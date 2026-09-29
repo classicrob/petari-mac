@@ -5,7 +5,9 @@
 
 #include <SDL3/SDL_video.h>
 
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 
 #include "host.hpp"
 #include "petari/home_menu.hpp"
@@ -23,6 +25,46 @@ Rect gLastImage;
 float gLastWindowWidth = -1.0f;
 float gLastWindowHeight = -1.0f;
 bool gWarnedImageRect = false;
+
+// Opt-in start-up telemetry (PETARI_TRACE_BOOT=1): the first frame that
+// reaches the seam, then one line every kTraceInterval frames. Observation only.
+constexpr unsigned kTraceInterval = 120;
+using TraceClock = std::chrono::steady_clock;
+struct Trace {
+    bool enabled = false;
+    unsigned long frames = 0;
+    unsigned long lastFrames = 0;
+    unsigned long unpresentableWaits = 0;  // failed aurora_begin_frame calls
+    TraceClock::time_point start;
+    TraceClock::time_point last;
+};
+Trace gTrace;
+
+double seconds(TraceClock::duration d) {
+    return std::chrono::duration<double>(d).count();
+}
+
+void traceFrame(const Rect& image) {
+    if (!gTrace.enabled) {
+        return;
+    }
+    ++gTrace.frames;
+    const bool first = gTrace.frames == 1;
+    if (!first && gTrace.frames % kTraceInterval != 0) {
+        return;
+    }
+    const auto now = TraceClock::now();
+    const double sinceLast = seconds(now - gTrace.last);
+    std::fprintf(stderr,
+                 "Petari trace: frame %lu%s at %.2f s (%.1f frames/s since last), image %.0fx%.0f at %.0f,%.0f, "
+                 "unpresentable waits %lu\n",
+                 gTrace.frames, first ? " (first frame reached the seam)" : "", seconds(now - gTrace.start),
+                 first || sinceLast <= 0.0 ? 0.0 : (gTrace.frames - gTrace.lastFrames) / sinceLast, image.width, image.height, image.x, image.y,
+                 gTrace.unpresentableWaits);
+    std::fflush(stderr);
+    gTrace.last = now;
+    gTrace.lastFrames = gTrace.frames;
+}
 
 void handleEvents(const AuroraEvent* event) {
     for (; event != nullptr && event->type != AURORA_NONE; ++event) {
@@ -48,6 +90,7 @@ void handleEvents(const AuroraEvent* event) {
 // hidden), aurora_update waits for window events and the game stays here.
 void openFrame() {
     while (!aurora_begin_frame()) {
+        ++gTrace.unpresentableWaits;
         handleEvents(aurora_update());
     }
 }
@@ -99,6 +142,9 @@ void attach(SDL_Window* window) {
 
 void openFirstFrame() {
     HostAllocationScope host;
+    const char* trace = std::getenv("PETARI_TRACE_BOOT");
+    gTrace.enabled = trace != nullptr && trace[0] != '\0' && trace[0] != '0';
+    gTrace.start = gTrace.last = TraceClock::now();
     if (gPresent.composeFrame == nullptr) {
         std::fprintf(stderr,
                      "Petari: no presentation hook; the window shows Aurora's frame as is (not the GXCopyDisp "
@@ -112,6 +158,10 @@ void openFirstFrame() {
     handleEvents(aurora_update());
     openFrame();
     updateImage();
+    if (gTrace.enabled) {
+        std::fprintf(stderr, "Petari trace: first Aurora frame open; starting the game\n");
+        std::fflush(stderr);
+    }
 }
 
 }  // namespace Seam
@@ -131,6 +181,7 @@ extern "C" void petari_host_frame_seam(void) {
         gPresent.composeFrame(gPresent.user);
     }
     const Rect image = updateImage();
+    traceFrame(image);
     PetariNative::HomeMenu::drawImGuiOverlay(image.x, image.y, image.width, image.height);
     aurora_end_frame();
 
