@@ -208,3 +208,21 @@ reached HeavensDoorGalaxy for 60 consecutive ready frames at frame 21006, and
 exited 0. It recorded 64 pointer movements and 10 focus changes. Three automatic
 sidestep recoveries succeeded; no manual jump or steering was needed. Both NAND
 files remained byte-identical to the isolated fixture before the runs.
+
+
+### Latest synchronization run
+
+Story run 9 (`build/proactive-story-9.log`) passed at frame 20242 with no physical
+gameplay input and no stuck recoveries. Both movies played, HeavensDoorGalaxy
+stayed ready for 60 frames, and both isolated NAND hashes were unchanged.
+Its 342 audio reports contained zero underrun frames, one expected silent
+startup replay and two unexpected replays. Audio therefore remains an open
+reliability item despite the route pass. See `RELIABILITY.md` for timing evidence
+and coverage limits.
+
+The AI registration lock now uses owner-aware blocking instead of busy spinning.
+The scheduler temporarily requests higher host QoS for a running baton holder
+when a higher-priority game thread waits; it ends the override after unlocking.
+Audio diagnostic formatting runs on a joined reporter thread rather than the
+real-time producer. `[audio-host]` records producer and callback interval stats;
+these help localize future failures without asserting their cause.
