@@ -20,6 +20,11 @@
 #include <nw4r/lyt/layout.h>
 #include <nw4r/ut/ResFont.h>
 
+#ifdef PETARI_NATIVE
+// native/platform/include/petari/platform/os_host.hpp
+extern "C" void petari_os_preemption_point(void);
+#endif
+
 namespace MR {
     GameSystemObjHolder* getGameSystemObjHolder() {
         return SingletonHolder< GameSystem >::get()->mObjHolder;
@@ -71,6 +76,9 @@ namespace MR {
 
     void waitEndChangeArchivePlayer() {
         while (!GameSystemFunction::isEndChangeArchivePlayer()) {
+#ifdef PETARI_NATIVE
+            petari_os_preemption_point();  // the change completes on other threads
+#endif
         }
     }
 

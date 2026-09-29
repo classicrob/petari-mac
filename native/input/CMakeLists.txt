@@ -142,7 +142,8 @@ if(BUILD_TESTING)
         ${PETARI_REPO_ROOT}/src/Game/System/WPadStick.cpp
         ${PETARI_REPO_ROOT}/src/Game/Util/GamePadUtil.cpp
         ${PETARI_REPO_ROOT}/src/Game/Util/HashUtil.cpp
-        ${PETARI_REPO_ROOT}/src/Game/Util/MemoryUtil.cpp)
+        ${PETARI_REPO_ROOT}/src/Game/Util/MemoryUtil.cpp
+        ${PETARI_REPO_ROOT}/src/Game/Util/TriggerChecker.cpp)
     add_executable(petari_input_tests ${PETARI_REPO_ROOT}/native/tests/input_tests.cpp ${PETARI_INPUT_GAME_SOURCES})
     petari_encode_target_sources(petari_input_tests)
     target_include_directories(petari_input_tests PRIVATE ${PETARI_REPO_ROOT})

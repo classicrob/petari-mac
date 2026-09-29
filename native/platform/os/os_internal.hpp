@@ -63,7 +63,21 @@ bool cpuQuiescent();
 // if it stays unavailable they read the state without it (the process is
 // hung) and say so.
 void dumpThreads(std::FILE* out);
-void dumpAlarms(std::FILE* out);  // interrupt lock held, or read racily by dumpThreads
+void dumpAlarms(std::FILE* out);
+
+// Host waits while holding the CPU (os_thread.cpp's baton monitor).
+struct BatonBlockStats {
+    std::uint64_t stretches;  // waits of at least the threshold
+    double totalMs, maxMs;
+    std::vector<std::string> sites;
+    std::uint64_t forcedPreemptions;  // busy-waiting holders preempted at safe points
+    std::uint64_t unsafePreemptions;  // polls that found the holder at an unsafe point
+};
+BatonBlockStats batonBlockStats();
+void setBatonBlockThresholdMs(double ms);
+void setBatonBlockLogAll(bool enabled);
+void setForcedPreemption(bool enabled, double afterMs);  // PETARI_FORCED_PREEMPTION; default on, 4 ms  // tests: log every stretch, not the first three per site
+void dumpBatonBlocks(std::FILE* out);  // interrupt lock held, or read racily by dumpThreads
 std::string describeAddress(std::uint64_t address);  // symbol+offset, or hex
 
 // Scheduler hooks used by the interrupt layer (os_thread.cpp).

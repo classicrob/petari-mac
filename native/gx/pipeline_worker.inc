@@ -4,6 +4,7 @@ static void pipeline_worker() {
 #endif
   while (g_hasPipelineThread || g_pipelinesPerFrame < BuildPipelinesPerFrame) {
     PendingPipeline pending;
+    bool background = false;
     {
       std::unique_lock lock{g_pipelineMutex};
       if (g_hasPipelineThread) {
@@ -14,11 +15,13 @@ static void pipeline_worker() {
         return;
       }
       if (g_pipelineThreadEnd) break;
-      auto& source = !g_pipelineQueue.empty() ? g_pipelineQueue : g_backgroundPipelineQueue;
+      background = g_pipelineQueue.empty();
+      auto& source = background ? g_backgroundPipelineQueue : g_pipelineQueue;
       pending = std::move(source.front());
       source.pop_front();
       petariPipelineSamples[pending.hash].started = PetariPipeline::Clock::now();
     }
+    if (g_hasPipelineThread) PetariPipeline::compilationQoS(background);
     PetariPipeline::stages = {.runtimeKey = pending.hash};
     auto result = pending.create();
     const auto finished = PetariPipeline::Clock::now();
@@ -36,6 +39,7 @@ static void pipeline_worker() {
     }
     if (!g_hasPipelineThread) g_pipelinesPerFrame += std::max(1u, pipelineCount);
     notify_pipeline_ready(true, pipelineCount);
+    petari_global_progress();
     if (PetariPipeline::diagnostics()) {
       const auto requestWait = sample.requested == PetariPipeline::Clock::time_point{} ? 0.0 :
           std::max(0.0, PetariPipeline::milliseconds(sample.started - sample.requested));

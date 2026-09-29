@@ -9,10 +9,16 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+
+extern "C" uint64_t petari_gx_pipeline_manifest_failure_count();
 
 #include "frame_stats.hpp"
 #include "host.hpp"
 #include "smoke.hpp"
+#include "smoke_goodegg.hpp"
+#include "smoke_stage.hpp"
+#include "petari/asset_diagnostics.hpp"
 #include "petari/frame_telemetry.hpp"
 #include "petari/home_menu.hpp"
 #include "petari/host_allocation.hpp"
@@ -110,7 +116,8 @@ void recordFrame(std::uint64_t entry, FrameStats::Phase phase) {
     FrameStats::Frame frame;
     frame.index = ++t.frames;
     frame.intervalMs = static_cast<double>(entry - t.lastEntry) / 1e6;
-    frame.phase = t.unfocusedInFrame ? FrameStats::Phase::Unfocused : phase;
+    frame.phase = phase;
+    frame.unfocused = t.unfocusedInFrame;
     frame.us[FrameStats::SeamCompose] = microseconds(t.seamNs[0]);
     frame.us[FrameStats::SeamEndFrame] = microseconds(t.seamNs[1]);
     frame.us[FrameStats::SeamBeginFrame] = microseconds(t.seamNs[2]);
@@ -149,6 +156,12 @@ void recordFrame(std::uint64_t entry, FrameStats::Phase phase) {
     frame.us[FrameStats::PresentCall] = microseconds(takeCounter(Telemetry::PresentCall));
     takeCounter(Telemetry::ViTimerLate);
     frame.us[FrameStats::ViTimerLateMax] = microseconds(takeMax(Telemetry::ViTimerLate));
+    takeCounter(Telemetry::ViInterruptLockWait);
+    frame.us[FrameStats::ViLockWaitMax] = microseconds(takeMax(Telemetry::ViInterruptLockWait));
+    frame.us[FrameStats::TextureHash] = microseconds(takeCounter(Telemetry::TextureHash));
+    frame.us[FrameStats::TextureUpload] = microseconds(takeCounter(Telemetry::TextureUpload, &events));
+    frame.textureUploads = static_cast<std::uint32_t>(events);
+    frame.us[FrameStats::TokenBarrierWait] = microseconds(takeCounter(Telemetry::TokenBarrierWait));
     t.recorder->add(frame);
 
     t.lastEntry = entry;
@@ -173,6 +186,10 @@ void startTiming() {
 
 // The automated smoke run (smoke.hpp), when PETARI_SMOKE selects a script.
 Smoke::Driver* gSmoke = nullptr;
+// Or the stage script (smoke_stage.hpp), PETARI_SMOKE=stage.
+Smoke::StageDriver* gStage = nullptr;
+// Or Good Egg mission 1 (smoke_goodegg.hpp), PETARI_SMOKE=goodegg1.
+Smoke::GoodEggDriver* gGoodEgg = nullptr;
 
 unsigned long environmentNumber(const char* name, unsigned long fallback) {
     const char* value = std::getenv(name);
@@ -185,6 +202,28 @@ unsigned long environmentNumber(const char* name, unsigned long fallback) {
 }
 
 void startSmoke() {
+    Smoke::GoodEggConfig goodEgg;
+    if (Smoke::goodEggEnabledFromEnvironment(&goodEgg)) {
+        const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 72000);
+        const unsigned long stall = environmentNumber("PETARI_SMOKE_STALL_SECONDS", 60);
+        gGoodEgg = new Smoke::GoodEggDriver(frames, goodEgg);
+        std::fprintf(stderr, "PETARI SMOKE: script goodegg1 (%s), frame limit %lu, stall limit %lu s\n",
+                     goodEgg.synthetic ? "synthetic stage entry" : "galaxy route", frames, stall);
+        std::fflush(stderr);
+        Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
+        return;
+    }
+    Smoke::StageConfig stage;
+    if (Smoke::stageEnabledFromEnvironment(&stage)) {
+        const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 12000);
+        const unsigned long stall = environmentNumber("PETARI_SMOKE_STALL_SECONDS", 60);
+        gStage = new Smoke::StageDriver(frames, stage);
+        std::fprintf(stderr, "PETARI SMOKE: script stage (%s scenario %d, synthetic entry), frame limit %lu, stall limit %lu s\n",
+                     stage.stage.c_str(), stage.scenario, frames, stall);
+        std::fflush(stderr);
+        Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
+        return;
+    }
     Smoke::Script script = Smoke::Script::Title;
     if (!Smoke::enabledFromEnvironment(&script)) {
         return;
@@ -207,15 +246,16 @@ void startSmoke() {
 }
 
 // Game state is read here, before the seam releases the CPU, while this
-// thread owns the game.
-void runSmoke() {
-    Smoke::Observation observation = Smoke::observeGame(gSmoke->wantsPlayer());
+// thread owns the game. Driver is Smoke::Driver or Smoke::StageDriver.
+template <class Driver>
+void runSmoke(Driver* driver) {
+    Smoke::Observation observation = Smoke::observeGame(driver->wantsPlayer());
     observation.physical = Events::physicalInputs();
-    const Smoke::Step step = gSmoke->step(observation);
-    for (const std::string& line : gSmoke->log()) {
-        std::fprintf(stderr, "PETARI SMOKE [frame %lu]: %s\n", gSmoke->frame(), line.c_str());
+    const Smoke::Step step = driver->step(observation);
+    for (const std::string& line : driver->log()) {
+        std::fprintf(stderr, "PETARI SMOKE [frame %lu]: %s\n", driver->frame(), line.c_str());
     }
-    if (!gSmoke->log().empty()) {
+    if (!driver->log().empty()) {
         std::fflush(stderr);
     }
     if (step.assertFocus) {
@@ -229,12 +269,32 @@ void runSmoke() {
     for (const Smoke::Press& press : step.presses) {
         Events::pressButton(static_cast<int>(press.button), press.down);
     }
-    Smoke::heartbeat(gSmoke->frame(), gSmoke->phase());
+    Smoke::heartbeat(driver->frame(), driver->phase());
     if (step.requestQuit) {
-        Smoke::setProcessResult(gSmoke->result());
+        // A route that passed while looking up layout panes/animations or sounds that do
+        // not exist in the disc data did not really pass: those lookups were skipped.
+        Smoke::Result result = driver->result();
+        std::string reason = driver->reason();
+        const uint64_t missingLayout = petari_layout_missing_reference_count();
+        const uint64_t missingSound = petari_sound_missing_reference_count();
+        const uint64_t manifestFailures = petari_gx_pipeline_manifest_failure_count();
+        if ((missingLayout > 0 || missingSound > 0) &&
+            (result == Smoke::Result::Pass || result == Smoke::Result::Assisted)) {
+            result = Smoke::Result::Fail;
+            reason += "; FAIL: missing asset references (layout " + std::to_string(missingLayout) + ", sound " +
+                      std::to_string(missingSound) + "; see [layout]/[sound] missing lines)";
+        }
+        // A bundled stage shader manifest that exists but fails to load silently degrades
+        // stage preparation to the shared fallback; treat it as a failed run.
+        if (manifestFailures > 0 && (result == Smoke::Result::Pass || result == Smoke::Result::Assisted)) {
+            result = Smoke::Result::Fail;
+            reason += "; FAIL: " + std::to_string(manifestFailures) +
+                      " pipeline manifest read failure(s) (see [gx stage prep] manifest read failed)";
+        }
+        Smoke::setProcessResult(result);
         Smoke::noteQuitRequested(observation.saveSequence);
         std::fprintf(stderr, "PETARI SMOKE RESULT: %s (%s); pressing the power button%s\n",
-                     Smoke::resultName(gSmoke->result()), gSmoke->reason().c_str(),
+                     Smoke::resultName(result), reason.c_str(),
                      observation.saveSequence ? " while the save-data sequence is active" : "");
         std::fflush(stderr);
         Host::requestQuit();
@@ -433,7 +493,11 @@ extern "C" void petari_host_frame_seam(void) {
     // Game state is readable here, before the CPU is released.
     recordFrame(entry, gTiming.probe != nullptr ? gTiming.probe() : FrameStats::Phase::Gameplay);
     if (gSmoke != nullptr) {
-        runSmoke();
+        runSmoke(gSmoke);
+    } else if (gStage != nullptr) {
+        runSmoke(gStage);
+    } else if (gGoodEgg != nullptr) {
+        runSmoke(gGoodEgg);
     }
     const bool release = gRelease.begin != nullptr && gRelease.end != nullptr;
     if (release) {

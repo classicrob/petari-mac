@@ -269,3 +269,64 @@ Aurora pipeline-configuration database as `Resources/initial_pipeline_cache.db`.
 Export a live cache with SQLite's backup API, not a raw copy of its database
 file while WAL writes may be active. Do not substitute the device-specific Dawn
 cache. No seed is required by default.
+
+### Human-style macOS window playtest
+
+Use the normal keyboard/mouse route, with no `PETARI_SMOKE` driver. Prepare a new
+isolated fixture once, then launch each bounded session through the helper:
+
+```sh
+python3 native/tools/cu_playtest.py --prepare
+# Freeze the current app while holding the shared build lock:
+build/locked-build.sh cu-freeze ditto build/macos-gx/native/app/Petari.app build/cu-playtest/frozen/Petari.app
+shasum -a 256 build/cu-playtest/frozen/Petari.app/Contents/MacOS/Petari
+python3 native/tools/cu_playtest.py --session 1 --app build/cu-playtest/frozen/Petari.app
+# After clean quit, use the same isolated save to check persistence:
+python3 native/tools/cu_playtest.py --session 2 --app build/cu-playtest/frozen/Petari.app
+```
+
+The helper owns `build/cu-playtest/user`, obtains the FIFO `locked-app.sh` lock followed by `locked-sweep-lane.sh`,
+launches only the app binary with that directory and the observatory marker,
+and limits each actual app session to 20 minutes. It records binary/save hashes,
+PID, UTC times, exit status, boot/audio logs and frame CSV. It enables baton
+diagnostics with `PETARI_BATON_SAMPLE=0` to avoid sampling-induced pauses. A forced deadline exit
+is reported as failure, not a clean quit. `--prepare` refuses to overwrite an
+existing fixture; preserve prior evidence before selecting a new output location.
+
+After `build/cu-playtest/active-session.json` appears, confirm that PID is still
+running. Paste `native/tools/cu_playtest_repl.js` into `cua_repl` after reading its
+first-use documentation, then `await playtest.bind()`. Bind again after **every**
+relaunch; do not ask CUA to open the app while waiting for the launcher. CUA's
+`getApp` can launch an app if none exists. Do not use `Play Petari.command`.
+
+The helper's `tap(key,count)`, `click(observedTarget,button)`, `drag(from,to)` and
+`capture(label)` send macOS UI events, refresh accessibility state, and save UTC
+input records/screenshots under `build/cu-playtest/`. Use coordinates only from
+a fresh screenshot. `note(text)` records a judgment or reproduction detail.
+The CUA interface has no explicit key-down/hold-duration or mouse-move-only API;
+pulses and clicks cannot establish the feel of sustained key or Pull Star holds.
+Do not mislabel that interface limit as a game-input failure.
+
+Repeatable scenario script (observe between steps; do not run blind coordinates):
+
+1. Capture title; press Return once to send A+B at title (plain A elsewhere).
+   Capture save selection. Select the existing Mario file and enter the
+   observatory through normal UI; this fixture supplies post-tutorial progression.
+2. Exercise WASD, Space, F, Q/E and C. Compare pointer placement before/after window
+   resize; test fullscreen followed by at least 20 seconds of gameplay, focus loss
+   and focus regain. Test a single Escape/Minus tap to pause and another to resume. Check that inputs release.
+3. Follow visible paths to the Terrace. Interact with its Pull Star, select Good
+   Egg, wait for any first-time reveal, and select mission 1.
+4. Try movement/jump/spin, pointer/Star Bit collection and shooting, NPC dialogue,
+   launch stars and pause/resume. Attempt the mission and return-to-observatory UI.
+5. Quit using F1 → Quit or the normal window close/power path. Check a zero exit
+   and save writes. Relaunch as the next numbered session and verify the same file
+   and any earned progress; do not infer save persistence merely from fixture state.
+6. Quit the final session. Run `python3 native/tools/cu_playtest.py --summarize`
+   to refresh `build/cu-playtest/analysis.json` without launching anything.
+   Write a prioritized issue/coverage report at
+   `build/cu-playtest/REPORT.md`, linking screenshots and timestamped log context.
+
+Report observed facts separately from likely causes and untested scenarios. A
+screenshot is not continuous video, and device/audio counters are not a listening
+assessment. Do not modify game code during this diagnostic task.

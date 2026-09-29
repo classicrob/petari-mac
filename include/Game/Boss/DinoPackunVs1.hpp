@@ -26,6 +26,10 @@ public:
     void exeBattleLv2();
     void exeBattleLv3();
     void exeDownDemo();
+#ifdef PETARI_NATIVE
+    // For the smoke run's actor observation (Game/Util/NativeActorObserve.hpp, "DinoPiranha").
+    s32 nativeObservePhase() const;
+#endif
 
     DinoPackunDemo* mDemo;               // 0x10
     DinoPackunBattleEgg* mEgg;           // 0x14

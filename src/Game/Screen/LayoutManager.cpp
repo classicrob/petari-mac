@@ -1,3 +1,6 @@
+#ifdef PETARI_NATIVE
+#include <petari/asset_diagnostics.hpp>
+#endif
 #include "Game/Screen/LayoutManager.hpp"
 #include "Game/Screen/LayoutCoreUtil.hpp"
 #include "Game/Screen/LayoutGroupCtrl.hpp"
@@ -225,8 +228,15 @@ void LayoutManager::draw() const {
 }
 
 void LayoutManager::addPaneCtrl(LayoutPaneCtrl* pPaneCtrl) {
+#ifdef PETARI_NATIVE
+    if (!pPaneCtrl || !pPaneCtrl->mPane) return;
+#endif
+
     s32 index = getIndexOfPane(pPaneCtrl->mPane->mName);
 
+#ifdef PETARI_NATIVE
+    if (index < 0) return;
+#endif
     if (mPaneInfoList[index].mPaneCtrl == nullptr) {
         pPaneCtrl->mPaneIndex = index;
         mPaneInfoList[index].mPaneCtrl = pPaneCtrl;
@@ -234,6 +244,10 @@ void LayoutManager::addPaneCtrl(LayoutPaneCtrl* pPaneCtrl) {
 }
 
 LayoutPaneCtrl* LayoutManager::createAndAddRootPaneCtrl(u32 animLayerNum) {
+#ifdef PETARI_NATIVE
+    if (!getPane(nullptr)) return nullptr;
+#endif
+
     s32 index = getIndexOfPane(mLayout->mpRootPane->mName);
 
     if (mPaneInfoList[index].mPaneCtrl != nullptr) {
@@ -246,6 +260,10 @@ LayoutPaneCtrl* LayoutManager::createAndAddRootPaneCtrl(u32 animLayerNum) {
 }
 
 LayoutPaneCtrl* LayoutManager::createAndAddPaneCtrl(const char* pName, u32 animLayerNum) {
+#ifdef PETARI_NATIVE
+    if (!getPane(pName)) return nullptr;
+#endif
+
     s32 index = getIndexOfPane(pName);
 
     if (mPaneInfoList[index].mPaneCtrl != nullptr) {
@@ -258,15 +276,34 @@ LayoutPaneCtrl* LayoutManager::createAndAddPaneCtrl(const char* pName, u32 animL
 }
 
 LayoutPaneCtrl* LayoutManager::getPaneCtrl(const char* pName) const {
+#ifdef PETARI_NATIVE
+    if (!getPane(pName)) return nullptr;
+    if (!mPaneInfoList || !mPaneCount || (pName == nullptr && !mPaneInfoList[0].mPaneCtrl)) {
+        PetariNative::reportMissingLayoutReference(mLayoutName, pName, "pane control");
+        return nullptr;
+    }
+#endif
+
     if (pName == nullptr) {
         return mPaneInfoList[0].mPaneCtrl;
     }
 
     s32 index = getIndexOfPane(pName);
+#ifdef PETARI_NATIVE
+    if (index < 0 || !mPaneInfoList[index].mPaneCtrl) {
+        PetariNative::reportMissingLayoutReference(mLayoutName, pName, "pane control");
+        return nullptr;
+    }
+#endif
     return mPaneInfoList[index].mPaneCtrl;
 }
 
 s32 LayoutManager::getIndexOfPane(const char* pName) const {
+#ifdef PETARI_NATIVE
+    if (pName == nullptr) {
+        return 0;
+    }
+#endif
     u32 paneCount = mPaneCount;
 
     for (u32 i = 0; i < paneCount; i++) {
@@ -274,8 +311,11 @@ s32 LayoutManager::getIndexOfPane(const char* pName) const {
             return i;
         }
     }
-
+#ifdef PETARI_NATIVE
+    return -1;
+#else
     return 0;
+#endif
 }
 
 bool LayoutManager::isExistPaneCtrl(const char* pName) const {
@@ -284,15 +324,28 @@ bool LayoutManager::isExistPaneCtrl(const char* pName) const {
     }
 
     s32 index = getIndexOfPane(pName);
+#ifdef PETARI_NATIVE
+    if (index < 0) return false;
+#endif
     return mPaneInfoList[index].mPaneCtrl != nullptr;
 }
 
 void LayoutManager::addGroupCtrl(LayoutGroupCtrl* pGroupCtrl) {
+#ifdef PETARI_NATIVE
+    if (!pGroupCtrl || !pGroupCtrl->mGroup) return;
+#endif
+
     s32 index = getIndexOfGroupCtrl(pGroupCtrl->mGroup->mName);
+#ifdef PETARI_NATIVE
+    if (index < 0 || static_cast<u32>(index) >= mGroupCtrlCount) return;
+#endif
     mGroupCtrlList[index] = pGroupCtrl;
 
     for (u32 i = 0; i < pGroupCtrl->getPaneNum(); i++) {
         s32 paneIndex = getIndexOfPane(pGroupCtrl->getPane(i)->mName);
+#ifdef PETARI_NATIVE
+        if (paneIndex < 0) continue;
+#endif
         LayoutGroupCtrlLink* pNext = mPaneInfoList[paneIndex].mGroupCtrlLink;
         LayoutGroupCtrlLink* pLink = new LayoutGroupCtrlLink;
         pLink->mGroupCtrl = pGroupCtrl;
@@ -302,6 +355,10 @@ void LayoutManager::addGroupCtrl(LayoutGroupCtrl* pGroupCtrl) {
 }
 
 bool LayoutManager::isPointing(const nw4r::lyt::Pane* pPane, const TVec2f& rPos) const {
+#ifdef PETARI_NATIVE
+    if (!pPane) return false;
+#endif
+
     Mtx inverse;
     PSMTXInverse(pPane->mGlbMtx, inverse);
     s32 horizontalPosition = static_cast< u8 >(pPane->mBasePosition % 3);
@@ -356,6 +413,13 @@ bool LayoutManager::isPointing(const nw4r::lyt::Pane* pPane, const TVec2f& rPos)
 }
 
 LayoutGroupCtrl* LayoutManager::createAndAddGroupCtrl(const char* pName, u32 animLayerNum) {
+#ifdef PETARI_NATIVE
+    if (!getGroup(pName)) {
+        PetariNative::reportMissingLayoutReference(mLayoutName, pName, "group");
+        return nullptr;
+    }
+#endif
+
     LayoutGroupCtrl* pGroupCtrl = new LayoutGroupCtrl(this, pName, animLayerNum);
     addGroupCtrl(pGroupCtrl);
     return pGroupCtrl;
@@ -376,6 +440,10 @@ s32 LayoutManager::getIndexOfGroupCtrl(const char* pName) const {
 }
 
 void LayoutManager::createPaneMtxRef(const char* pName) {
+#ifdef PETARI_NATIVE
+    if (!getPane(pName)) return ;
+#endif
+
     s32 index = 0;
     if (pName != nullptr) {
         index = getIndexOfPane(pName);
@@ -385,6 +453,10 @@ void LayoutManager::createPaneMtxRef(const char* pName) {
 }
 
 MtxPtr LayoutManager::getPaneMtxRef(const char* pName) const {
+#ifdef PETARI_NATIVE
+    if (!getPane(pName)) return nullptr;
+#endif
+
     s32 index = 0;
     if (pName != nullptr) {
         index = getIndexOfPane(pName);
@@ -399,14 +471,28 @@ bool LayoutManager::isExistPaneMtxRef(const char* pName) const {
         index = getIndexOfPane(pName);
     }
 
+#ifdef PETARI_NATIVE
+    if (index < 0) return false;
+#endif
     return mPaneInfoList[index].mMtxRef != nullptr;
 }
 
 bool LayoutManager::isPointing(const char* pName, const TVec2f& rPos) const {
+#ifdef PETARI_NATIVE
+    return isPointing(getPane(pName), rPos);
+#else
     return isPointing(findPaneByName(pName), rPos);
+#endif
 }
 
 nw4r::lyt::AnimTransform* LayoutManager::getAnimTransform(const char* pName) const {
+#ifdef PETARI_NATIVE
+    if (!pName || !mLayoutHolder) {
+        PetariNative::reportMissingLayoutReference(mLayoutName, pName, "animation");
+        return nullptr;
+    }
+#endif
+
     char fileName[0x80];
     snprintf(fileName, sizeof(fileName), "%s.brlan", pName);
     u32 hash = MR::getHashCodeLower(fileName);
@@ -416,6 +502,9 @@ nw4r::lyt::AnimTransform* LayoutManager::getAnimTransform(const char* pName) con
         }
     }
 
+#ifdef PETARI_NATIVE
+    PetariNative::reportMissingLayoutReference(mLayoutName, pName, "animation");
+#endif
     return nullptr;
 }
 
@@ -759,3 +848,13 @@ namespace {
         }
     }  // namespace Local
 }  // namespace
+#ifdef PETARI_NATIVE
+nw4r::lyt::Pane* LayoutManager::getPane(const char* pName) const {
+    nw4r::lyt::Pane* root = mLayout ? mLayout->mpRootPane : nullptr;
+    nw4r::lyt::Pane* pane = root && pName ? root->FindPaneByName(pName, true) : root;
+    if (!pane) {
+        PetariNative::reportMissingLayoutReference(mLayoutName, pName, "pane");
+    }
+    return pane;
+}
+#endif

@@ -80,6 +80,9 @@ namespace {
         f32 x = rTrans.x;
         TVec2f trans(x, y);
         nw4r::lyt::Pane* pRootPane = MR::getRootPane(pActor);
+#ifdef PETARI_NATIVE
+        if (!pRootPane) return;
+#endif
         TVec3f translation(trans.x, trans.y, 0.0f);
         pRootPane->mTranslate.x = translation.x;
         pRootPane->mTranslate.y = translation.y;

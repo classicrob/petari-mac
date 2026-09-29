@@ -5,6 +5,11 @@
 #include <JSystem/JMath/JMath.hpp>
 #include <revolution/wpad.h>
 
+#ifdef PETARI_NATIVE
+// Tells the keyboard layer the Star Ball steers by tilt, so WASD tilt the remote.
+#include <petari/input.hpp>
+#endif
+
 void SphereAccelSensorController_FORCE_MATCH_SDATA2() {
     (void)1.0f;
     (void)0.0f;
@@ -49,6 +54,9 @@ SphereAccelSensorController::SphereAccelSensorController()
 }
 
 void SphereAccelSensorController::getPadAcceleration(TVec3f* pAccel) const {
+#ifdef PETARI_NATIVE
+    PetariNative::Input::motionControlShown(PetariNative::Input::Steering::Ball);
+#endif
     if (mPad == Pad_Core) {
         MR::getCorePadAcceleration(pAccel, WPAD_CHAN0);
     } else {

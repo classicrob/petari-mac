@@ -34,6 +34,12 @@ void petari_os_end_host_blocking(void);
 // use). End with petari_os_end_host_blocking only when it returned 1.
 int petari_os_try_begin_host_blocking(void);
 
+// A preemption point for game loops that poll without OS calls (they would
+// otherwise hold the CPU until the baton monitor preempts them): delivers a
+// pending preemption at once. Callable from game code on an OS thread; a no-op
+// otherwise.
+void petari_os_preemption_point(void);
+
 #ifdef __cplusplus
 }
 #endif

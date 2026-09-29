@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
     sqlite3_bind_int(statement, 1, aurora::gx::GXPipelineConfigVersion);
     if (argc == 3) std::filesystem::create_directories(argv[2]);
     std::vector<Row> rows;
+    size_t variants = 0;
     unsigned invalid = 0;
     int result;
     while ((result = sqlite3_step(statement)) == SQLITE_ROW) {
@@ -51,6 +52,16 @@ int main(int argc, char** argv) {
         const auto key = aurora::xxh3_hash(config, static_cast<aurora::HashType>(aurora::gfx::ShaderType::GX));
         const auto start = std::chrono::steady_clock::now();
         const auto source = aurora::gx::build_shader_source(config.shaderConfig, aurora::gx::DstAlphaMode::None);
+        ++variants;
+        for (auto mode : {aurora::gx::DstAlphaMode::None, aurora::gx::DstAlphaMode::Replace, aurora::gx::DstAlphaMode::DualSource}) {
+            for (const auto normal : {UINT32_MAX, 1u}) {
+                if ((mode == aurora::gx::DstAlphaMode::None && normal == UINT32_MAX) ||
+                    (mode == aurora::gx::DstAlphaMode::DualSource && normal != UINT32_MAX)) continue;
+                const auto variant = aurora::gx::build_shader_source(config.shaderConfig, mode, normal);
+                if (variant.empty()) ++invalid;
+                ++variants;
+            }
+        }
         const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         rows.push_back({key, config.shaderConfig.tevStageCount, config.shaderConfig.numIndStages,
                         source.size(), static_cast<size_t>(std::count(source.begin(), source.end(), '\n')), ms});
@@ -68,7 +79,7 @@ int main(int argc, char** argv) {
     std::puts("config,wgsl_bytes,wgsl_lines,tev_stages,indirect_stages,source_ms");
     for (const auto& row : rows)
         std::printf("%016llx,%zu,%zu,%u,%u,%.3f\n", row.key, row.bytes, row.lines, row.tev, row.indirect, row.sourceMs);
-    std::fprintf(stderr, "Inspected %zu GX configs; invalid=%u; DstAlphaMode=None, no normal attachment. "
-                         "Source-generation durations are not Metal compile timings.\n", rows.size(), invalid);
+    std::fprintf(stderr, "Inspected %zu GX configs; invalid=%u; shader_variants=%zu (five legal output variants). "
+                         "Source-generation durations are not Metal compile timings.\n", rows.size(), invalid, variants);
     return invalid || result != SQLITE_DONE ? 1 : 0;
 }

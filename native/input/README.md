@@ -94,7 +94,8 @@ output:
 | Left or Right Shift | Nunchuk Z | approved |
 | Q / E | +Control Pad left / right (camera rotation) | approved |
 | C | Nunchuk C (camera recenter) | approved |
-| Escape (hold briefly) | Plus (pause) | hold for at least 12 frames |
+| Escape | Plus (pause) | a press lasts 250 ms, so a tap pauses |
+| Return, keypad Enter | Start: A; A and B together on the title prompt | approved design (title fix) |
 | Backspace | B (back) | also available on left mouse |
 | Up / Down / Left / Right | +Control Pad (Up: first-person view) | provisional |
 | - | Minus | provisional |
@@ -108,8 +109,34 @@ All bindings are remappable: `Bindings::bind/unbind/clear`, with a text form
 (`serialize`/`parse`, one `Action=Key:Name,Mouse:Button` line per action) for
 saving. Menus use B to go back (scenario select, galaxy map, file select). The
 pause menu closes with Plus. Escape sends only Plus: the game refuses to open
-pause while B is held. Hold Escape briefly to open the menu, then tap it to
-close. Backspace sends B for going back in menus.
+pause while B is held. Backspace sends B for going back in menus.
+
+## Game hints
+
+Three screens need a Wii Remote move that one key cannot express by itself.
+Native builds of the game report them each frame, and each report lapses
+after 100 ms (`kGameHintReports`), so a missed "off" cannot leave a mode
+stuck:
+
+- **Title prompt** (`titlePromptShown`, from
+  `TitleSequenceProduct::exeLogoDisplay`). The title starts when A and B are
+  both held. While the prompt is up, the Start action (Return) presses B with
+  A. Elsewhere Start is plain A: on scenario select and the galaxy map, B
+  (back) is checked before A when both arrive together, so Start must never
+  send B there.
+- **Star Ball** (`motionControlShown(Steering::Ball)`, from
+  `SphereAccelSensorController::getPadAcceleration`). The remote stands
+  upright and the stick keys tilt it, as T and Tab would.
+- **Ray surfing** (`motionControlShown(Steering::Ray)`, from
+  `SurfRay::updateRide`). The remote stays level, whatever T chose. Left and
+  right twist it; forward and back are ignored, since pitching it breaks
+  `SurfRayTutorial`'s "straight".
+
+**Pause.** `PauseButtonCheckerInGame` pauses on exactly the 12th frame + or -
+is held, with A and B up. Plus and Minus presses therefore last at least
+`Settings::pauseTapReports` (50 reports, 14 frames). The counter is not
+updated while paused, and the pause menu closes on a new press, so the long
+press can neither reopen nor close the menu by itself.
 
 ## WPAD behaviour
 
@@ -141,7 +168,9 @@ close. Backspace sends B for going back in menus.
   The remote's time then skips too: a press still lasts its minimum
   reports, but a shake or tilt covers less wall-clock time.
 - Threads: host event functions may be called from any thread. They take a
-  host mutex and never the interrupt lock. The report tick takes the interrupt
+  host mutex and never the interrupt lock. KPAD's pointer calibration reaches
+  the report tick through a copy made when `KPADRead` probes the remote on the
+  thread that called `KPADInit`. The report tick takes the interrupt
   lock, then the host mutex. Binding changes allocate inside
   `HostAllocationScope`.
 
@@ -171,7 +200,7 @@ close. Backspace sends B for going back in menus.
 
 ## Tests
 
-`native/tests/input_tests.cpp` (`ctest -R native_input`, 416 checks) runs the
+`native/tests/input_tests.cpp` (`ctest -R native_input`, 496 checks) runs the
 SDK's KPAD.c and the game's `WPad`, `WPadButton`, `WPadStick`, `WPadPointer`,
 `WPadAcceleration`, and `WPadHVSwing`. It pumps 10 reports per 3 frames and
 covers:
@@ -211,16 +240,64 @@ covers:
   - Space then mashed F: the first spin comes after the lockout, then
     further spins every 250 ms.
 - **Walk.** Half-length straight and diagonal sticks.
+- **Start (Return).**
+  - Plain A outside the title, even when held.
+  - On the title prompt, a replica of `exeLogoDisplay` built on the game's
+    `TriggerChecker`:
+    - a tap starts it;
+    - a key held before the prompt starts it on the next frame;
+    - B stays steady while the key is held;
+    - B lapses 5 to 8 frames after the prompt stops.
+  - Space alone or Backspace alone never starts it; hold Space, then
+    Backspace, does.
+  - Focus loss releases Start, it counts for the jump-then-spin delay, and it
+    can be remapped.
+- **Pause tap.** A replica of `PauseButtonCheckerInGame` and the pause menu:
+  - an Escape or Minus tap pauses, and a second tap resumes without
+    reopening;
+  - holding either key pauses once;
+  - A taps stay short.
+- **Ride steering.**
+  - Star Ball: raised without T, D rolls right and W forward without Tab,
+    the stick stays neutral, and the posture chosen with T is left alone.
+  - When the hint lapses, the remote is level again, the pointer returns,
+    and W moves Mario.
+  - Ray: level, W held still counts as straight, and A/D turn left/right.
+  - A stray T before the Ray still leaves it level.
 - **Tilt.** The Ray and Star Ball checks above; no pointer while upright.
 - **Device.** Rumble; the SC motor setting; status requests; speaker commands,
   pacing, the sink, and mute.
 - **SDL3 adapter.** Built when SDL3 headers are found.
 - **Alarm clock.** A realtime run with a non-OS host event thread.
 
-The suite passes under ASan+UBSan (15 runs), TSan (6 runs), and Release
-(5 runs), both standalone and added to the root build. Mutation checks:
+The suite passes under ASan+UBSan and Release. Under TSan, 5 of 5 runs are
+clean (2026-09-29). Earlier TSan runs reported, in about one run in six, a race
+that is now fixed and has a regression test:
+
+- the report tick read KPAD's pointer calibration from `inside_kpads`;
+- `KPADInit` and `KPADSetSensorHeight` write it on the KPAD thread without
+  the interrupt lock.
+
+The tick now uses a copy taken in `WPADProbe`, which `KPADRead` calls on that
+thread under the lock. `testCalibrationThreads` reported the race in 5 of 5
+runs before the fix.
+
+The unchanged `KPAD.c` shares other `inside_kpads` state between its sampling
+callback (an interrupt on the Wii, the report tick here) and `KPADRead`
+without a lock. TSan reports this once calls such as `KPADSetSensorHeight`
+overlap a connected remote's reports. That behaviour is the SDK's, and this
+suite does not exercise it. Mutation checks:
 changing the shake return, the minimum pulse, the camera roll inverse, the
-twist sign, or diagonal normalization each fails a test.
+twist sign, or diagonal normalization each fails a test. Each of these
+mutations also fails a test:
+
+- Start never adding B, or always adding it;
+- a title prompt that never lapses, or is not re-checked per report;
+- no pause minimum;
+- no steering tilt;
+- the Ray standing upright, or keeping forward tilt;
+- the stick not zeroed while steering;
+- a steering hint that never lapses.
 
 ## Integration (root)
 

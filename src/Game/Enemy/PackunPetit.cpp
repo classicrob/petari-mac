@@ -19,6 +19,7 @@
 #include "Game/Util/ObjUtil.hpp"
 #include "Game/Util/PlayerUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
 #include "JSystem/JGeometry/TVec.hpp"
 #include "JSystem/JMath/JMath.hpp"
@@ -327,6 +328,14 @@ void PackunPetit::calcAndSetBaseMtx() {
 }
 
 void PackunPetit::control() {
+#ifdef PETARI_NATIVE
+    {
+        const bool down = isNerve(GET_NERVE(PackunPetit, PackunPetitNrvTrampleDown)) || isNerve(GET_NERVE(PackunPetit, PackunPetitNrvPunchDown));
+        TVec3f front;
+        MR::calcFrontVec(&front, this);
+        MR::Native::publishActor("PiranhaPlant", mPosition, front, down ? 1 : 0, down ? 0u : PETARI_ACTOR_HOSTILE);
+    }
+#endif
     mScaleController->updateNerve();
     tryDPDSwoon();
 }

@@ -30,6 +30,7 @@
 #include "Game/System/WPadHolder.hpp"
 #include "Game/System/WPadPointer.hpp"
 #include "Game/System/WPadStick.hpp"
+#include "Game/Util/TriggerChecker.hpp"
 #include "petari/input.hpp"
 #include "petari/platform/sc.hpp"
 #include "../input/remote_model.hpp"
@@ -178,6 +179,10 @@ void testBindings() {
     check(!hasBinding(d, Action::B, Binding::key(In::Key::Escape)), "Escape does not hold B, which blocks pause");
     check(hasBinding(d, Action::B, Binding::key(In::Key::Backspace)), "Backspace backs out of menus");
     check(hasBinding(d, Action::Walk, Binding::key(In::Key::LeftAlt)), "Left Alt walks");
+    check(hasBinding(d, Action::Start, Binding::key(In::Key::Return)), "Return is Start (confirm; A and B on the title)");
+    check(hasBinding(d, Action::Start, Binding::key(In::Key::KeypadEnter)), "keypad Enter is Start");
+    check(!hasBinding(d, Action::A, Binding::key(In::Key::Return)) && !hasBinding(d, Action::B, Binding::key(In::Key::Return)),
+          "Return is bound only to Start");
 
     const std::string text = d.serialize();
     In::Bindings parsed;
@@ -198,6 +203,68 @@ void testBindings() {
     check(edited.serialize() == before, "a failed parse changes nothing");
     In::KeyCode code = 0;
     check(In::parseKeyName("Usage100", &code) && code == 100 && In::keyName(100) == "Usage100", "unnamed usages round-trip");
+}
+
+// --- Controls summary (the Home menu's Controls page) ---------------------
+
+std::string summaryOf(const std::vector<In::ControlsLine>& lines, const std::string& action) {
+    for (const In::ControlsLine& line : lines) {
+        if (line.action == action) {
+            return line.inputs;
+        }
+    }
+    return "<missing " + action + ">";
+}
+
+void testControlsSummary() {
+    const std::vector<In::ControlsLine> d = In::controlsSummary(In::Bindings::defaults());
+    const struct {
+        const char* action;
+        const char* inputs;
+    } expected[] = {
+        {"Move", "W A S D"},
+        {"Jump / confirm", "Space / Right mouse"},
+        {"Start (title: A and B)", "Return / Keypad Enter"},
+        {"Spin", "F"},
+        {"Crouch / ground pound", "Shift"},
+        {"Star Pointer", "Mouse"},
+        {"Shoot Star Bits / back", "Left mouse / Backspace"},
+        {"Grab (Pull Stars)", "Hold Space / Right mouse on the target"},
+        {"Rotate camera", "Q / E"},
+        {"Recenter camera", "C"},
+        {"First-person view", "Up arrow"},
+        {"Walk slowly", "Hold Left Alt"},
+        {"Pause", "Escape / -"},
+        {"Star Ball / Ray", "W A S D tilt while riding"},
+        {"Tilt the remote by hand", "Hold Tab + W A S D"},
+        {"This menu", "F1"},
+    };
+    for (const auto& e : expected) {
+        check(summaryOf(d, e.action) == e.inputs,
+              std::string("summary: ") + e.action + " = \"" + summaryOf(d, e.action) + "\"");
+    }
+    check(d.size() == sizeof(expected) / sizeof(expected[0]) && d.size() <= 20, "summary fits the Controls page");
+    for (const In::ControlsLine& line : d) {
+        check(line.action.size() < 40 && line.inputs.size() < 64, "summary line fits the page's text fields: " + line.action);
+    }
+
+    // Remaps from controls.txt show, and unbound actions say so.
+    In::Bindings remapped = In::Bindings::defaults();
+    std::string error;
+    check(remapped.parse("StickUp=Key:I\nStickLeft=Key:J\nStickDown=Key:K\nStickRight=Key:L\n"
+                         "Shake=Mouse:Middle\nNunchukZ=Key:LeftShift\nStart=\nWalk=\nPlus=Key:P\nMinus=\n",
+                         &error),
+          "remap parses: " + error);
+    const std::vector<In::ControlsLine> r = In::controlsSummary(remapped);
+    check(summaryOf(r, "Move") == "I J K L", "remapped movement");
+    check(summaryOf(r, "Spin") == "Middle mouse", "remapped spin to a mouse button");
+    check(summaryOf(r, "Crouch / ground pound") == "Left Shift", "only the left Shift left");
+    check(summaryOf(r, "Start (title: A and B)") == "(not bound)", "unbound Start");
+    check(summaryOf(r, "Walk slowly") == "(not bound)", "unbound hold reads as not bound");
+    check(summaryOf(r, "Pause") == "P", "remapped pause");
+    check(summaryOf(r, "Star Ball / Ray") == "I J K L tilt while riding", "ride line follows movement");
+    check(In::displayName(In::Binding::key(In::Key::Num1)) == "1" && In::displayName(In::Binding::key(In::Key::G)) == "G",
+          "digits and letters display plainly");
 }
 
 // --- Connection -----------------------------------------------------------
@@ -389,6 +456,171 @@ void testButtons() {
     check(button.testTriggerA(), "J bound to A");
     lift(In::Key::J);
     rig.frames_(2);
+}
+
+// --- Start (Return) --------------------------------------------------------
+
+// The title screen (TitleSequenceProduct::exeLogoDisplay), in a native build:
+// each frame it reports the prompt, then feeds TriggerCheckers with
+// testCorePadButtonA/B; it starts when both levels are high on one frame.
+struct TitlePrompt {
+    TriggerChecker a;
+    TriggerChecker b;
+    bool update(WPadButton& button) {
+        In::titlePromptShown();
+        a.update(button.testButtonA());
+        b.update(button.testButtonB());
+        return a.getLevel() && b.getLevel();
+    }
+};
+
+void testStart() {
+    Rig rig;
+    WPadButton& button = *rig.pad->mButton;
+
+    // Outside the title Return is A alone: menus that check B (back) before A
+    // (ScenarioSelectLayout::control, GalaxyMapController) must confirm.
+    press(In::Key::Return);
+    rig.frame();
+    check(button.testTriggerA() && !button.testButtonB(), "Return outside the title: A without B");
+    rig.frames_(30);
+    check(button.testButtonA() && !button.testButtonB(), "held Return outside the title never adds B");
+    lift(In::Key::Return);
+    rig.frames_(2);
+    check(rig.hold() == 0, "released");
+
+    // On the prompt a tap of Return starts the game.
+    TitlePrompt title;
+    rig.frame();
+    check(!title.update(button), "prompt up, nothing pressed");
+    press(In::Key::Return);
+    lift(In::Key::Return);
+    rig.frame();
+    check(title.update(button), "Return tap on the prompt: A and B held on the same frame");
+    check(button.testTriggerA() && button.testTriggerB(), "A and B trigger together");
+    check((rig.trig() & (WPAD_BUTTON_A | WPAD_BUTTON_B)) == (WPAD_BUTTON_A | WPAD_BUTTON_B), "in the same KPAD read");
+    rig.frames_(2);
+    title.update(button);
+    check(!button.testButtonA() && !button.testButtonB(), "and both release");
+    rig.frames_(10);  // the title moves on; the prompt lapses
+
+    // Held keypad Enter, pressed before the prompt appears: A at once, B
+    // joins on the frame after the prompt first shows.
+    TitlePrompt late;
+    press(In::Key::KeypadEnter);
+    rig.frame();
+    check(button.testButtonA() && !button.testButtonB(), "Enter before the prompt: A only");
+    check(!late.update(button), "prompt appears: not yet both");
+    rig.frame();
+    check(late.update(button), "next frame: B joins the held Enter and the title starts");
+
+    // The prompt lapses 100 ms after the title stops reporting it (the title
+    // moved on): B drops from a still-held Enter within 7 frames.
+    int framesToDrop = -1;
+    for (int f = 1; f <= 12 && framesToDrop < 0; ++f) {
+        rig.frame();
+        if (!button.testButtonB()) {
+            framesToDrop = f;
+        }
+    }
+    check(framesToDrop >= 5 && framesToDrop <= 8, "B lapses with the prompt (" + std::to_string(framesToDrop) + " frames)");
+    check(button.testButtonA(), "A stays with the key");
+    lift(In::Key::KeypadEnter);
+    rig.frames_(2);
+    check(rig.hold() == 0, "released");
+
+    // A prompt update every frame keeps B continuous (no flicker): the title's
+    // B checker never sees an off trigger while Return is held.
+    TitlePrompt steady;
+    press(In::Key::Return);
+    int offTriggers = 0;
+    for (int f = 0; f < 40; ++f) {
+        rig.frame();
+        steady.update(button);
+        offTriggers += steady.b.getOffTrigger() ? 1 : 0;
+    }
+    check(offTriggers == 0 && button.testButtonB(), "held Return on the prompt: B steady");
+    lift(In::Key::Return);
+    rig.frames_(10);
+
+    // Neither Space alone nor Backspace alone starts the title.
+    TitlePrompt alone;
+    bool any = false;
+    press(In::Key::Space);
+    for (int f = 0; f < 10; ++f) {
+        rig.frame();
+        any = alone.update(button) || any;
+    }
+    lift(In::Key::Space);
+    rig.frames_(2);
+    press(In::Key::Backspace);
+    for (int f = 0; f < 10; ++f) {
+        rig.frame();
+        any = alone.update(button) || any;
+    }
+    lift(In::Key::Backspace);
+    rig.frames_(2);
+    check(!any, "Space alone or Backspace alone does not start the title");
+
+    // The two-key form still works: hold Space, then Backspace.
+    TitlePrompt twoKeys;
+    press(In::Key::Space);
+    rig.frame();
+    check(!twoKeys.update(button), "Space held: not yet");
+    press(In::Key::Backspace);
+    rig.frame();
+    check(twoKeys.update(button), "Space held plus Backspace: starts");
+    lift(In::Key::Space);
+    lift(In::Key::Backspace);
+    rig.frames_(10);
+
+    // Focus loss releases Return's A and B.
+    TitlePrompt focus;
+    press(In::Key::Return);
+    rig.frame();
+    focus.update(button);
+    rig.frame();
+    focus.update(button);
+    In::focusChanged(false);
+    rig.frames_(2);
+    check(rig.hold() == 0, "focus loss releases Start");
+    In::focusChanged(true);
+    lift(In::Key::Return);
+    rig.frames_(10);
+
+    // Return counts as an A press for the jump-then-spin delay, like Space.
+    press(In::Key::Return);
+    lift(In::Key::Return);
+    rig.frame();
+    press(In::Key::F);
+    lift(In::Key::F);
+    bool swingEarly = false;
+    for (int f = 0; f < 9; ++f) {
+        rig.frame();
+        swingEarly = swingEarly || rig.pad->mCorePadSwing->mIsSwing;
+    }
+    bool swingLater = false;
+    for (int f = 0; f < 20; ++f) {
+        rig.frame();
+        swingLater = swingLater || rig.pad->mCorePadSwing->mIsSwing;
+    }
+    check(!swingEarly && swingLater, "Return then F: the flick waits out Mario's A/B swing lockout");
+    rig.frames_(20);
+
+    // Remappable by name.
+    In::Bindings remapped = In::bindings();
+    std::string error;
+    check(remapped.parse("Start=Key:G\n", &error), "Start remaps: " + error);
+    In::setBindings(remapped);
+    TitlePrompt remap;
+    press(In::Key::G);
+    rig.frame();
+    remap.update(button);
+    rig.frame();
+    check(remap.update(button), "remapped Start key starts the title");
+    lift(In::Key::G);
+    rig.frames_(10);
+    In::setBindings(In::Bindings::defaults());
 }
 
 // --- Stick ----------------------------------------------------------------
@@ -955,6 +1187,152 @@ void testTilt() {
     check(rig.latest().dpd_valid_fg == 2, "back to pointing: pointer returns");
 }
 
+// --- Pause tap ------------------------------------------------------------
+
+// PauseButtonCheckerInGame and GameScenePauseControl::tryStartPauseMenu: the
+// counter runs only while unpaused, and pauses on exactly the 12th held frame
+// with A and B up. PauseMenu closes on a new Plus or Minus press.
+struct PauseScene {
+    int hold = 0;
+    bool paused = false;
+    int opens = 0;
+    int closes = 0;
+    void update(WPadButton& button, bool plus) {
+        const bool held = plus ? button.testButtonPlus() : button.testButtonMinus();
+        if (!paused) {
+            hold = held ? hold + 1 : 0;
+            if (hold == 12 && !button.testButtonA() && !button.testButtonB()) {
+                paused = true;
+                ++opens;
+            }
+        } else if (button.testTriggerPlus() || button.testTriggerMinus()) {
+            paused = false;
+            ++closes;
+        }
+    }
+};
+
+void testPauseTap() {
+    Rig rig;
+    WPadButton& button = *rig.pad->mButton;
+    for (const bool plus : {true, false}) {
+        const In::KeyCode key = plus ? In::Key::Escape : In::Key::Minus;
+        const std::string name = plus ? "Escape" : "Minus";
+        PauseScene scene;
+        press(key);
+        lift(key);
+        for (int f = 0; f < 20; ++f) {
+            rig.frame();
+            scene.update(button, plus);
+        }
+        check(scene.paused && scene.opens == 1, name + " tap pauses");
+        rig.frames_(10);
+        press(key);
+        lift(key);
+        for (int f = 0; f < 60; ++f) {
+            rig.frame();
+            scene.update(button, plus);
+        }
+        check(!scene.paused && scene.closes == 1 && scene.opens == 1, name + " tap again resumes, and does not reopen");
+
+        PauseScene heldScene;
+        press(key);
+        for (int f = 0; f < 60; ++f) {
+            rig.frame();
+            heldScene.update(button, plus);
+        }
+        lift(key);
+        rig.frames_(20);
+        check(heldScene.opens == 1, name + " held: pauses once");
+    }
+    // Other buttons keep their short pulse.
+    press(In::Key::Space);
+    lift(In::Key::Space);
+    rig.frame();
+    rig.frames_(2);
+    check(!button.testButtonA(), "A taps stay short");
+}
+
+// --- Ride steering --------------------------------------------------------
+
+void testSteering() {
+    Rig rig;
+    In::mouseMoved(640.0f, 360.0f);
+    const WPadStick& stick = *rig.pad->mStick;
+    TVec3f acc;
+    float xy;
+    float yz;
+    auto ride = [&rig](In::Steering steering, int frames) {
+        for (int f = 0; f < frames; ++f) {
+            In::motionControlShown(steering);
+            rig.frame();
+        }
+    };
+
+    // Star Ball: raised at once, WASD roll it without Tab or T.
+    ride(In::Steering::Ball, 30);
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    check(nearAngleDegrees(acc, TVec3f(0.0f, -1.0f, 0.0f), 30.0f), "Star Ball: remote raised without T (TamakoroTutorial)");
+    check(In::posture() == In::Posture::Pointing, "the T posture is left alone");
+    press(In::Key::D);
+    ride(In::Steering::Ball, 40);
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    sphereAngles(acc, &xy, &yz);
+    check(xy > 0.7f, "Star Ball, D: rolls right without Tab (" + std::to_string(xy) + ")");
+    check(stick.mStick.x == 0.0f && stick.mStick.y == 0.0f, "Star Ball: the stick stays neutral");
+    lift(In::Key::D);
+    press(In::Key::W);
+    ride(In::Steering::Ball, 40);
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    sphereAngles(acc, &xy, &yz);
+    check(yz > 0.7f, "Star Ball, W: rolls forward");
+    lift(In::Key::W);
+
+    // Off the ball the hint lapses: level again, and WASD move the stick.
+    rig.frames_(40);
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    check(std::fabs(acc.x) < 0.25f && std::fabs(acc.y) < 0.45f, "off the ball: remote level again");
+    check(rig.latest().dpd_valid_fg == 2, "off the ball: pointer back");
+    press(In::Key::W);
+    rig.frames_(3);
+    check(stick.mStick.y > 0.9f, "off the ball: W moves Mario");
+    lift(In::Key::W);
+    rig.frames_(3);
+
+    // Ray: level, A/D twist; W does not pitch it out of "straight".
+    ride(In::Steering::Ray, 30);
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    check(std::fabs(acc.x) < 0.25f && std::fabs(acc.y) < 0.45f, "Ray: level (SurfRayTutorial straight)");
+    press(In::Key::W);
+    ride(In::Steering::Ray, 40);
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    check(std::fabs(acc.x) < 0.25f && std::fabs(acc.y) < 0.45f, "Ray, W held: still straight");
+    check(stick.mStick.y == 0.0f, "Ray: the stick stays neutral");
+    lift(In::Key::W);
+    press(In::Key::A);
+    ride(In::Steering::Ray, 40);
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    check(acc.x <= -0.65f && acc.y >= -0.5f, "Ray, A: turn left without Tab (SurfRayTutorial)");
+    lift(In::Key::D);
+    lift(In::Key::A);
+    press(In::Key::D);
+    ride(In::Steering::Ray, 40);
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    check(acc.x >= 0.65f, "Ray, D: turn right");
+    lift(In::Key::D);
+
+    // A stray T before the Ray does not stand the remote up.
+    press(In::Key::T);
+    rig.frame();
+    lift(In::Key::T);
+    check(In::posture() == In::Posture::Upright, "T toggled");
+    ride(In::Steering::Ray, 40);
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    check(std::fabs(acc.x) < 0.25f && std::fabs(acc.y) < 0.45f, "Ray keeps the remote level after T");
+    In::setPosture(In::Posture::Pointing);
+    rig.frames_(40);
+}
+
 // --- Rumble, speaker, status ----------------------------------------------
 
 std::vector<std::string> gDeviceEvents;
@@ -1090,6 +1468,36 @@ void testAlarmClock() {
     In::resetForTesting();
 }
 
+// The KPAD thread changes the pointer calibration (KPADInit after WPADInit
+// has started the reports; KPADSetSensorHeight) without the interrupt lock,
+// while the alarm's report tick places the IR dots. The tick must use the
+// copy taken in KPADRead's WPADProbe, not read inside_kpads: under TSan this
+// test reported a data race in every run when it did.
+//
+// It runs before the remote connects (200 ms), while no KPAD code runs in the
+// tick. Once connected, KPAD's own sampling callback shares inside_kpads with
+// KPADRead without a lock, as the SDK did with an interrupt; that is not
+// what this checks.
+void testCalibrationThreads() {
+    In::resetForTesting();
+    PSC::reset();
+    KPADInit();
+    In::setViewport(In::Viewport::letterbox(1280.0f, 720.0f, 16.0f / 9.0f));
+    In::mouseMoved(640.0f, 180.0f);
+    KPADStatus statuses[120];
+    int changes = 0;
+    // A host sleep, not OSSleepTicks: that takes the interrupt lock, which
+    // would order the write before the next tick and hide the race.
+    while (changes < 8 && WPADProbe(0, nullptr) == WPAD_ERR_NO_CONTROLLER) {
+        KPADSetSensorHeight(0, (changes % 2) != 0 ? -0.15f : 0.15f);
+        ++changes;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        KPADRead(0, statuses, 120);
+    }
+    check(changes > 0, "sensor height changed while the reports run");
+    In::resetForTesting();
+}
+
 #ifdef PETARI_INPUT_TEST_SDL3
 void testSdl3() {
     Rig rig;
@@ -1140,8 +1548,10 @@ void testSdl3() {
 int main() {
     __OSThreadInit();
     testBindings();
+    testControlsSummary();
     testConnection();
     testButtons();
+    testStart();
     testStick();
     testFocusLoss();
     testPointer();
@@ -1149,11 +1559,14 @@ int main() {
     testJumpThenSpin();
     testRapidShake();
     testTilt();
+    testPauseTap();
+    testSteering();
     testDevice();
 #ifdef PETARI_INPUT_TEST_SDL3
     testSdl3();
 #endif
     testAlarmClock();
+    testCalibrationThreads();
     std::printf("native input tests passed (%d checks)\n", checks);
     return 0;
 }

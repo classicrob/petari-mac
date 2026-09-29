@@ -24,6 +24,7 @@
 #include "Game/Util/PlayerUtil.hpp"
 #include "Game/Util/RailUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include <JSystem/J3DGraphBase/J3DShapeDraw.hpp>
 #include <revolution/gx/GXTransform.h>
 #include <revolution/mtx.h>
@@ -411,6 +412,21 @@ void Plant::initLeaf() {
 }
 
 void Plant::calcAnim() {
+#ifdef PETARI_NATIVE
+    {
+        s32 state = 0;
+        if (mRider != nullptr) {
+            state = 2;
+        } else if (isNerve(GET_NERVE(Plant, PlantNrvGrowUp)) || isNerve(GET_NERVE(Plant, PlantNrvWaitDemoWaitGrowUp)) ||
+                   isNerve(GET_NERVE(Plant, PlantNrvDemoWaitGrowUp))) {
+            state = 1;
+        } else if (isNerve(GET_NERVE(Plant, PlantNrvGrowthStop)) || isNerve(GET_NERVE(Plant, PlantNrvGrowthWait)) ||
+                   isNerve(GET_NERVE(Plant, PlantNrvGrowthWaitInvalid))) {
+            state = 3;
+        }
+        MR::Native::publishActor("Vine", mPosition, mUp, state, mRider != nullptr ? PETARI_ACTOR_BOUND : 0u);
+    }
+#endif
     if (!MR::isValidCalcViewAndEntry(this) || isNerve(GET_NERVE(Plant, PlantNrvWaitFar)) || isNerve(GET_NERVE(Plant, PlantNrvSeedWait))) {
         return;
     }

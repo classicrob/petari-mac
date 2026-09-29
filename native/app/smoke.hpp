@@ -144,6 +144,7 @@ struct Observation {
     std::string scene;          // current SceneControlInfo scene ("" before the first)
     std::string stage;
     int scenario = 0;
+    int selectedScenario = 0;   // the scenario chosen (SceneControlInfo::mSelectedScenarioNo; differs for hidden stars)
     bool sceneReady = false;    // scene initialisation finished
     bool strap = false;         // strap reminder (Logo scene) on screen
     bool saveSequence = false;  // save-data handling sequence active
@@ -180,7 +181,30 @@ struct Observation {
     bool talkActive = false;  // MR::isSystemTalking: a talk window is open (story route FAILs)
     bool playerDead = false;  // MR::isPlayerDead
     PhysicalInputs physical;  // filled by the seam (Events::physicalInputs)
+
+    // For mission scripts (smoke_goodegg.hpp). Actors published this frame
+    // (petari/actor_observe.hpp; kinds in Game/Util/NativeActorObserve.hpp),
+    // always taken. The rest only with playerValid.
+    struct Actor {
+        std::string kind;
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        float dx = 0.0f, dy = 0.0f, dz = 0.0f;
+        int state = 0;
+        unsigned flags = 0;  // kActorReady, kActorBound, kActorHostile
+    };
+    std::vector<Actor> actors;
+    bool starEggStar1 = false;   // GameDataFunction::hasPowerStar("EggStarGalaxy", 1): the loaded file's record
+    int powerStars = -1;         // GameDataFunction::calcCurrentPowerStarNum
+    bool stageResult = false;    // GameSequenceFunction::hasStageResultSequence: a star was touched this stage
+    int playerLife = -1;         // MarioActor health
+    bool playerInBind = false;   // MR::isPlayerInBind: held by a launch star, vine, pipe, ...
+    bool playerSwinging = false; // MR::isPlayerSwingAction: spinning
 };
+
+// Actor flags (petari/actor_observe.hpp).
+constexpr unsigned kActorReady = 1u;
+constexpr unsigned kActorBound = 2u;
+constexpr unsigned kActorHostile = 4u;
 
 // A point on the story route, on the ground plane (gravity is -y there).
 struct Waypoint {
@@ -203,7 +227,9 @@ constexpr unsigned kTargetSelectable = 4u;
 
 enum class Script { Title, Playable, Gameplay, Reload, Story, Galaxy };
 
-enum class Button { A, B, StickUp, StickDown, Plus, Minus, StickLeft, StickRight };
+// Spin (the Shake binding) and CameraLeft/CameraRight (D-pad left/right, the
+// camera rotation bindings) are used by the stage script (smoke_stage.hpp).
+enum class Button { A, B, StickUp, StickDown, Plus, Minus, StickLeft, StickRight, Spin, CameraLeft, CameraRight };
 
 struct Press {
     Button button;
@@ -247,6 +273,10 @@ public:
         return mPhase == Phase::Move || mPhase >= Phase::Ready ||
                (mPhase == Phase::Prologue && mScript != Script::Playable);
     }
+    // Script::Galaxy: Good Egg mission 1 is loaded and ready (the route's
+    // last step, before its gameplay checks). Mission scripts
+    // (smoke_goodegg.hpp) take over from here.
+    bool galaxyMissionReady() const { return mScript == Script::Galaxy && mGalaxyPhase == GalaxyPhase::Complete; }
 
 private:
     enum class Phase {

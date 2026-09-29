@@ -12,6 +12,12 @@
 #include <vector>
 #include <sqlite3.h>
 #include <stdexcept>
+#include <petari/host_allocation.hpp>
+// Scheduling-only harness; allocator routing is tested by platform allocation tests.
+namespace PetariNative {
+HostAllocationScope::HostAllocationScope() = default;
+HostAllocationScope::~HostAllocationScope() = default;
+}
 namespace absl {
 template<class K, class V> using flat_hash_map = std::unordered_map<K, V>;
 template<class K> using flat_hash_set = std::unordered_set<K>;
@@ -65,11 +71,68 @@ static PipelineRef resolve_pipeline(ShaderType type, const Config& config, Layou
         g_pipelineQueue.push_back({key});
     return key;
 }
-static sqlite3* open_pipeline_cache_seed_db(const std::string&) { return nullptr; }
+enum class ManifestFixture { OpenFailure, QueryFailure, StepFailure, Empty, InvalidRow, Valid };
+static ManifestFixture manifestFixture = ManifestFixture::OpenFailure;
+static sqlite3* open_pipeline_cache_seed_db(const std::string&) {
+    if (manifestFixture == ManifestFixture::OpenFailure) return nullptr;
+    sqlite3* db = nullptr;
+    if (sqlite3_open(":memory:", &db) != SQLITE_OK) throw std::runtime_error("fixture database open failed");
+    const auto sql = [&](const char* statement) {
+        if (sqlite3_exec(db, statement, nullptr, nullptr, nullptr) != SQLITE_OK)
+            throw std::runtime_error("fixture SQL failed");
+    };
+    if (manifestFixture == ManifestFixture::QueryFailure) return db;
+    if (manifestFixture == ManifestFixture::StepFailure) {
+        sqlite3_create_function(db, "fail_manifest", 0, SQLITE_UTF8, nullptr,
+            [](sqlite3_context* context, int, sqlite3_value**) { sqlite3_result_error(context, "injected read failure", -1); },
+            nullptr, nullptr);
+        sql("CREATE VIEW pipeline_cache AS SELECT 1 AS type,13 AS config_version,fail_manifest() AS config,0 AS first_frame_used");
+        return db;
+    }
+    sql("CREATE TABLE pipeline_cache(type INTEGER,config_version INTEGER,config BLOB,first_frame_used INTEGER)");
+    if (manifestFixture == ManifestFixture::InvalidRow)
+        sql("INSERT INTO pipeline_cache VALUES(1,13,x'00',0)");
+    if (manifestFixture == ManifestFixture::Valid) {
+        sqlite3_stmt* insert = nullptr;
+        if (sqlite3_prepare_v2(db, "INSERT INTO pipeline_cache VALUES(1,13,?,0)", -1, &insert, nullptr) != SQLITE_OK)
+            throw std::runtime_error("fixture insert prepare failed");
+        const gx::PipelineConfig config{13, 42};
+        sqlite3_bind_blob(insert, 1, &config, sizeof(config), SQLITE_TRANSIENT);
+        const auto result = sqlite3_step(insert);
+        sqlite3_finalize(insert);
+        if (result != SQLITE_DONE) throw std::runtime_error("fixture insert failed");
+    }
+    return db;
+}
 }
 #include "../gx/pipeline_stage.inc"
 using namespace aurora::gfx;
 static void require(bool value, const char* reason) { if (!value) throw std::runtime_error(reason); }
+static void manifestFailureTest() {
+    const auto initial = petari_gx_pipeline_manifest_failure_count();
+    petari_gx_pipeline_stage_begin("MissingOptionalSeed", nullptr);
+    require(petari_gx_pipeline_manifest_failure_count() == initial, "absent optional seed counted as read failure");
+    char directory[] = "/tmp/petari-stage-manifest-XXXXXX";
+    require(mkdtemp(directory) != nullptr, "fixture directory failed");
+    const auto root = std::filesystem::path(directory);
+    setenv("PETARI_PIPELINE_SEED_DIR", directory, 1);
+    unsigned failures = 0;
+    for (const auto mode : {ManifestFixture::OpenFailure, ManifestFixture::QueryFailure, ManifestFixture::StepFailure,
+                           ManifestFixture::Empty, ManifestFixture::InvalidRow, ManifestFixture::Valid}) {
+        manifestFixture = mode;
+        const auto stage = "ManifestCase" + std::to_string(static_cast<unsigned>(mode));
+        { std::ofstream marker(root / (stage + ".db")); marker << "fixture"; }
+        petari_gx_pipeline_stage_begin(stage.c_str(), nullptr);
+        if (mode != ManifestFixture::Valid) ++failures;
+        require(petari_gx_pipeline_manifest_failure_count() == initial + failures, "manifest failure count mismatch");
+        petari_gx_pipeline_stage_begin(stage.c_str(), nullptr);
+        require(petari_gx_pipeline_manifest_failure_count() == initial + failures, "idempotent begin counted failure twice");
+    }
+    unsetenv("PETARI_PIPELINE_SEED_DIR");
+    std::filesystem::remove_all(root);
+    petari_stage_reset();
+    require(petari_gx_pipeline_manifest_failure_count() == initial + failures, "reset hid manifest failures");
+}
 int main() {
     unsetenv("PETARI_PIPELINE_SEED_DIR");
     g_knownPipelines.emplace(1, KnownPipeline{ShaderType::GX, gx::PipelineConfig{13, 1}, 0});
@@ -105,5 +168,6 @@ int main() {
     require(find_pending_pipeline(g_pipelineQueue, 101) != g_pipelineQueue.end(), "real draw request demoted");
     petari_stage_reset();
     require(petariActiveStage.empty() && petariStages.empty(), "shutdown retained stage state");
-    std::puts("Stage preparation: idempotence, additive overlays, first-use tags, ready gate and priority demotion pass");
+    manifestFailureTest();
+    std::puts("Stage preparation: manifest failure counter, idempotence, additive overlays, first-use tags, ready gate and priority demotion pass");
 }

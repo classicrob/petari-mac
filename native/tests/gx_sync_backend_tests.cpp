@@ -484,17 +484,25 @@ void testSnapshotTickets() {
           "the hook runs on the processor thread at the token's command boundary");
     check(gFlushCalls.load() == 1 && gFlushTicket.load() == caps[1].ticket,
           "a draw done queued behind incomplete tickets asks for a flush covering them");
-    check(takeTrace().size() == 8 && takeCallbacks().empty() && gDeliveringTickets.empty(), "no token delivered before its snapshot");
+    check(eventually([] {
+              std::lock_guard<std::mutex> g(gTraceLock);
+              return gCallbacks.size() == 1;
+          }),
+          "the draw done is delivered while the token captures are still in flight");
+    check(takeTrace().size() == 8 && (takeCallbacks() == std::vector<std::string>{"done"}) && gDeliveringTickets.empty(),
+          "no token delivered before its snapshot; the draw done does not wait for it");
+    GXWaitDrawDone();  // returns without the captures
 
     check(petari_gx_sync_held_ticket() == caps[0].ticket, "the oldest incomplete ticket is reported as held");
     petari_gx_sync_snapshot_ready(caps[1].ticket);  // out of order
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     check(gDeliveringTickets.empty(), "a later ticket cannot overtake an earlier one");
     petari_gx_sync_snapshot_ready(caps[0].ticket);
-    GXWaitDrawDone();
+    PetariNative::Platform::GXSync::waitTokensDelivered();  // the frame boundary
     check((gDeliveringTickets == std::vector<std::uint64_t>{caps[0].ticket, caps[1].ticket}),
           "callbacks see their own ticket (GXPeekZ reads that capture)");
-    check((takeCallbacks() == std::vector<std::string>{"token21", "token22", "done"}), "tokens then draw done, in stream order");
+    check((takeCallbacks() == std::vector<std::string>{"token21", "token22"}),
+          "tokens in stream order once their captures complete, before the frame boundary returns");
     check(petari_gx_sync_delivered_ticket() == caps[1].ticket && deliveredBefore < caps[0].ticket,
           "delivered ticket advances after the callbacks return");
     check(petari_gx_sync_delivering_ticket() == 0, "no delivering ticket outside callbacks");

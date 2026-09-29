@@ -1,4 +1,9 @@
 #include "Game/Ride/SurfRay.hpp"
+
+#ifdef PETARI_NATIVE
+// Tells the keyboard layer the Ray steers by tilt, so WASD tilt the remote.
+#include <petari/input.hpp>
+#endif
 #include "Game/LiveActor/ActorJointCtrl.hpp"
 #include "Game/LiveActor/MaterialCtrl.hpp"
 #include "Game/LiveActor/Nerve.hpp"
@@ -648,6 +653,9 @@ bool SurfRay::updateRideFree() {
 }
 
 bool SurfRay::updateRide() {
+#ifdef PETARI_NATIVE
+    PetariNative::Input::motionControlShown(PetariNative::Input::Steering::Ray);
+#endif
     if (mInTutorialArea && mPosition.z > mWarpPos.z) {
         mInTutorialArea = false;
         setNerve(GET_NERVE(SurfRay, SurfRayNrvWipeOut));

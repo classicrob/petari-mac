@@ -217,6 +217,12 @@ bool TalkStateNormal::prep(const TalkMessageCtrl* pArg1) {
 
             MR::startSystemSE("SE_SM_TALK_BUTTON_APPEAR");
         }
+#ifdef PETARI_NATIVE
+        // The A-button balloon is up: A now starts the talk (not a jump).
+        if (petari_ui_observing()) {
+            petari_ui_target("Talk.Start", 0, 0.5f, 0.5f, PETARI_UI_SELECTABLE);
+        }
+#endif
     } else {
         mAButton->term();
         MR::startSystemSE("SE_SY_TALK_START");

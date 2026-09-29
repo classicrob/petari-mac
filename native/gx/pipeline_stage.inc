@@ -1,4 +1,13 @@
+#include "pipeline_owner.hpp"
+#include <petari/host_allocation.hpp>
+#include <atomic>
 namespace aurora::gfx {
+static std::atomic<uint64_t> petariManifestReadFailures{0};
+
+extern "C" uint64_t petari_gx_pipeline_manifest_failure_count() {
+  return petariManifestReadFailures.load(std::memory_order_relaxed);
+}
+
 struct PetariStageRecord {
   bool initialized = false;
   bool prepared = false;
@@ -37,10 +46,10 @@ static void petari_note_stage_config(HashType hash, PipelineRef runtimeKey) {
     bool overlayCovered = false;
     for (const auto& tag : petariOverlayStages) overlayCovered |= petariStages[tag].configs.contains(hash);
     petariStageLogs.push_back(fmt::format(
-        "[gx stage config] stage={} config={:016x} phase={} covered={} stage_covered={} overlay_tag={} overlay_covered={}",
+        "[gx stage config] stage={} config={:016x} phase={} covered={} stage_covered={} overlay_tag={} overlay_covered={} owner={}",
         name, hash, stage.prepared ? "after_prep" : "loading",
         stage.configs.contains(hash) || overlayCovered ? 1 : 0, stage.configs.contains(hash) ? 1 : 0,
-        overlay ? 1 : 0, overlayCovered ? 1 : 0));
+        overlay ? 1 : 0, overlayCovered ? 1 : 0, PetariPipelineOwner::current));
   };
   if (!petariActiveStage.empty()) record(petariActiveStage, false);
   for (const auto& name : petariOverlayStages) record(name, true);
@@ -58,6 +67,8 @@ static std::string petari_stage_name(const char* value) {
 }
 
 extern "C" void petari_gx_pipeline_stage_begin(const char* name, const char* seedPath) {
+  // Called from game threads; keep renderer allocations off the current JKR heap.
+  PetariNative::HostAllocationScope petariHostAllocations;
   const auto started = PetariPipeline::Clock::now();
   const std::string stageName = petari_stage_name(name);
   const bool overlay = stageName == "ScenarioSelect" || stageName == "GalaxyMap";
@@ -115,9 +126,10 @@ extern "C" void petari_gx_pipeline_stage_begin(const char* name, const char* see
         std::filesystem::path(g_config.resourcesPath ? g_config.resourcesPath : "") / "pipeline-seeds";
     auto candidate = root / (stageName + ".db");
     std::error_code error;
-    if (std::filesystem::is_regular_file(candidate, error)) path = candidate.string();
+    if (std::filesystem::exists(candidate, error)) path = candidate.string();
   }
   if (!path.empty()) {
+    std::string failure;
     if (sqlite3* db = open_pipeline_cache_seed_db(path)) {
       sqlite3_stmt* query = nullptr;
       if (sqlite3_prepare_v2(db, "SELECT type,config_version,config FROM pipeline_cache ORDER BY first_frame_used", -1,
@@ -146,14 +158,27 @@ extern "C" void petari_gx_pipeline_stage_begin(const char* name, const char* see
           } else ++rejected;
         }
         if (status != SQLITE_DONE) {
-          std::fprintf(stderr, "[gx stage prep] stage=%s manifest read failed: %s\n", stageName.c_str(), sqlite3_errmsg(db));
+          failure = sqlite3_errmsg(db);
           manifest.clear();
         }
-        if (rejected) std::fprintf(stderr, "[gx stage prep] stage=%s rejected_rows=%u\n", stageName.c_str(), rejected);
+        if (rejected) {
+          std::fprintf(stderr, "[gx stage prep] stage=%s rejected_rows=%u\n", stageName.c_str(), rejected);
+          if (failure.empty()) failure = "unsupported or malformed configuration rows";
+        }
         sqlite3_finalize(query);
+      } else {
+        failure = sqlite3_errmsg(db);
       }
       sqlite3_close(db);
       provenance = path;
+      if (failure.empty() && manifest.empty()) failure = "no valid configurations";
+    } else {
+      failure = "open or schema validation failed";
+    }
+    if (!failure.empty()) {
+      const auto count = petariManifestReadFailures.fetch_add(1, std::memory_order_relaxed) + 1;
+      std::fprintf(stderr, "[gx stage prep] stage=%s manifest read failed: %s source=%s failures=%llu\n",
+                   stageName.c_str(), failure.c_str(), path.c_str(), static_cast<unsigned long long>(count));
     }
   }
   if (manifest.empty()) {
@@ -194,6 +219,7 @@ extern "C" void petari_gx_pipeline_stage_begin(const char* name, const char* see
 }
 
 extern "C" void petari_gx_pipeline_stage_wait() {
+  PetariNative::HostAllocationScope petariHostAllocations;
   const auto start = PetariPipeline::Clock::now();
   size_t pending = 0, failed = 0;
   bool complete = false;

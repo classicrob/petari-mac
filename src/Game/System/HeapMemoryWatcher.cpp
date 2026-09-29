@@ -109,6 +109,8 @@ JKRHeap* HeapMemoryWatcher::getHeapGDDR3(const JKRHeap* pHeap) {
 void HeapMemoryWatcher::createFileCacheHeapOnGameHeap(u32 size) {
     mFileCacheHeap = ::createSolidHeap(size, mGameHeapGDDR);
 #ifdef PETARI_NATIVE
+    mFileCacheArchiveBytes = 0;
+    mFileCacheArchiveCount = 0;
     // Natively each J3D model or animation file in a cached archive also gets a same-size
     // host-layout copy (J3DModelLoader/J3DAnmLoader). Archive placement (the 3% rule of
     // getAproposHeapForSceneArchive) only sees archive bytes, so the copies get their own
@@ -264,7 +266,7 @@ HeapMemoryWatcher::HeapMemoryWatcher()
       mSceneHeapNapa(nullptr), mSceneHeapGDDR(nullptr), mWPadHeap(nullptr), mHomeButtonLayoutHeap(nullptr), mAudSystemHeap(nullptr)
 #ifdef PETARI_NATIVE
       ,
-      mFileCacheHostImageHeap(nullptr)
+      mFileCacheHostImageHeap(nullptr), mFileCacheArchiveBytes(0), mFileCacheArchiveCount(0)
 #endif
 {
     JKRHeap::setErrorHandler(HeapMemoryWatcher::memoryErrorCallback);
@@ -275,6 +277,29 @@ HeapMemoryWatcher::HeapMemoryWatcher()
 }
 
 #ifdef PETARI_NATIVE
+void HeapMemoryWatcher::noteArchiveMounted(JKRHeap* pHeap, const char* pName, const void* pData) {
+    // A mounted archive's resident size: the RARC header's file size (big-endian word 1), the
+    // bytes FileRipper allocated for it (before 0x40 alignment).
+    const u8* pBytes = static_cast< const u8* >(pData);
+    const u32 bytes = pBytes == nullptr ? 0 : (u32(pBytes[4]) << 24) | (u32(pBytes[5]) << 16) | (u32(pBytes[6]) << 8) | pBytes[7];
+    const char* pHeapName = "other";
+    if (pHeap == mFileCacheHeap) {
+        pHeapName = "file cache";
+        mFileCacheArchiveBytes += bytes;
+        mFileCacheArchiveCount++;
+    } else if (pHeap == mSceneHeapGDDR) {
+        pHeapName = "scene GDDR";
+    } else if (pHeap == mSceneHeapNapa) {
+        pHeapName = "scene NAPA";
+    } else if (pHeap == mStationedHeapNapa || pHeap == mStationedHeapGDDR) {
+        pHeapName = "stationed";
+    }
+    if (MR::Native::isTraceBoot()) {
+        OSReport("[heap-arc] %s -> %s, %u bytes; file cache free %d\n", pName, pHeapName, bytes,
+                 mFileCacheHeap != nullptr ? mFileCacheHeap->getTotalFreeSize() : -1);
+    }
+}
+
 void HeapMemoryWatcher::memoryErrorCallback(void* heap, u32 bytes, int alignment) {
     JKRHeap* allocator = static_cast<JKRHeap*>(heap);
     OSPanic(__FILE__, __LINE__, "Native heap allocation failed: heap=%p, requested=%u, alignment=%d, size=%u, free=%d, max=%d",
@@ -294,6 +319,12 @@ void HeapMemoryWatcher::checkRestMemory() {
     // host-image companion, so a ready stage shows its margin rather than only the absence
     // of an allocation failure.
     if (MR::Native::isTraceBoot()) {
+        if (mFileCacheHeap != nullptr) {
+            const s32 size = static_cast< s32 >(static_cast< u8* >(mFileCacheHeap->getEndAddr()) - static_cast< u8* >(mFileCacheHeap->getStartAddr()));
+            const s32 used = size - mFileCacheHeap->getTotalFreeSize();
+            OSReport("[heap] file cache archives: %u resident, %u bytes; other use (bookkeeping, resource objects) %d bytes\n",
+                     mFileCacheArchiveCount, mFileCacheArchiveBytes, used - static_cast< s32 >(mFileCacheArchiveBytes));
+        }
         ::traceSceneHeap("file cache", mFileCacheHeap);
         ::traceSceneHeap("file cache host images", mFileCacheHostImageHeap);
         ::traceSceneHeap("scene NAPA", mSceneHeapNapa);

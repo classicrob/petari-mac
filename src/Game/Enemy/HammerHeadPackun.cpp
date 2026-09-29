@@ -17,6 +17,7 @@
 #include "Game/Util/ObjUtil.hpp"
 #include "Game/Util/PlayerUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
 #include <JSystem/JGeometry/TMatrix.hpp>
 #include <JSystem/JGeometry/TVec.hpp>
@@ -111,6 +112,16 @@ void HammerHeadPackun::kill() {
 }
 
 void HammerHeadPackun::control() {
+#ifdef PETARI_NATIVE
+    {
+        // The head (where it slams, and what a jump lands on), not the stem's base.
+        TVec3f head;
+        MR::copyJointPos(this, "Head", &head);
+        TVec3f front;
+        MR::calcFrontVec(&front, this);
+        MR::Native::publishActor("HammerHead", head, front, 0, (isChance() ? PETARI_ACTOR_READY : 0u) | PETARI_ACTOR_HOSTILE);
+    }
+#endif
     mJointRumbler->update();
 }
 

@@ -26,6 +26,7 @@
 
 #include <cxxabi.h>
 #include <dlfcn.h>
+#include <mach-o/getsect.h>
 #include <mach/mach.h>
 #include <mach/thread_act.h>
 #include <pthread.h>
@@ -72,6 +73,10 @@ struct HostThread {
     std::condition_variable cv;
     bool terminated = false;
     bool hostBlocking = false;  // interrupt lock; for hang reports
+    // Preempted by the baton monitor at a safe point: its host thread is
+    // thread_suspend-ed in game code, not parked in waitForCpu. giveCpu
+    // resumes it (interrupt lock).
+    bool forceParked = false;
     void* (*func)(void*) = nullptr;
     void* param = nullptr;
 };
@@ -85,6 +90,18 @@ OSThread DefaultThread;
 bool gInitialized;
 std::atomic<OSThread*> gCurrent{nullptr};
 bool gPreemptPending;
+// When gPreemptPending last became true (steady-clock ticks), 0 while clear.
+// For the baton monitor's forced preemption (lock-free read).
+std::atomic<std::int64_t> gPreemptSince{0};
+std::int64_t nowTicks();
+void setPreemptPending(bool pending) {
+    if (pending && !gPreemptPending) {
+        gPreemptSince.store(nowTicks(), std::memory_order_relaxed);
+    } else if (!pending) {
+        gPreemptSince.store(0, std::memory_order_relaxed);
+    }
+    gPreemptPending = pending;
+}
 // True once the baton holder's host thread is actually executing (it returned
 // from waitForCpu, or gave the baton to itself). A holder that was assigned
 // the baton but whose host thread has not woken yet has run nothing since its
@@ -93,6 +110,17 @@ bool gPreemptPending;
 bool gCurrentRunning;
 // OS threads between petari_os_begin_host_blocking and _end (interrupt lock).
 int gHostBlockingThreads;
+
+// The baton holder as the lock-free host-wait monitor sees it (batonMonitor).
+// Written under the interrupt lock by publishHolder; gHolderHand changes with
+// every change of hands, so a reader can tell whether its reads belong together.
+std::atomic<std::uint64_t> gHolderHand{0};
+std::atomic<OSThread*> gHolderThread{nullptr};
+std::atomic<bool> gHolderRunning{false};
+std::atomic<mach_port_t> gHolderPort{MACH_PORT_NULL};
+std::atomic<std::uintptr_t> gHolderStackLow{0}, gHolderStackHigh{0};
+std::atomic<std::uint64_t> gHolderEntry{0};
+void publishHolder();
 
 // Host QoS inheritance for the baton holder. While a strictly higher-priority
 // OS thread is ready and waits for the running holder to reach its next
@@ -433,10 +461,17 @@ void giveCpu(OSThread* next) {
     }
     next->queue = nullptr;
     next->state = kStateRunning;
-    gCurrentRunning = next == tBound;  // giving the baton to itself: already executing
-    gCurrent.store(next, std::memory_order_release);
     auto found = hosts().find(next);
-    if (found != hosts().end()) {
+    const bool forceParked = found != hosts().end() && found->second->forceParked;
+    // Giving the baton to itself, or to a thread stopped mid-game-code: it is
+    // already executing.
+    gCurrentRunning = next == tBound || forceParked;
+    gCurrent.store(next, std::memory_order_release);
+    publishHolder();
+    if (forceParked) {
+        found->second->forceParked = false;
+        thread_resume(found->second->machThread);
+    } else if (found != hosts().end()) {
         found->second->cv.notify_all();
     }
 }
@@ -476,6 +511,7 @@ void waitForCpu(OSThread* self) {
         terminateHostThread();
     }
     gCurrentRunning = true;  // interrupt lock held (hostWait returns with it)
+    publishHolder();
 }
 
 // Scheduling request from interrupt context, or from an OS thread that does
@@ -508,7 +544,7 @@ void interruptReschedule() {
         detachHolderOverride();
     }
     if (current->state != kStateRunning || highestReadyPriority() < current->priority) {
-        gPreemptPending = true;
+        setPreemptPending(true);
         if (current->state == kStateRunning && RunQueueBits != 0 && highestReadyPriority() < current->priority) {
             startHolderOverride(current);  // it must run to its next preemption point
         }
@@ -530,7 +566,7 @@ void selectThread(BOOL yield) {
 
     if (self->state == kStateRunning) {
         if (!yield && self->priority <= highestReadyPriority()) {
-            gPreemptPending = false;
+            setPreemptPending(false);
             detachHolderOverride();  // nothing strictly higher waits any more
             return;
         }
@@ -539,13 +575,14 @@ void selectThread(BOOL yield) {
     }
 
     RunQueueHint = FALSE;
-    gPreemptPending = false;
+    setPreemptPending(false);
     if (RunQueueBits == 0) {
         detachHolderOverride();
         if (gBatonDiag) {
             closeEpisode();
         }
         gCurrent.store(nullptr, std::memory_order_release);
+        publishHolder();
     } else {
         OSThread* next = popHighestReady();
         giveCpu(next);
@@ -709,6 +746,464 @@ __attribute__((no_sanitize("thread"))) void walkSuspendedStack(std::uintptr_t fp
             break;
         }
         fp = next;
+    }
+}
+
+// ---- Host waits while holding the CPU (always on; PETARI_BATON_MONITOR=0 disables) ----
+// An OS thread that holds the baton and blocks in a host primitive (mutex,
+// condition variable, future, file I/O, sleep) stops every other game thread
+// for as long as it waits: no interrupt-state change comes to preempt it.
+// batonMonitor polls the holder's Mach run state every 2 ms; a holder
+// continuously blocked for the threshold (PETARI_BATON_BLOCK_MS, 20 ms) has
+// its stack sampled once, and the stretch is attributed to the first frame in
+// the main executable (skipping libSystem and libc++). Sites are logged (the
+// first three stretches of each) and summarised at exit and in hang reports.
+
+void publishHolder() {
+    OSThread* holder = gCurrent.load(std::memory_order_relaxed);
+    if (holder != gHolderThread.load(std::memory_order_relaxed)) {
+        gHolderRunning.store(false, std::memory_order_relaxed);
+        gHolderHand.fetch_add(1, std::memory_order_acq_rel);
+        gHolderThread.store(holder, std::memory_order_relaxed);
+    }
+    // Refreshed on every publication: a new thread can be dispatched before
+    // its host thread has recorded its Mach port (hostEntry).
+    mach_port_t port = MACH_PORT_NULL;
+    std::uintptr_t low = 0, high = 0;
+    std::uint64_t entry = 0;
+    if (holder != nullptr) {
+        auto found = hosts().find(holder);
+        if (found != hosts().end()) {
+            port = found->second->machThread;
+            low = found->second->stackLow;
+            high = found->second->stackHigh;
+            entry = reinterpret_cast<std::uint64_t>(found->second->func);
+        }
+    }
+    gHolderPort.store(port, std::memory_order_relaxed);
+    gHolderStackLow.store(low, std::memory_order_relaxed);
+    gHolderStackHigh.store(high, std::memory_order_relaxed);
+    gHolderEntry.store(entry, std::memory_order_relaxed);
+    gHolderRunning.store(holder != nullptr && gCurrentRunning, std::memory_order_release);
+}
+
+struct BlockSite {
+    std::uint64_t key = 0;
+    std::string description;
+    std::uint64_t stretches = 0;
+    double totalMs = 0, maxMs = 0;
+};
+struct BlockStats {
+    std::mutex lock;
+    std::vector<BlockSite> sites;  // at most kMaxBlockSites
+    std::uint64_t stretches = 0, unattributed = 0;
+    double totalMs = 0, maxMs = 0;
+    int logged = 0;
+    // Forced preemptions (busy-waits without OS calls) and refusals.
+    std::uint64_t forced = 0, unsafe = 0;
+    std::vector<std::pair<std::string, std::uint64_t>> forcedSites;  // at most kMaxBlockSites
+    std::string lastUnsafe;
+    // A stretch in progress past the threshold (a hang is one that never ends).
+    bool ongoing = false;
+    std::string ongoingSite;
+    std::int64_t ongoingStart = 0;
+};
+constexpr std::size_t kMaxBlockSites = 32;
+std::atomic<double> gBlockThresholdMs{20.0};
+std::atomic<bool> gBlockLogAll{false};  // tests: log every stretch
+// Held by the monitor for everything it does between sleeps (stdio, dladdr,
+// suspending a thread, its statistics). pthread_atfork's prepare handler takes
+// it, so fork never snapshots the process while the monitor holds the stdio
+// lock or any other lock, or has a thread suspended: a forked child that then
+// used stderr would wait forever for a lock no thread of its own holds.
+std::mutex& monitorQuiesce() {
+    static std::mutex* lock = [] {
+        PetariNative::HostAllocationScope hostAllocations;
+        return new std::mutex;
+    }();
+    return *lock;
+}
+BlockStats& blockStats() {
+    static BlockStats* stats = [] {
+        PetariNative::HostAllocationScope hostAllocations;
+        return new BlockStats;
+    }();
+    return *stats;
+}
+
+double ticksToMs(std::int64_t ticks) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::duration(ticks)).count();
+}
+
+struct Stretch {
+    bool active = false, sampled = false;
+    std::uint64_t hand = 0;
+    std::int64_t start = 0;
+    OSThread* holder = nullptr;
+    std::uint64_t key = 0;
+    std::string site;
+};
+
+void finishStretch(Stretch& stretch, std::int64_t now) {
+    if (stretch.active && stretch.sampled) {
+        const double ms = ticksToMs(now - stretch.start);
+        BlockStats& st = blockStats();
+        std::lock_guard<std::mutex> guard(st.lock);
+        st.ongoing = false;
+        ++st.stretches;
+        st.totalMs += ms;
+        st.maxMs = std::max(st.maxMs, ms);
+        BlockSite* site = nullptr;
+        for (BlockSite& s : st.sites) {
+            if (s.key == stretch.key) {
+                site = &s;
+            }
+        }
+        if (site == nullptr && st.sites.size() < kMaxBlockSites) {
+            st.sites.push_back({stretch.key, stretch.site});
+            site = &st.sites.back();
+        }
+        if (site == nullptr) {
+            ++st.unattributed;
+        } else {
+            ++site->stretches;
+            site->totalMs += ms;
+            site->maxMs = std::max(site->maxMs, ms);
+            if ((site->stretches <= 3 && st.logged < 200) || gBlockLogAll.load(std::memory_order_relaxed)) {
+                ++st.logged;
+                std::fprintf(stderr, "[baton] OS thread %p held the CPU blocked in host code for %.1f ms: %s\n",
+                             static_cast<void*>(stretch.holder), ms, stretch.site.c_str());
+            }
+        }
+    }
+    stretch = Stretch{};
+}
+
+// Samples the (blocked) holder's stack; false if it changed hands meanwhile.
+bool sampleHolder(Stretch& stretch, mach_port_t port, const void* mainImage) {
+    const std::uintptr_t low = gHolderStackLow.load(std::memory_order_relaxed);
+    const std::uintptr_t high = gHolderStackHigh.load(std::memory_order_relaxed);
+    std::uint64_t frames[24] = {};
+    if (thread_suspend(port) != KERN_SUCCESS) {
+        return false;
+    }
+    arm_thread_state64_t state;
+    mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+    const bool valid = gHolderHand.load(std::memory_order_acquire) == stretch.hand &&
+                       thread_get_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &count) == KERN_SUCCESS;
+    if (valid) {
+        frames[0] = arm_thread_state64_get_pc(state);
+        frames[1] = arm_thread_state64_get_lr(state);
+        walkSuspendedStack(arm_thread_state64_get_fp(state), low, high, frames, 24);
+    }
+    thread_resume(port);
+    if (!valid) {
+        return false;
+    }
+    // Site: the first frame in the main executable; the primitive: the top frame.
+    int first = -1;
+    for (int i = 0; i < 24 && frames[i] != 0; ++i) {
+        Dl_info info{};
+        if (dladdr(reinterpret_cast<void*>(frames[i] - (i == 0 ? 0 : 1)), &info) && info.dli_fbase == mainImage) {
+            first = i;
+            stretch.key = reinterpret_cast<std::uint64_t>(info.dli_saddr);
+            break;
+        }
+    }
+    std::string site = first < 0 ? "(no frame in the executable)" : describe(frames[first], true);
+    for (int i = first + 1, n = 0; first >= 0 && i < 24 && frames[i] != 0 && n < 4; ++i, ++n) {
+        site += " <- " + describe(frames[i], true);
+    }
+    site += " [waiting in " + describe(frames[0], true) + "]";
+    const std::uint64_t entry = gHolderEntry.load(std::memory_order_relaxed);
+    site += entry != 0 ? " (thread entry " + describe(entry, true) + ")" : " (default thread)";
+    stretch.site = std::move(site);
+    if (first < 0) {
+        stretch.key = frames[0];
+    }
+    return true;
+}
+
+// ---- Forced preemption at safe points (PETARI_FORCED_PREEMPTION=0: report only) ----
+// The native scheduler delivers a pending preemption when the holder next
+// changes interrupt state. A game loop that polls memory without OS calls
+// (GameScene::init's wait for scenario wave data) never does, so the thread
+// that would end the wait (a DVD/ARAM stream thread made ready by an
+// interrupt) never runs: the Wii would have preempted the loop at the
+// interrupt. When a preemption has been pending for kPreemptAfterMs while the
+// holder executes, the monitor suspends the holder's host thread and takes
+// the CPU from it only at a safe point: every frame (PC, LR and the frame
+// chain up to the thread's start) lies in the executable and is game code or
+// the C++ library, so the thread holds no host lock (malloc, stdio, dyld,
+// renderer mutexes, the interrupt lock) and is in no platform code. The
+// thread then waits, suspended, in the ready queue like any preempted thread;
+// giveCpu resumes it. Elsewhere it is resumed and retried at the next poll,
+// and the refusal is reported.
+
+std::atomic<bool> gForcePreemption{true};
+std::atomic<double> gPreemptAfterMs{4.0};
+
+struct TextRange {
+    std::uintptr_t low = 0, high = 0;
+};
+const TextRange& mainText() {
+    static const TextRange range = [] {
+        Dl_info info{};
+        dladdr(reinterpret_cast<void*>(&publishHolder), &info);
+        unsigned long size = 0;
+        const auto* data = getsegmentdata(static_cast<const mach_header_64*>(info.dli_fbase), "__TEXT", &size);
+        return TextRange{reinterpret_cast<std::uintptr_t>(data), reinterpret_cast<std::uintptr_t>(data) + size};
+    }();
+    return range;
+}
+
+enum class ForceResult { NotNeeded, Busy, NeedNames, Unsafe, Preempted };
+
+// Kinds and names of code addresses seen in holders' stacks (monitor thread
+// only). Filled with nothing suspended: symbolizing takes the dyld lock and
+// demangling mallocs, either of which a suspended thread might hold.
+struct KnownCode {
+    PetariNative::CodeKind kind;
+    std::string name;
+};
+std::unordered_map<std::uint64_t, KnownCode>& knownCode() {
+    static auto* cache = new std::unordered_map<std::uint64_t, KnownCode>;  // monitor thread, host allocation
+    return *cache;
+}
+
+struct PreemptAttempt {
+    std::uint64_t unknown[32] = {};  // addresses to symbolize before the next try
+    int unknownCount = 0;
+    const KnownCode* site = nullptr;     // the holder's function (cached)
+    const KnownCode* blocker = nullptr;  // the frame that made the point unsafe (cached)
+    bool outside = false;                // a library/system frame before the thread's start
+};
+
+// Interrupt lock taken here (try only). While the holder is suspended only
+// the cache is read (no allocation, no dyld); unknown addresses are returned
+// to be symbolized after it runs again.
+ForceResult tryForcePreempt(PreemptAttempt& attempt) {
+    std::unique_lock<std::mutex> lock(interruptMutex(), std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return ForceResult::Busy;  // someone is in an OS call; the holder may be about to take the preemption
+    }
+    setInterruptOwner(true);
+    struct Release {
+        ~Release() { setInterruptOwner(false); }
+    } release;
+    OSThread* holder = gCurrent.load(std::memory_order_relaxed);
+    if (holder == nullptr || !gCurrentRunning || !gPreemptPending || Reschedule > 0 || RunQueueBits == 0 ||
+        highestReadyPriority() >= holder->priority || holder->state != kStateRunning) {
+        return ForceResult::NotNeeded;
+    }
+    auto found = hosts().find(holder);
+    if (found == hosts().end() || found->second->hostBlocking || found->second->machThread == MACH_PORT_NULL) {
+        return ForceResult::NotNeeded;
+    }
+    HostThread& host = *found->second;
+    if (thread_suspend(host.machThread) != KERN_SUCCESS) {
+        return ForceResult::Busy;
+    }
+    std::uint64_t frames[32] = {};
+    arm_thread_state64_t state;
+    mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+    if (thread_get_state(host.machThread, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &count) != KERN_SUCCESS) {
+        thread_resume(host.machThread);
+        return ForceResult::Busy;
+    }
+    frames[0] = (arm_thread_state64_get_pc(state) & 0x0000FFFFFFFFFFFFull) + 1;  // looked up like a return address
+    frames[1] = arm_thread_state64_get_lr(state) & 0x0000FFFFFFFFFFFFull;
+    walkSuspendedStack(arm_thread_state64_get_fp(state), host.stackLow, host.stackHigh, frames, 32);
+    const TextRange& text = mainText();
+    const auto& cache = knownCode();
+    bool safe = false;
+    for (int i = 0; i < 32 && frames[i] != 0; ++i) {
+        if (frames[i] - 1 < text.low || frames[i] - 1 >= text.high) {
+            attempt.outside = true;  // inside a library or system call
+            break;
+        }
+        const auto it = cache.find(frames[i]);
+        if (it == cache.end()) {
+            attempt.unknown[attempt.unknownCount++] = frames[i];
+            continue;  // collect every unknown one for the next try
+        }
+        if (i == 0) {
+            attempt.site = &it->second;
+        }
+        const PetariNative::CodeKind kind = it->second.kind;
+        if (kind == PetariNative::CodeKind::ThreadStart) {
+            safe = attempt.unknownCount == 0;
+            break;
+        }
+        if (kind != PetariNative::CodeKind::Game && kind != PetariNative::CodeKind::Library) {
+            attempt.blocker = &it->second;
+            break;
+        }
+    }
+    if (!safe) {
+        thread_resume(host.machThread);
+        if (attempt.outside || attempt.blocker != nullptr) {
+            return ForceResult::Unsafe;
+        }
+        return attempt.unknownCount != 0 ? ForceResult::NeedNames : ForceResult::Unsafe;
+    }
+    // Preempt it, as an interrupt would have: ready at its priority, the CPU
+    // to the highest ready thread. Its host thread stays suspended.
+    holder->state = kStateReady;
+    setRun(holder);
+    host.forceParked = true;
+    RunQueueHint = FALSE;
+    setPreemptPending(false);
+    giveCpu(popHighestReady());
+    return ForceResult::Preempted;
+}
+
+// Monitor thread, nothing suspended.
+void learnCode(const PreemptAttempt& attempt) {
+    auto& cache = knownCode();
+    if (cache.size() > 8192) {
+        cache.clear();
+    }
+    for (int i = 0; i < attempt.unknownCount; ++i) {
+        std::string name;
+        const PetariNative::CodeKind kind = PetariNative::classifyCode(attempt.unknown[i], &name);
+        cache.emplace(attempt.unknown[i], KnownCode{kind, std::move(name)});
+    }
+}
+
+void noteForcedPreemption(ForceResult result, const PreemptAttempt& attempt, double pendingMs) {
+    if (result != ForceResult::Preempted && result != ForceResult::Unsafe) {
+        return;
+    }
+    std::string site = attempt.site != nullptr && !attempt.site->name.empty() ? attempt.site->name : "(unknown function)";
+    BlockStats& st = blockStats();
+    std::lock_guard<std::mutex> guard(st.lock);
+    if (result == ForceResult::Preempted) {
+        ++st.forced;
+        std::uint64_t* seen = nullptr;
+        for (auto& entry : st.forcedSites) {
+            if (entry.first == site) {
+                seen = &entry.second;
+            }
+        }
+        if (seen == nullptr && st.forcedSites.size() < kMaxBlockSites) {
+            st.forcedSites.emplace_back(site, 0);
+            seen = &st.forcedSites.back().second;
+        }
+        if (seen == nullptr || ++*seen <= 3) {
+            std::fprintf(stderr, "[baton] preempted a CPU holder busy-waiting without OS calls (pending %.1f ms) in %s\n",
+                         pendingMs, site.c_str());
+        }
+        return;
+    }
+    ++st.unsafe;
+    if (attempt.outside) {
+        site += " (inside a library or system call)";
+    } else if (attempt.blocker != nullptr) {
+        site += " (not preemptible inside " + (attempt.blocker->name.empty() ? std::string("unknown code") : attempt.blocker->name) + ")";
+    }
+    if (site != st.lastUnsafe) {
+        st.lastUnsafe = site;
+        std::fprintf(stderr, "[baton] preemption pending %.1f ms; the CPU holder is not at a safe point: %s\n", pendingMs,
+                     site.c_str());
+    }
+}
+
+void* batonMonitor(void*) {
+    PetariNative::HostAllocationScope hostAllocations;
+    pthread_setname_np("Petari baton monitor");
+    // It must observe stalls when every core is busy (first-use compiles);
+    // each poll is one thread_info call.
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    Dl_info self{};
+    dladdr(reinterpret_cast<void*>(&publishHolder), &self);
+    Stretch stretch;
+    while (true) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        std::lock_guard<std::mutex> quiesce(monitorQuiesce());
+        const std::uint64_t hand = gHolderHand.load(std::memory_order_acquire);
+        const bool running = gHolderRunning.load(std::memory_order_acquire);
+        const mach_port_t port = gHolderPort.load(std::memory_order_relaxed);
+        OSThread* holder = gHolderThread.load(std::memory_order_relaxed);
+        bool blocked = false;
+        if (running && port != MACH_PORT_NULL) {
+            const RunStateSample run = threadRunState(port);
+            blocked = (run.state == TH_STATE_WAITING || run.state == TH_STATE_UNINTERRUPTIBLE) && run.suspendCount == 0;
+        }
+        blocked = blocked && gHolderHand.load(std::memory_order_acquire) == hand;
+        const std::int64_t now = nowTicks();
+        if (!blocked || (stretch.active && stretch.hand != hand)) {
+            finishStretch(stretch, now);
+        }
+        if (!blocked) {
+            const std::int64_t since = gPreemptSince.load(std::memory_order_relaxed);
+            const double pendingMs = since != 0 ? ticksToMs(now - since) : 0.0;
+            if (running && since != 0 && gForcePreemption.load(std::memory_order_relaxed) &&
+                pendingMs >= gPreemptAfterMs.load(std::memory_order_relaxed)) {
+                PreemptAttempt attempt;
+                const ForceResult result = tryForcePreempt(attempt);
+                if (attempt.unknownCount != 0) {
+                    learnCode(attempt);  // retried at the next poll
+                }
+                noteForcedPreemption(result, attempt, pendingMs);
+            }
+            continue;
+        }
+        if (!stretch.active) {
+            stretch.active = true;
+            stretch.hand = hand;
+            stretch.start = now;
+            stretch.holder = holder;
+        }
+        if (!stretch.sampled && ticksToMs(now - stretch.start) >= gBlockThresholdMs.load(std::memory_order_relaxed)) {
+            if (sampleHolder(stretch, port, self.dli_fbase)) {
+                stretch.sampled = true;
+                BlockStats& st = blockStats();
+                std::lock_guard<std::mutex> guard(st.lock);
+                st.ongoing = true;
+                st.ongoingSite = stretch.site;
+                st.ongoingStart = stretch.start;
+            } else {
+                stretch = Stretch{};
+            }
+        }
+    }
+}
+
+void startBatonMonitor() {
+    const char* value = std::getenv("PETARI_BATON_MONITOR");
+    if (value != nullptr && value[0] == '0') {
+        return;
+    }
+    if (const char* ms = std::getenv("PETARI_BATON_BLOCK_MS"); ms != nullptr && std::atof(ms) > 0) {
+        gBlockThresholdMs.store(std::atof(ms));
+    }
+    if (const char* force = std::getenv("PETARI_FORCED_PREEMPTION"); force != nullptr && force[0] == '0') {
+        gForcePreemption.store(false);
+    }
+    mainText();
+    knownCode();
+    PetariNative::HostAllocationScope hostAllocations;
+    monitorQuiesce();
+    blockStats();
+    // Prepare runs in the forking thread: the monitor finishes its poll first.
+    // Lock order as the monitor's: quiesce, then statistics.
+    pthread_atfork(
+        [] {
+            monitorQuiesce().lock();
+            blockStats().lock.lock();
+        },
+        [] {
+            blockStats().lock.unlock();
+            monitorQuiesce().unlock();
+        },
+        [] {
+            blockStats().lock.unlock();
+            monitorQuiesce().unlock();
+        });
+    pthread_t monitor;
+    if (pthread_create(&monitor, nullptr, batonMonitor, nullptr) == 0) {
+        pthread_detach(monitor);
     }
 }
 
@@ -914,7 +1409,7 @@ struct ThreadRecord {
     OSMutex* mutex = nullptr;
     OSThread* mutexOwner = nullptr;
     std::uint64_t entry = 0;
-    bool known = false, hostBlocking = false, self = false;
+    bool known = false, hostBlocking = false, self = false, forceParked = false;
     mach_port_t port = MACH_PORT_NULL;
     std::uintptr_t stackLow = 0, stackHigh = 0;
     RunStateSample run;
@@ -952,6 +1447,65 @@ std::string describeHostThread(std::uintptr_t id) {
 }
 
 }  // namespace
+
+void setBatonBlockThresholdMs(double ms) {
+    gBlockThresholdMs.store(ms);
+}
+
+void setBatonBlockLogAll(bool enabled) {
+    gBlockLogAll.store(enabled);
+}
+
+void setForcedPreemption(bool enabled, double afterMs) {
+    gForcePreemption.store(enabled);
+    gPreemptAfterMs.store(afterMs);
+}
+
+BatonBlockStats batonBlockStats() {
+    BlockStats& st = blockStats();
+    std::lock_guard<std::mutex> guard(st.lock);
+    BatonBlockStats result{st.stretches, st.totalMs, st.maxMs, {}, st.forced, st.unsafe};
+    for (const BlockSite& site : st.sites) {
+        result.sites.push_back(site.description);
+    }
+    return result;
+}
+
+void dumpBatonBlocks(std::FILE* out) {
+    PetariNative::HostAllocationScope hostAllocations;
+    BlockStats& st = blockStats();
+    std::lock_guard<std::mutex> guard(st.lock);
+    std::fprintf(out,
+                 "[baton] summary: %llu host waits of %.0f ms or more while holding the CPU, %.1f ms in total, longest "
+                 "%.1f ms\n",
+                 static_cast<unsigned long long>(st.stretches), gBlockThresholdMs.load(), st.totalMs, st.maxMs);
+    if (st.ongoing) {
+        std::fprintf(out, "[baton]   ongoing for %.1f ms: %s\n", ticksToMs(nowTicks() - st.ongoingStart), st.ongoingSite.c_str());
+    }
+    std::vector<const BlockSite*> sorted;
+    for (const BlockSite& site : st.sites) {
+        sorted.push_back(&site);
+    }
+    std::sort(sorted.begin(), sorted.end(), [](const BlockSite* a, const BlockSite* b) { return a->totalMs > b->totalMs; });
+    for (const BlockSite* site : sorted) {
+        std::fprintf(out, "[baton]   %llu x, %.1f ms total, %.1f ms longest: %s\n",
+                     static_cast<unsigned long long>(site->stretches), site->totalMs, site->maxMs, site->description.c_str());
+    }
+    if (st.unattributed != 0) {
+        std::fprintf(out, "[baton]   %llu more at other sites\n", static_cast<unsigned long long>(st.unattributed));
+    }
+    std::fprintf(out,
+                 "[baton] summary: %llu forced preemptions of busy-waits without OS calls (pending over %.0f ms)%s, %llu "
+                 "refusals at unsafe points\n",
+                 static_cast<unsigned long long>(st.forced), gPreemptAfterMs.load(),
+                 gForcePreemption.load() ? "" : " (forcing disabled: reported only)", static_cast<unsigned long long>(st.unsafe));
+    for (const auto& [site, count] : st.forcedSites) {
+        std::fprintf(out, "[baton]   %llu x preempted in %s\n", static_cast<unsigned long long>(count), site.c_str());
+    }
+    if (!st.lastUnsafe.empty()) {
+        std::fprintf(out, "[baton]   last unsafe: %s\n", st.lastUnsafe.c_str());
+    }
+}
 
 // The emulated CPU's state for a hang report: who holds the baton, what every
 // OS thread waits for, and where its host thread actually is. Stacks are
@@ -995,6 +1549,7 @@ void dumpThreads(std::FILE* out) {
             r.known = true;
             r.entry = reinterpret_cast<std::uint64_t>(host.func);
             r.hostBlocking = host.hostBlocking;
+            r.forceParked = host.forceParked;
             r.port = host.machThread;
             r.stackLow = host.stackLow;
             r.stackHigh = host.stackHigh;
@@ -1026,6 +1581,9 @@ void dumpThreads(std::FILE* out) {
                      static_cast<int>(r.priority), static_cast<int>(r.base));
         if (r.suspend > 0) {
             std::fprintf(out, ", suspended %d", static_cast<int>(r.suspend));
+        }
+        if (r.forceParked) {
+            std::fprintf(out, " (preempted in game code by the baton monitor)");
         }
         if (r.state == kStateWaiting && !r.hostBlocking) {
             std::fprintf(out, ", on queue %p", static_cast<void*>(r.queue));
@@ -1091,6 +1649,13 @@ void PetariNative::Platform::Diagnostics::dumpOS(std::FILE* out) {
     PetariNative::Platform::OS::dumpThreads(out);
 }
 
+extern "C" void petari_platform_report_diagnostics(void) {
+    PetariNative::HostAllocationScope hostAllocations;
+    PetariNative::reportAllocationDiagnostics(stderr);
+    PetariNative::Platform::OS::dumpBatonBlocks(stderr);
+    std::fflush(stderr);
+}
+
 using namespace PetariNative::Platform::OS;
 
 extern "C" {
@@ -1150,6 +1715,8 @@ void __OSThreadInit(void) {
     }
     gCurrentRunning = true;
     gCurrent.store(thread, std::memory_order_release);
+    publishHolder();
+    startBatonMonitor();
     OSRestoreInterrupts(enabled);
 }
 
@@ -1512,15 +2079,17 @@ static void beginHostBlockingLocked() {
     enqueuePrio(&tHostBlockingQueue, self);
     tHostBlocking = true;
     tHost->hostBlocking = true;
+    PetariNative::setGameCpuReleased(true);
     ++gHostBlockingThreads;
     RunQueueHint = FALSE;
-    gPreemptPending = false;
+    setPreemptPending(false);
     if (RunQueueBits == 0) {
         detachHolderOverride();
         if (gBatonDiag) {
             closeEpisode();
         }
         gCurrent.store(nullptr, std::memory_order_release);
+        publishHolder();
     } else {
         giveCpu(popHighestReady());
     }
@@ -1540,6 +2109,11 @@ void petari_os_begin_host_blocking(void) {
     }
     beginHostBlockingLocked();
     OSEnableInterrupts();
+}
+
+void petari_os_preemption_point(void) {
+    // An interrupt-state change delivers a pending preemption.
+    OSRestoreInterrupts(OSDisableInterrupts());
 }
 
 int petari_os_try_begin_host_blocking(void) {
@@ -1575,6 +2149,7 @@ void petari_os_end_host_blocking(void) {
     }
     tHostBlocking = false;
     tHost->hostBlocking = false;
+    PetariNative::setGameCpuReleased(false);
     --gHostBlockingThreads;
     interruptReschedule();
     waitForCpu(self);

@@ -19,6 +19,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -27,9 +28,11 @@
 #include <revolution/os.h>
 
 #include "os_internal.hpp"
+#include "petari/frame_telemetry.hpp"
 #include "petari/host_allocation.hpp"
 #include "petari/platform/diagnostics.hpp"
 #include "petari/platform/gx_sync.hpp"
+#include "petari/platform/os_host.hpp"
 
 namespace OS = PetariNative::Platform::OS;
 
@@ -73,6 +76,7 @@ struct State {
     bool abortPending = false;
     std::uint64_t lostDrawDones = 0;    // credited to the next draw-done event
 
+    std::uint64_t tokensReported = 0;   // token interrupts reported (with or without a ticket)
     int progressWaiters = 0;            // OS threads asleep in waitProcessed
     bool progressWake = false;
     int drawDoneWaiters = 0;
@@ -86,6 +90,7 @@ struct State {
 
     std::atomic<std::uint64_t> drawDoneIssued{0};
     std::atomic<std::uint64_t> drawDoneDelivered{0};
+    std::atomic<std::uint64_t> tokensDelivered{0};  // token callbacks returned (or discarded by shutdown)
     OSThreadQueue drawDoneWaitQueue{nullptr, nullptr};  // under the OS interrupt lock
     OSThreadQueue progressWaitQueue{nullptr, nullptr};  // under the OS interrupt lock
     std::mutex hostWaitLock;
@@ -119,6 +124,7 @@ void deliver(State& s, const Event& e) {
         if (e.ticket != 0) {
             s.delivered.store(e.ticket, std::memory_order_release);
         }
+        s.tokensDelivered.fetch_add(1, std::memory_order_acq_rel);
         break;
     case Kind::DrawDone:
         if (GXDrawDoneCallback cb = s.drawDone.load(std::memory_order_acquire)) {
@@ -134,9 +140,48 @@ void deliver(State& s, const Event& e) {
         break;
     }
     OSRestoreInterrupts(enabled);
-    if (e.kind == Kind::DrawDone) {
+    if (e.kind == Kind::DrawDone || e.kind == Kind::Token) {
         notifyHostWaiters(s);
     }
+}
+
+// The next event to deliver, or queue.end(). Tokens are delivered in stream
+// order among themselves, each only after its capture completed. Draw-done
+// and breakpoint events are not held back by a token whose capture is still
+// in flight (the capture is a GPU round trip); they keep their order among
+// themselves and relative to tokens that are ready. Game code that reads what
+// a token callback wrote runs after waitTokensDelivered at the next frame
+// boundary, so it still sees every callback of the previous frame.
+// PETARI_GX_STRICT_TOKENS=1: the previous rule, for A/B measurement: every
+// event waits for all earlier ones, so draw done waits for the captures.
+bool strictTokenOrder() {
+    static const bool strict = [] {
+        const char* value = std::getenv("PETARI_GX_STRICT_TOKENS");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return strict;
+}
+
+std::deque<Event>::iterator nextDeliverableLocked(State& s) {
+    if (strictTokenOrder()) {
+        return !s.queue.empty() && s.queue.front().ready ? s.queue.begin() : s.queue.end();
+    }
+    for (auto it = s.queue.begin(); it != s.queue.end(); ++it) {
+        if (it->kind != Kind::Token) {
+            return it;
+        }
+        if (it->ready) {
+            return it;  // the oldest token: it is next in token order
+        }
+        // An incomplete token holds every later token, not other events.
+        for (auto later = it + 1; later != s.queue.end(); ++later) {
+            if (later->kind != Kind::Token) {
+                return later;
+            }
+        }
+        return s.queue.end();
+    }
+    return s.queue.end();
 }
 
 void* interruptMain(void*) {
@@ -144,7 +189,7 @@ void* interruptMain(void*) {
     State& s = state();
     std::unique_lock<std::mutex> lock(s.lock);
     while (true) {
-        s.changed.wait(lock, [&] { return s.stop || s.progressWake || (!s.queue.empty() && s.queue.front().ready); });
+        s.changed.wait(lock, [&] { return s.stop || s.progressWake || nextDeliverableLocked(s) != s.queue.end(); });
         if (s.progressWake) {
             // Not a GP interrupt: wakes waitProcessed sleepers, never held
             // back by an incomplete snapshot.
@@ -157,11 +202,12 @@ void* interruptMain(void*) {
             lock.lock();
             continue;
         }
-        if (s.queue.empty() || !s.queue.front().ready) {
-            return nullptr;  // stop requested; ready events all delivered
+        const auto next = nextDeliverableLocked(s);
+        if (next == s.queue.end()) {
+            return nullptr;  // stop requested; deliverable events all delivered
         }
-        const Event e = s.queue.front();
-        s.queue.pop_front();
+        const Event e = *next;
+        s.queue.erase(next);
         lock.unlock();
         deliver(s, e);
         lock.lock();
@@ -291,6 +337,7 @@ void reportToken(std::uint16_t token, std::uint64_t position) {
         hook = s.snapshotHook;
         user = s.snapshotUser;
         Event e{Kind::Token, token, position};
+        ++s.tokensReported;
         if (hook != nullptr) {
             ticket = e.ticket = s.nextTicket++;
             e.ready = false;
@@ -473,6 +520,49 @@ void waitDrawDone(std::uint64_t count) {
     --s.drawDoneWaiters;
 }
 
+void waitTokensDelivered() {
+    namespace Telemetry = PetariNative::FrameTelemetry;
+    State& s = state();
+    std::uint64_t target;
+    {
+        std::lock_guard<std::mutex> guard(s.lock);
+        target = s.tokensReported;
+    }
+    const auto delivered = [&] { return s.tokensDelivered.load(std::memory_order_acquire) >= target; };
+    if (delivered()) {
+        return;
+    }
+    if (OS::interruptsDisabled()) {
+        OSPanic(__FILE__, __LINE__, "waiting for draw-sync tokens with interrupts disabled would never complete");
+    }
+    const std::uint64_t start = Telemetry::nowNs();
+    const bool osThread = OS::boundThread() != nullptr;
+    if (osThread) {
+        petari_os_begin_host_blocking();  // other game threads run meanwhile
+    }
+    {
+        std::unique_lock<std::mutex> lock(s.hostWaitLock);
+        for (int seconds = 1; !s.hostWait.wait_for(lock, std::chrono::seconds(1), delivered); ++seconds) {
+            lock.unlock();
+            if (seconds == 1 || seconds == kTokenWaitGiveUpSeconds) {
+                std::fprintf(stderr, "GX token wait: draw-sync token %llu of %llu not delivered after %d s%s\n",
+                             static_cast<unsigned long long>(s.tokensDelivered.load() + 1),
+                             static_cast<unsigned long long>(target), seconds,
+                             seconds == kTokenWaitGiveUpSeconds ? "; continuing without it" : "");
+                dumpState(stderr);
+            }
+            lock.lock();
+            if (seconds == kTokenWaitGiveUpSeconds) {
+                break;
+            }
+        }
+    }
+    if (osThread) {
+        petari_os_end_host_blocking();
+    }
+    Telemetry::add(Telemetry::TokenBarrierWait, Telemetry::nowNs() - start);
+}
+
 void waitProcessed(std::uint64_t position) {
     State& s = state();
     if (OS::boundThread() != nullptr) {
@@ -611,7 +701,7 @@ void dumpState(std::FILE* out) {
         std::fprintf(out, "; head: %s at %llu, ticket %llu%s",
                      e.kind == Kind::Token ? "token" : e.kind == Kind::DrawDone ? "draw done" : "breakpoint",
                      static_cast<unsigned long long>(e.position), static_cast<unsigned long long>(e.ticket),
-                     e.ready ? "" : " (capture incomplete: holds every later event)");
+                     e.ready ? "" : " (capture incomplete: holds later tokens)");
     }
     std::fputc('\n', out);
     if (locked) {
@@ -657,11 +747,18 @@ void shutdown() {
     s.breakpointCallback.store(nullptr);
     s.drawDoneIssued.store(0);
     s.drawDoneDelivered.store(0);
+    // Discarded tokens count as delivered: a later barrier must not wait for them.
+    s.tokensDelivered.store(s.tokensReported);
 }
 
 }  // namespace PetariNative::Platform::GXSync
 
 extern "C" {
+
+// For game code without the platform headers (GameSystem::frameLoop).
+void petari_gx_sync_wait_tokens_delivered(void) {
+    PetariNative::Platform::GXSync::waitTokensDelivered();
+}
 
 // DIAGNOSTIC, NOT HARDWARE COUNTERS. The Wii returns transform-unit and
 // rasterizer performance counters and a GP clock count. The native renderer

@@ -69,6 +69,9 @@ public:
     void initGroupCtrlList();
     void initTextBoxRecursive(nw4r::lyt::Pane*, nw4r::lyt::Pane*, const char*, u32);
     void animateRecursive(u32&, nw4r::lyt::Pane*);
+#ifdef PETARI_NATIVE
+    nw4r::lyt::Pane* getPane(const char* pName) const;
+#else
     nw4r::lyt::Pane* getPane(const char* pName) const {
         if (pName == nullptr) {
             return mLayout->mpRootPane;
@@ -76,6 +79,8 @@ public:
             return mLayout->mpRootPane->FindPaneByName(pName, true);
         }
     }
+
+#endif
 
     nw4r::lyt::Pane* findPaneByName(const char*) const;
     void replaceIndDummyTexture();

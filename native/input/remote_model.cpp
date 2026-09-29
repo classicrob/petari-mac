@@ -85,6 +85,7 @@ std::uint32_t actionBits(Action action) {
     case Action::TiltHold: return kBitTiltHold;
     case Action::PostureToggle: return kBitPostureToggle;
     case Action::Walk: return kBitWalk;
+    case Action::Start: return 0x0800;  // plus B while the title prompt is up (RemoteModel::heldBits)
     case Action::Count: break;
     }
     return 0;
@@ -148,15 +149,7 @@ void RemoteModel::setBindings(const Bindings& bindings) {
     // Inputs held across a remap keep their physical state; only what they
     // drive changes.
     mBindings = bindings;
-    const std::uint32_t before = mRaw;
-    mRaw = heldBits();
-    const std::uint32_t rising = mRaw & ~before;
-    for (int bit = 0; bit < kBitCount; ++bit) {
-        if ((rising >> bit) & 1u) {
-            mPendingPresses[bit] = std::min<std::uint8_t>(mPendingPresses[bit] + 1, 3);
-            mPressSequence[bit] = ++mSequence;
-        }
-    }
+    refreshRaw();
 }
 
 std::uint32_t RemoteModel::heldBits() const {
@@ -172,11 +165,27 @@ std::uint32_t RemoteModel::heldBits() const {
                                   : input.code < mMouse.size() && mMouse[input.code];
             if (held) {
                 bits |= actionBits(action);
+                if (action == Action::Start && titlePromptActive()) {
+                    bits |= actionBits(Action::B);
+                }
                 break;
             }
         }
     }
     return bits;
+}
+
+std::uint32_t RemoteModel::refreshRaw() {
+    const std::uint32_t before = mRaw;
+    mRaw = heldBits();
+    const std::uint32_t rising = mRaw & ~before;
+    for (int bit = 0; bit < kBitCount; ++bit) {
+        if ((rising >> bit) & 1u) {
+            mPendingPresses[bit] = std::min<std::uint8_t>(mPendingPresses[bit] + 1, 3);
+            mPressSequence[bit] = ++mSequence;
+        }
+    }
+    return rising;
 }
 
 void RemoteModel::inputChanged(Binding input, bool down) {
@@ -185,18 +194,23 @@ void RemoteModel::inputChanged(Binding input, bool down) {
     } else {
         mMouse[input.code] = down;
     }
-    const std::uint32_t before = mRaw;
-    mRaw = heldBits();
-    const std::uint32_t rising = mRaw & ~before;
-    if (rising != 0) {
+    if (refreshRaw() != 0) {
         mActivity = true;
     }
-    for (int bit = 0; bit < kBitCount; ++bit) {
-        if ((rising >> bit) & 1u) {
-            mPendingPresses[bit] = std::min<std::uint8_t>(mPendingPresses[bit] + 1, 3);
-            mPressSequence[bit] = ++mSequence;
-        }
-    }
+}
+
+bool RemoteModel::titlePromptActive() const {
+    return mTitlePromptReport != 0 && mReportIndex <= mTitlePromptReport + kGameHintReports;
+}
+
+bool RemoteModel::motionControlActive() const {
+    return mMotionReport != 0 && mReportIndex <= mMotionReport + kGameHintReports;
+}
+
+void RemoteModel::titlePromptShown() {
+    // Stamped with the next report, so a stamp before any report still counts.
+    mTitlePromptReport = mReportIndex + 1;
+    refreshRaw();
 }
 
 void RemoteModel::keyEvent(KeyCode code, bool down, bool repeat) {
@@ -251,11 +265,14 @@ bool RemoteModel::takeActivity() {
 
 void RemoteModel::updateOutput() {
     const int minimum = std::max(mSettings.minimumPulseReports, 1);
+    const int pauseMinimum = std::max(mSettings.pauseTapReports, minimum);
+    constexpr std::uint32_t kPauseButtons = 0x0010 | 0x1000;  // Plus, Minus
     for (int bit = 0; bit < kBitCount; ++bit) {
         const std::uint32_t mask = 1u << bit;
         int& age = mOutputAge[bit];
         if ((mOutput & mask) != 0) {
-            if ((mRaw & mask) == 0 && age >= minimum) {
+            const int held = (mask & kPauseButtons) != 0 ? pauseMinimum : minimum;
+            if ((mRaw & mask) == 0 && age >= held) {
                 mOutput &= ~mask;
                 age = 0;
             }
@@ -296,10 +313,22 @@ void RemoteModel::stickVector(float* x, float* y) const {
 }
 
 void RemoteModel::updateMotion(float stickX, float stickY) {
-    const float base = mPosture == Posture::Upright ? radians(kUprightPitchDegrees) : 0.0f;
+    const bool steering = motionControlActive();
+    bool upright = mPosture == Posture::Upright;
+    if (steering) {
+        // The rides' tutorials check the posture: the Star Ball wants the
+        // remote raised (TamakoroTutorial), the Ray level (SurfRayTutorial's
+        // "straight"), whatever T last chose. Forward on the Ray would break
+        // "straight", so there only the twist follows the keys.
+        upright = mSteering == Steering::Ball;
+        if (mSteering == Steering::Ray) {
+            stickY = 0.0f;
+        }
+    }
+    const float base = upright ? radians(kUprightPitchDegrees) : 0.0f;
     float targetPitch = base;
     float targetRoll = 0.0f;
-    if ((mOutput & kBitTiltHold) != 0) {
+    if ((mOutput & kBitTiltHold) != 0 || steering) {
         // Forward tilts the tip toward the screen; right turns the remote
         // clockwise as seen from behind.
         const float range = radians(mSettings.maxTiltDegrees);
@@ -312,13 +341,14 @@ void RemoteModel::updateMotion(float stickX, float stickY) {
 }
 
 Report RemoteModel::nextReport(const PointerCalibration& calibration) {
+    ++mReportIndex;
+    refreshRaw();  // the title prompt may have lapsed
     const std::uint32_t previous = mOutput;
     updateOutput();
     const std::uint32_t rising = mOutput & ~previous;
     if ((rising & kBitPostureToggle) != 0) {
         mPosture = mPosture == Posture::Pointing ? Posture::Upright : Posture::Pointing;
     }
-    ++mReportIndex;
     constexpr std::uint32_t kButtonAorB = 0x0800 | 0x0400;
     if ((rising & kButtonAorB) != 0) {
         mLastButtonReport = mReportIndex;
@@ -351,7 +381,7 @@ Report RemoteModel::nextReport(const PointerCalibration& calibration) {
 
     Report report;
     report.buttons = static_cast<std::uint16_t>(mOutput & 0xFFFFu);
-    if ((mOutput & kBitTiltHold) == 0) {
+    if ((mOutput & kBitTiltHold) == 0 && !motionControlActive()) {
         report.stickX = rawStickAxis(stickX);
         report.stickY = rawStickAxis(stickY);
     }

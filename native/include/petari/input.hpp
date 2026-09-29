@@ -34,6 +34,7 @@ constexpr KeyCode Return = 40, Escape = 41, Backspace = 42, Tab = 43, Space = 44
                   CapsLock = 57;
 constexpr KeyCode F1 = 58, F2 = 59, F3 = 60, F4 = 61, F5 = 62, F6 = 63, F7 = 64, F8 = 65, F9 = 66, F10 = 67, F11 = 68, F12 = 69;
 constexpr KeyCode Right = 79, Left = 80, Down = 81, Up = 82;
+constexpr KeyCode KeypadEnter = 88;
 constexpr KeyCode LeftCtrl = 224, LeftShift = 225, LeftAlt = 226, LeftGui = 227, RightCtrl = 228, RightShift = 229, RightAlt = 230,
                   RightGui = 231;
 constexpr KeyCode Max = 512;  // exclusive bound accepted by the API (SDL_SCANCODE_COUNT)
@@ -64,6 +65,7 @@ enum class Action : std::uint8_t {
     TiltHold,        // while held, the stick keys tilt the remote instead of the stick
     PostureToggle,   // switch the remote between pointing at the screen and upright
     Walk,            // while held, the stick moves at Settings::walkStickScale
+    Start,           // A; A and B together while the title asks for both (titlePromptShown)
     Count
 };
 
@@ -78,7 +80,7 @@ struct Binding {
 };
 
 // Remappable bindings. Each action may have several inputs, and an input may
-// drive several actions (Escape defaults to Plus and B).
+// drive several actions.
 class Bindings {
 public:
     // The approved defaults from native/CONTROLS.md, plus provisional
@@ -102,6 +104,19 @@ private:
 };
 
 const char* actionName(Action action);
+
+// The player-facing controls list for a set of bindings (the Home menu's
+// Controls page): one line per thing the player does, with the inputs bound
+// to it as they appear on the keyboard ("Space / Right mouse"), or
+// "(not bound)". Follows remaps. Allocates: on a game thread, call it inside
+// a HostAllocationScope.
+struct ControlsLine {
+    std::string action;
+    std::string inputs;
+};
+std::vector<ControlsLine> controlsSummary(const Bindings& bindings);
+// How an input appears to the player: "Space", "Left Shift", "Left mouse".
+std::string displayName(Binding input);
 // The constant names in Key ("W", "Num1", "LeftShift", ...), or "Usage<n>".
 std::string keyName(KeyCode code);
 bool parseKeyName(const std::string& name, KeyCode* code);
@@ -152,6 +167,13 @@ struct Settings {
     // previous flick is returning waits; at most one waits, and losing focus
     // cancels it.
     int shakeDelayAfterButtonReports = 36;
+    // Plus and Minus presses last at least this many reports. The game pauses
+    // only once Plus or Minus has been held for 12 frames
+    // (PauseButtonCheckerInGame), so a tap of Escape would do nothing; 50
+    // reports (250 ms) span 14 frames. The pause menu closes on a new press,
+    // and its hold counter is not updated while paused, so the long press
+    // cannot reopen it.
+    int pauseTapReports = 50;
 };
 
 // --- Host events (any thread) ---
@@ -175,6 +197,21 @@ void setViewport(const Viewport& viewport);
 void focusChanged(bool focused);
 void setPosture(Posture posture);
 Posture posture();
+
+// Game side (native builds): the title screen is asking for A and B held
+// together this frame (TitleSequenceProduct::exeLogoDisplay calls it every
+// frame the prompt is up). For the next 100 ms the Start action (Return)
+// presses B with A, so one key starts the game. Elsewhere Start is A alone,
+// and never sends the B that backs out of menus. Any thread.
+void titlePromptShown();
+// Game side (native builds): the game steers by the remote's tilt this frame.
+// For the next 100 ms the stick keys tilt the remote instead of moving the
+// stick, as Tab would, so WASD steer with no extra keys. Any thread.
+enum class Steering : std::uint8_t {
+    Ball,  // Star Ball (SphereAccelSensorController): upright, WASD tilt
+    Ray,   // Ray surfing (SurfRay::updateRide): level, A/D twist, W/S ignored
+};
+void motionControlShown(Steering steering);
 
 // --- Device state ---
 

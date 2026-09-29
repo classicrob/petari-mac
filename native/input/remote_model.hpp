@@ -19,6 +19,9 @@ constexpr float kUprightPitchDegrees = 80.0f;
 // Above this pitch the IR camera no longer sees the sensor bar. KPAD itself
 // rejects the pointer beyond acos(0.7) (kp_err_up_inpr).
 constexpr float kSensorVisiblePitchDegrees = 40.0f;
+// How long a titlePromptShown or motionControlShown call lasts: 100 ms,
+// several game frames, so one slow frame does not end it.
+constexpr std::uint64_t kGameHintReports = 20;
 
 // Output bits. 0..15 are WPAD button bits, including the Nunchuk's C and Z as
 // they appear in WPADFSStatus::button. The rest are internal.
@@ -89,6 +92,16 @@ public:
     void setPosture(Posture posture) { mPosture = posture; }
     Posture posture() const { return mPosture; }
 
+    // The title asks for A and B (see Input::titlePromptShown).
+    void titlePromptShown();
+    bool titlePromptActive() const;
+    // The game steers by tilt (see Input::motionControlShown).
+    void motionControlShown(Steering steering) {
+        mMotionReport = mReportIndex + 1;
+        mSteering = steering;
+    }
+    bool motionControlActive() const;
+
     // A bound input went down since the last call (reconnects a remote).
     bool takeActivity();
 
@@ -99,6 +112,8 @@ public:
 
 private:
     std::uint32_t heldBits() const;
+    // Recomputes the held bits and counts rising ones as presses; returns them.
+    std::uint32_t refreshRaw();
     void inputChanged(Binding input, bool down);
     void releaseAll();
     void updateOutput();
@@ -134,6 +149,9 @@ private:
     std::uint64_t mLastButtonReport = 0;  // report of the last A or B press (0: none)
     std::uint64_t mShakeStart = 0;        // the pending shake starts at this report (0: none)
     std::uint64_t mLastShakeStart = 0;    // report the last shake started (0: none)
+    std::uint64_t mTitlePromptReport = 0;  // report of the last titlePromptShown (0: none)
+    std::uint64_t mMotionReport = 0;       // report of the last motionControlShown (0: none)
+    Steering mSteering = Steering::Ball;
 };
 
 }  // namespace PetariNative::Input::Detail

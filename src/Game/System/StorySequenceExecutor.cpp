@@ -24,6 +24,7 @@
 #ifdef PETARI_NATIVE
 #include <petari/test_fixture.hpp>
 #include "Game/System/GameDataHolder.hpp"
+#include "Game/System/GalaxyStatusAccessor.hpp"
 #endif
 
 namespace {
@@ -1041,6 +1042,27 @@ void StorySequenceExecutor::overwriteGalaxyNameAfterLoading(GalaxyMoveArgument* 
             holder->onGalaxyScenarioFlagAlreadyVisited("HeavensDoorGalaxy", 1);
         }
         std::fprintf(stderr, "PETARI FIXTURE: tutorial Grand Star and observatory introduction set; Good Egg progress unchanged\n");
+    }
+    if (!PetariNative::TestFixture::stage.empty()) {
+        // Synthetic stage entry: the scenario as ScenarioSelectScene::
+        // trySetCurrentScenarioNo would set it (hidden stars placed in their
+        // host scenario), carried by this same galaxy move.
+        const char* pStage = PetariNative::TestFixture::stage.c_str();
+        const s32 selected = PetariNative::TestFixture::stageScenario;
+        GalaxyStatusAccessor accessor = MR::makeGalaxyStatusAccessor(pStage);
+        const s32 scenarioNum = accessor.getScenarioNum();
+        if (selected < 1 || selected > scenarioNum) {
+            std::fprintf(stderr, "PETARI FIXTURE: %s has %d scenarios; scenario %d does not exist, entry not applied\n",
+                         pStage, static_cast< int >(scenarioNum), static_cast< int >(selected));
+        } else {
+            const s32 placed = accessor.isHiddenStar(selected) ? MR::getPlacedHiddenStarScenarioNo(pStage, selected) : selected;
+            pMoveArgument->mStageName = pStage;
+            pMoveArgument->mScenarioNo = placed;
+            pMoveArgument->_C = selected;
+            std::fprintf(stderr, "PETARI FIXTURE: synthetic stage entry %s scenario %d (placed %d); not earned progression\n",
+                         pStage, static_cast< int >(selected), static_cast< int >(placed));
+            return;
+        }
     }
 #endif
 

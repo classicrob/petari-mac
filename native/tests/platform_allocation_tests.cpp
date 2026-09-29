@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "petari/host_allocation.hpp"
+#include "petari/platform/os_host.hpp"
 #include "petari/platform/dvd.hpp"
 #include "petari/platform/gx_sync.hpp"
 #include "petari/platform/nand.hpp"
@@ -193,6 +194,69 @@ void* threadEntry(void*) {
 
 }  // namespace
 
+// ---- Allocation-site detector (host_allocation.hpp) ----
+// Allocation sites as the renderer and the game have them. noinline and the
+// volatile store keep each a real frame (no inlining, no tail call).
+void* volatile gSink;
+
+namespace PetariNative::AllocationDetectorTest {
+__attribute__((noinline)) void hostHelperWithoutScope() {
+    gSink = new std::uint32_t[16];  // what petari_gx_pipeline_stage_wait did
+}
+}  // namespace PetariNative::AllocationDetectorTest
+
+extern "C" __attribute__((noinline)) void petari_test_entry_without_scope(void) {
+    gSink = new std::vector<std::uint32_t>(64);
+}
+
+__attribute__((noinline)) void gameStyleAllocation() {
+    gSink = new std::uint32_t[16];
+}
+
+void testAllocationSiteDetector(JKRHeap* heap) {
+    const auto before = PetariNative::allocationDiagnostics();
+    gameStyleAllocation();
+    check(inHeap(heap, gSink), "game code allocates from the current heap");
+    delete[] static_cast<std::uint32_t*>(gSink);
+    check(PetariNative::allocationDiagnostics().hostSiteAllocations == before.hostSiteAllocations,
+          "game code is not reported");
+
+    for (int i = 0; i < 3; ++i) {
+        PetariNative::AllocationDetectorTest::hostHelperWithoutScope();
+        check(inHeap(heap, gSink), "an unscoped host site still allocates from the game heap (reported, not moved)");
+        delete[] static_cast<std::uint32_t*>(gSink);
+    }
+    const auto afterHelper = PetariNative::allocationDiagnostics();
+    check(afterHelper.hostSiteAllocations == before.hostSiteAllocations + 3, "an unscoped PetariNative helper is reported each time");
+    check(afterHelper.sites == before.sites + 1, "as one site");
+
+    petari_test_entry_without_scope();
+    delete static_cast<std::vector<std::uint32_t>*>(gSink);
+    check(PetariNative::allocationDiagnostics().hostSiteAllocations > afterHelper.hostSiteAllocations,
+          "an unscoped petari_* C entry point is reported through std containers");
+
+    {
+        PetariNative::HostAllocationScope scope;
+        const auto scoped = PetariNative::allocationDiagnostics();
+        PetariNative::AllocationDetectorTest::hostHelperWithoutScope();
+        check(!inHeap(heap, gSink), "inside a scope the helper uses the host allocator");
+        delete[] static_cast<std::uint32_t*>(gSink);
+        check(PetariNative::allocationDiagnostics().hostSiteAllocations == scoped.hostSiteAllocations, "and is not reported");
+    }
+
+    // With the CPU released, another game thread may be using the heaps: the
+    // allocation must not touch them.
+    const auto beforeReleased = PetariNative::allocationDiagnostics();
+    petari_os_begin_host_blocking();
+    gameStyleAllocation();
+    void* const released = gSink;
+    petari_os_end_host_blocking();
+    check(!inHeap(heap, released), "an unscoped allocation with the CPU released uses the host allocator");
+    delete[] static_cast<std::uint32_t*>(released);
+    check(PetariNative::allocationDiagnostics().releasedAllocations == beforeReleased.releasedAllocations + 1,
+          "and is reported");
+}
+
 int main() {
     const fs::path disc = makeDisc();
     const fs::path nandRoot = tempDir("nand");
@@ -216,6 +280,8 @@ int main() {
         check(child->getTotalFreeSize() < childFree, "an unscoped std container on a game thread uses the game heap");
     }
     check(child->getTotalFreeSize() == childFree, "and returns it when freed on the same thread");
+    testAllocationSiteDetector(child);
+    check(child->getTotalFreeSize() == childFree, "the detector's own bookkeeping never uses the game heap");
 
     // First use of every platform service, from the game thread.
     std::string error;

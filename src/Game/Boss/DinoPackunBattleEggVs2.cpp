@@ -103,7 +103,7 @@ void DinoPackunBattleEggVs2::exeTurn() {
     if (MR::isFirstStep(this)) {
         MR::startBck(getHost(), "EggWalk");
         MR::startSound(getHost(), "SE_BV_D_PAKKUN_EGG_WALK");
-        MR::startSound(getHost(), "SE_BM_D_PAKKUN_LAVER");
+        MR::startSound(getHost(), "SE_BM_D_PAKKUN_SLAVER");
     }
 
     getHost()->adjustTailRootPosition(::sEggOutPosition, 1.0f);

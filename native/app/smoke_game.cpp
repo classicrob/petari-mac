@@ -1,6 +1,7 @@
 // Observation for the smoke run (smoke.hpp): read-only queries of game and VI
 // state. SDK side: no Aurora or SDL headers here.
 
+#include "Game/System/GameDataFunction.hpp"
 #include "Game/System/GameSequenceFunction.hpp"
 #include "Game/System/GameSequenceDirector.hpp"
 #include "Game/System/GameSystem.hpp"
@@ -21,6 +22,7 @@
 #include <petari/platform/vi.hpp>
 
 #include "smoke.hpp"
+#include "actor_observe_store.hpp"
 #include "ui_observe_store.hpp"
 
 namespace PetariNative::App::Smoke {
@@ -51,6 +53,12 @@ Observation observeGame(bool wantPlayer) {
     for (const UiObserve::Prompt& prompt : prompts) {
         observation.prompts.push_back({prompt.messageId, prompt.type});
     }
+    // Taken every frame, so the fixed store never fills with stale frames.
+    std::vector<ActorObserve::Actor> actors;
+    ActorObserve::take(&actors);
+    for (const ActorObserve::Actor& actor : actors) {
+        observation.actors.push_back({actor.kind, actor.x, actor.y, actor.z, actor.dx, actor.dy, actor.dz, actor.state, actor.flags});
+    }
 
     GameSystem* pGameSystem = SingletonHolder< GameSystem >::get();
     if (pGameSystem == nullptr || pGameSystem->mSceneController == nullptr) {
@@ -71,6 +79,7 @@ Observation observeGame(bool wantPlayer) {
     observation.scene = pController->mCurrSceneControlInfo.mScene;
     observation.stage = pController->mCurrSceneControlInfo.mStage;
     observation.scenario = pController->mCurrSceneControlInfo.mScenarioNo;
+    observation.selectedScenario = pController->mCurrSceneControlInfo.mSelectedScenarioNo;
     observation.sceneReady = pController->isSceneInitializeState(SceneInitializeState_End);
     observation.strap = observation.sceneReady && GameSystemFunction::isDisplayStrapRemineder();
     if (pGameSystem->mSequenceDirector != nullptr) {
@@ -117,6 +126,14 @@ Observation observeGame(bool wantPlayer) {
             observation.camZz = camZ.z;
             observation.talkActive = MR::isSystemTalking();
             observation.playerDead = MR::isPlayerDead();
+            observation.playerLife = static_cast< int >(pMario->getHealth());
+            observation.playerInBind = MR::isPlayerInBind();
+            observation.playerSwinging = MR::isPlayerSwingAction();
+            // The loaded file's game data (GameDataHolder), read-only; a file
+            // is loaded whenever Mario is in a Game scene.
+            observation.starEggStar1 = GameDataFunction::hasPowerStar("EggStarGalaxy", 1);
+            observation.powerStars = GameDataFunction::calcCurrentPowerStarNum();
+            observation.stageResult = GameSequenceFunction::hasStageResultSequence();
             // The Game scene is a GameScene (SceneFactory: "Game").
             if (pController->mScene != nullptr) {
                 observation.pausePermitted = static_cast< const GameScene* >(pController->mScene)->isPermitToPauseMenu();

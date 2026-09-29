@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -8,6 +9,11 @@
 #include <filesystem>
 #include <fstream>
 #include <string_view>
+#include <petari/frame_telemetry.hpp>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#include <pthread.h>
+#endif
 
 namespace PetariPipeline {
 using Clock = std::chrono::steady_clock;
@@ -30,12 +36,35 @@ inline bool asynchronous() {
     }();
     return enabled;
 }
+inline unsigned performanceCores() {
+#if defined(__APPLE__)
+    unsigned cores = 0;
+    size_t size = sizeof(cores);
+    if (sysctlbyname("hw.perflevel0.physicalcpu", &cores, &size, nullptr, 0) == 0 && cores) return cores;
+    size = sizeof(cores);
+    if (sysctlbyname("hw.physicalcpu", &cores, &size, nullptr, 0) == 0 && cores) return cores;
+#endif
+    return 2;
+}
 inline unsigned workerCount() {
+    const unsigned cores = performanceCores();
+    const unsigned automatic = std::min(4u, cores > 4 ? cores - 4 : 1u);
     const char* value = std::getenv("PETARI_PIPELINE_THREADS");
-    if (!value || !*value) return 2;
+    if (!value || !*value) return automatic;
     char* end = nullptr;
     const auto count = std::strtoul(value, &end, 10);
-    return end && *end == '\0' && count >= 1 && count <= 4 ? static_cast<unsigned>(count) : 2;
+    return end && *end == '\0' && count >= 1 && count <= 4 ? static_cast<unsigned>(count) : automatic;
+}
+inline bool globalPrecompile() {
+    const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
+    return value && std::strcmp(value, "1") == 0;
+}
+inline void compilationQoS(bool background) {
+#if defined(__APPLE__)
+    pthread_set_qos_class_self_np(background ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INITIATED, 0);
+#else
+    (void)background;
+#endif
 }
 struct Stages {
     std::uint64_t runtimeKey = 0;

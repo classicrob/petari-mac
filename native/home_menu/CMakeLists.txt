@@ -46,6 +46,12 @@ add_library(petari_home_menu STATIC home_menu.cpp hbm_bridge.cpp)
 target_include_directories(petari_home_menu PUBLIC include ${PETARI_REPO_ROOT}/native/include)
 target_link_libraries(petari_home_menu PUBLIC petari_native_config)
 target_compile_features(petari_home_menu PUBLIC cxx_std_17)
+# The Controls page lists the live bindings when the input layer is in the
+# build (the root adds native/input first). Standalone builds show no lines.
+if(TARGET petari_input)
+    target_link_libraries(petari_home_menu PUBLIC petari_input)
+    target_compile_definitions(petari_home_menu PRIVATE PETARI_HOME_MENU_INPUT=1)
+endif()
 
 # The Dear ImGui overlay. Uses aurora's imgui target (IMGUI_USER_CONFIG and all);
 # a standalone build compiles ImGui's core from aurora's fetched sources.

@@ -81,6 +81,9 @@ namespace MR {
     }
 
     void convertPaneLocalPosToScreenPos(TVec2f* pScreenPos, const nw4r::lyt::Pane* pPane, const TVec2f& rLocalPos) {
+#ifdef PETARI_NATIVE
+        if (!pPane) { pScreenPos->zero(); return; }
+#endif
         TVec3f pos(rLocalPos);
         TVec3f layoutPos;
         PSMTXMultVec(pPane->mGlbMtx, pos, layoutPos);

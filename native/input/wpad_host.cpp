@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <thread>
 
 #include "petari/host_allocation.hpp"
 #include "petari/input.hpp"
@@ -97,6 +98,9 @@ struct Channel {
     u8 stream[20];
     u16 streamLength = 0;
     bool streamPending = false;
+    // KPAD's pointer calibration as of the KPAD thread's last WPADProbe
+    // (see snapshotCalibration). No dots until the first one.
+    Detail::PointerCalibration calibration = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 // Device and SDK state: guarded by the interrupt lock.
@@ -111,6 +115,9 @@ bool gMotorEnabled = true;
 u8 gAutoSleepMinutes = 0;
 WPADAlloc gAlloc = nullptr;
 WPADFree gFree = nullptr;
+// The thread that called WPADInit (KPADInit's caller): the only thread that
+// writes KPAD's calibration.
+std::thread::id gKpadThread;
 
 // Host requests, applied at the next report tick.
 std::atomic<bool> gWantConnected[kChannels] = {true, false, false, false};
@@ -347,14 +354,24 @@ void buildReport(Channel& ch, const Report& input) {
     }
 }
 
-Detail::PointerCalibration calibration(s32 chan) {
+// KPAD owns the pointer calibration in inside_kpads, and the KPAD thread
+// changes it without the interrupt lock (KPADInit after WPADInit has started
+// the reports; KPADSetSensorHeight). Reading it in the report tick would race
+// with those writes. KPADRead calls WPADProbe on that thread with interrupts
+// disabled every frame, so the calibration is copied there, in order with the
+// writes, and the tick reads the copy under the same lock. A change reaches
+// the reports at the next KPADRead, before KPAD next uses the dots.
+void snapshotCalibration(s32 chan, Channel& ch) {
+    if (std::this_thread::get_id() != gKpadThread) {
+        return;  // the report tick (KPAD's sampling callback) or another thread
+    }
     const KPADInsideStatus& kp = inside_kpads[chan];
     Detail::PointerCalibration c;
     c.centerX = kp.center_org.x;
     c.centerY = kp.center_org.y;
     c.dpdToPosScale = kp.dpd2pos_scale;
     c.distanceFactor = kp.dist_vv1 > 0.0f ? kp.dist_vv1 : kDefaultDistanceFactor;
-    return c;
+    ch.calibration = c;
 }
 
 void tickChannel(s32 chan) {
@@ -369,7 +386,7 @@ void tickChannel(s32 chan) {
         sink = gSpeakerSink;
         sinkUser = gSpeakerUser;
         if (chan == 0) {
-            input = model().nextReport(calibration(chan));
+            input = model().nextReport(ch.calibration);
             activity = model().takeActivity();
         }
     }
@@ -508,6 +525,16 @@ Posture posture() {
     return model().posture();
 }
 
+void titlePromptShown() {
+    std::lock_guard<std::mutex> lock(gHostMutex);
+    model().titlePromptShown();
+}
+
+void motionControlShown(Steering steering) {
+    std::lock_guard<std::mutex> lock(gHostMutex);
+    model().motionControlShown(steering);
+}
+
 void setConnected(int chan, bool connected) {
     if (chan < 0 || chan >= kChannels) {
         misuse("setConnected", "channel out of range");
@@ -575,6 +602,7 @@ void resetForTesting() {
         gAutoSleepMinutes = 0;
         gAlloc = nullptr;
         gFree = nullptr;
+        gKpadThread = std::thread::id();
         for (int i = 0; i < kChannels; ++i) {
             gWantConnected[i] = i == 0;
             gWantNunchuk[i] = true;
@@ -603,6 +631,7 @@ void WPADInit(void) {
         return;
     }
     gInitialized = true;
+    gKpadThread = std::this_thread::get_id();
     gSensorBarPosition = SCGetWpadSensorBarPosition();
     gDpdSensitivity = static_cast<u8>(SCGetBtDpdSensibility());
     gSpeakerVolume = SCGetWpadSpeakerVolume();
@@ -644,7 +673,8 @@ u8 WPADGetDpdSensitivity(void) {
 
 s32 WPADProbe(s32 chan, u32* type) {
     Interrupts guard;
-    const Channel& ch = channel("WPADProbe", chan);
+    Channel& ch = channel("WPADProbe", chan);
+    snapshotCalibration(chan, ch);
     if (type != nullptr) {
         *type = ch.devType;
     }

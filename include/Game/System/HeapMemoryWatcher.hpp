@@ -50,6 +50,13 @@ public:
     // Host-layout copies of big-endian J3D files whose archive is in mFileCacheHeap (see
     // HeapMemoryWatcher.cpp). Created and destroyed with mFileCacheHeap.
     JKRSolidHeap* mFileCacheHostImageHeap;
+
+    // Heap headroom diagnostics (PETARI_TRACE_BOOT): FileLoaderThread reports each mounted
+    // archive; the archive bytes resident in the file cache since it was created separate the
+    // Wii's share of its use (the same archive bytes) from native growth.
+    void noteArchiveMounted(JKRHeap* pHeap, const char* pName, const void* pData);
+    u32 mFileCacheArchiveBytes;
+    u32 mFileCacheArchiveCount;
 #endif
     static JKRExpHeap* sRootHeapGDDR3;
 };

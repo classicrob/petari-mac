@@ -9,17 +9,14 @@ namespace PetariNative::App::FrameStats {
 
 namespace {
 
-constexpr const char* kPhaseNames[kPhaseCount + 1] = {"startup", "loading", "menu", "gameplay", "unfocused", "total"};
+constexpr const char* kPhaseNames[kPhaseCount + 1] = {"startup", "loading", "menu", "gameplay", "total"};
 constexpr const char* kPartNames[PartCount] = {
     "seam_compose", "seam_end_frame", "seam_begin_frame", "seam_reacquire", "retrace_wait", "game_work",
     "draw_done_wait", "unattributed", "retrace_wake", "pipeline_wait", "efb_staging_wait", "efb_submit_wait",
-    "efb_capture_max", "drawable_acquire", "frame_submit", "present_call", "vi_timer_late_max",
+    "efb_capture_max", "drawable_acquire", "frame_submit", "present_call", "vi_timer_late_max", "vi_lock_wait_max",
+    "texture_hash", "texture_upload", "token_barrier_wait",
 };
 constexpr unsigned kTotal = kPhaseCount;
-
-bool isMax(unsigned part) {
-    return part == EfbCaptureMax || part == ViTimerLateMax;
-}
 
 double ms(std::uint64_t us) {
     return static_cast<double>(us) / 1000.0;
@@ -32,18 +29,21 @@ void writeParts(std::FILE* out, const std::uint64_t* sums, std::uint64_t frames,
     }
     std::fprintf(out,
                  "      game thread: retrace wait %.2f, game work %.2f, draw-done wait %.2f, seam compose %.2f, "
-                 "end frame %.2f, begin frame %.2f, CPU reacquire %.2f, unattributed %.2f (retrace-to-resume %.2f)\n",
+                 "end frame %.2f, begin frame %.2f, CPU reacquire %.2f, unattributed %.2f (retrace-to-resume %.2f, "
+                 "token barrier in game work %.2f)\n",
                  ms(sums[RetraceWait]) / frames, ms(sums[GameWork]) / frames, ms(sums[DrawDoneWait]) / frames,
                  ms(sums[SeamCompose]) / frames, ms(sums[SeamEndFrame]) / frames, ms(sums[SeamBeginFrame]) / frames,
-                 ms(sums[SeamReacquire]) / frames, ms(sums[Unattributed]) / frames, ms(sums[RetraceWake]) / frames);
+                 ms(sums[SeamReacquire]) / frames, ms(sums[Unattributed]) / frames, ms(sums[RetraceWake]) / frames,
+                 ms(sums[TokenBarrierWait]) / frames);
     std::fprintf(out,
                  "      other threads (overlapping): pipeline wait %.2f, EFB staging %.2f, EFB submit %.2f, "
-                 "drawable acquire %.2f, frame submit %.2f, present call %.2f",
+                 "texture hash %.2f, texture upload %.2f, drawable acquire %.2f, frame submit %.2f, present call %.2f",
                  ms(sums[PipelineWait]) / frames, ms(sums[EfbStagingWait]) / frames, ms(sums[EfbSubmitWait]) / frames,
-                 ms(sums[DrawableAcquire]) / frames, ms(sums[FrameSubmit]) / frames, ms(sums[PresentCall]) / frames);
+                 ms(sums[TextureHash]) / frames, ms(sums[TextureUpload]) / frames, ms(sums[DrawableAcquire]) / frames,
+                 ms(sums[FrameSubmit]) / frames, ms(sums[PresentCall]) / frames);
     if (maxima != nullptr) {
-        std::fprintf(out, "; max EFB capture latency %.2f, max VI timer overshoot %.2f", ms(maxima[EfbCaptureMax]),
-                     ms(maxima[ViTimerLateMax]));
+        std::fprintf(out, "; max EFB capture latency %.2f, max VI timer overshoot %.2f, max VI lock wait %.2f",
+                     ms(maxima[EfbCaptureMax]), ms(maxima[ViTimerLateMax]), ms(maxima[ViLockWaitMax]));
     }
     std::fputc('\n', out);
 }
@@ -115,6 +115,8 @@ void Recorder::add(const Frame& frame) {
         t.late += late;
         t.efbCaptures += frame.efbCaptures;
         t.pipelineWaits += frame.pipelineWaits;
+        t.textureUploads += frame.textureUploads;
+        t.unfocused += frame.unfocused;
         for (unsigned part = 0; part < PartCount; part++) {
             t.allSum[part] += frame.us[part];
             if (late) {
@@ -165,7 +167,7 @@ void Recorder::writeWindow(std::FILE* out) {
     double sorted[kWindow];
     std::uint64_t sums[PartCount] = {};
     std::uint32_t maxima[PartCount] = {};
-    unsigned over16 = 0, over33 = 0, late = 0, efb = 0, pipelines = 0;
+    unsigned over16 = 0, over33 = 0, late = 0, efb = 0, pipelines = 0, textures = 0, unfocused = 0;
     unsigned phases[kPhaseCount] = {};
     for (unsigned i = 0; i < mWindowCount; i++) {
         const Frame& frame = mWindow[i];
@@ -175,6 +177,8 @@ void Recorder::writeWindow(std::FILE* out) {
         late += frame.intervalMs > kLateMs;
         efb += frame.efbCaptures;
         pipelines += frame.pipelineWaits;
+        textures += frame.textureUploads;
+        unfocused += frame.unfocused;
         ++phases[static_cast<unsigned>(frame.phase)];
         for (unsigned part = 0; part < PartCount; part++) {
             sums[part] += frame.us[part];
@@ -197,7 +201,8 @@ void Recorder::writeWindow(std::FILE* out) {
             std::fprintf(out, " %s %u", kPhaseNames[phase], phases[phase]);
         }
     }
-    std::fprintf(out, "; EFB captures %u, blocking pipeline resolves %u\n", efb, pipelines);
+    std::fprintf(out, "; unfocused %u; EFB captures %u, blocking pipeline resolves %u, texture uploads %u\n", unfocused, efb,
+                 pipelines, textures);
     std::fputs("    mean ms per frame:\n", out);
     writeParts(out, sums, mWindowCount, maxima);
     mWindowCount = 0;
@@ -209,27 +214,27 @@ void Recorder::writeSummary(std::FILE* out) const {
                  "Petari frame times: %llu intervals between frame seams (game-thread wall time; presentation "
                  "and scan-out are not observed). late = over %.2f ms (1.25 VI fields)\n",
                  static_cast<unsigned long long>(all.frames), kLateMs);
-    std::fprintf(out, "  %-9s %8s %9s %7s %7s %7s %9s %8s %8s %8s %9s\n", "phase", "frames", "seconds", "p50", "p95",
-                 "p99", "max", ">16.7ms", ">33.3ms", "late", "late run");
-    for (unsigned index : {0u, 1u, 2u, 3u, 4u, kTotal}) {
+    std::fprintf(out, "  %-9s %8s %9s %7s %7s %7s %9s %8s %8s %8s %9s %9s\n", "phase", "frames", "seconds", "p50", "p95",
+                 "p99", "max", ">16.7ms", ">33.3ms", "late", "late run", "unfocused");
+    for (unsigned index : {0u, 1u, 2u, 3u, kTotal}) {
         const Totals& t = mTotals[index];
         if (t.frames == 0 && index != kTotal) {
             continue;
         }
-        std::fprintf(out, "  %-9s %8llu %9.2f %7.2f %7.2f %7.2f %9.2f %8llu %8llu %8llu %9llu\n", kPhaseNames[index],
+        std::fprintf(out, "  %-9s %8llu %9.2f %7.2f %7.2f %7.2f %9.2f %8llu %8llu %8llu %9llu %9llu\n", kPhaseNames[index],
                      static_cast<unsigned long long>(t.frames), t.sumMs / 1000.0, percentile(index, 50),
                      percentile(index, 95), percentile(index, 99), t.maxMs, static_cast<unsigned long long>(t.over16),
                      static_cast<unsigned long long>(t.over33), static_cast<unsigned long long>(t.late),
-                     static_cast<unsigned long long>(t.longestLateRun));
+                     static_cast<unsigned long long>(t.longestLateRun), static_cast<unsigned long long>(t.unfocused));
     }
-    for (unsigned index : {0u, 1u, 2u, 3u, 4u, kTotal}) {
+    for (unsigned index : {0u, 1u, 2u, 3u, kTotal}) {
         const Totals& t = mTotals[index];
         if (t.frames == 0) {
             continue;
         }
-        std::fprintf(out, "  %s: %llu EFB captures, %llu blocking pipeline resolves; mean ms per frame:\n",
+        std::fprintf(out, "  %s: %llu EFB captures, %llu blocking pipeline resolves, %llu texture uploads; mean ms per frame:\n",
                      kPhaseNames[index], static_cast<unsigned long long>(t.efbCaptures),
-                     static_cast<unsigned long long>(t.pipelineWaits));
+                     static_cast<unsigned long long>(t.pipelineWaits), static_cast<unsigned long long>(t.textureUploads));
         writeParts(out, t.allSum, t.frames, nullptr);
         if (t.late != 0) {
             std::fprintf(out, "    late frames only (%llu):\n", static_cast<unsigned long long>(t.late));
@@ -239,9 +244,9 @@ void Recorder::writeSummary(std::FILE* out) const {
     std::fputs("  worst frames (ms):\n", out);
     for (unsigned i = 0; i < mWorstCount; i++) {
         const Frame& f = mWorst[i];
-        std::fprintf(out, "    frame %llu %s %.2f: EFB captures %u, pipeline resolves %u\n",
-                     static_cast<unsigned long long>(f.index), phaseName(f.phase), f.intervalMs, f.efbCaptures,
-                     f.pipelineWaits);
+        std::fprintf(out, "    frame %llu %s%s %.2f: EFB captures %u, pipeline resolves %u, texture uploads %u\n",
+                     static_cast<unsigned long long>(f.index), phaseName(f.phase), f.unfocused ? " (unfocused)" : "",
+                     f.intervalMs, f.efbCaptures, f.pipelineWaits, f.textureUploads);
         std::uint64_t sums[PartCount];
         std::copy(f.us, f.us + PartCount, sums);
         writeParts(out, sums, 1, f.us);
@@ -257,7 +262,7 @@ bool Recorder::writeCsv(const char* path) const {
     if (file == nullptr) {
         return false;
     }
-    std::fputs("frame,phase,interval_ms,efb_captures,pipeline_resolves", file);
+    std::fputs("frame,phase,unfocused,interval_ms,efb_captures,pipeline_resolves,texture_uploads", file);
     for (unsigned part = 0; part < PartCount; part++) {
         std::fprintf(file, ",%s_ms", kPartNames[part]);
     }
@@ -266,8 +271,8 @@ bool Recorder::writeCsv(const char* path) const {
     const std::size_t first = mFrames > mRing.size() ? mRingNext : 0;
     for (std::size_t i = 0; i < kept; i++) {
         const Frame& f = mRing[(first + i) % mRing.size()];
-        std::fprintf(file, "%llu,%s,%.3f,%u,%u", static_cast<unsigned long long>(f.index), phaseName(f.phase),
-                     f.intervalMs, f.efbCaptures, f.pipelineWaits);
+        std::fprintf(file, "%llu,%s,%d,%.3f,%u,%u,%u", static_cast<unsigned long long>(f.index), phaseName(f.phase),
+                     f.unfocused ? 1 : 0, f.intervalMs, f.efbCaptures, f.pipelineWaits, f.textureUploads);
         for (unsigned part = 0; part < PartCount; part++) {
             std::fprintf(file, ",%.3f", ms(f.us[part]));
         }

@@ -4,6 +4,7 @@
 #include <revolution/dvd.h>
 #include <revolution/os.h>
 
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -418,7 +419,7 @@ void testAlarmsAndSleep() {
     OSResumeThread(&waiter.thread);  // runs and blocks on the queue
     OSSetAlarm(&alarm, OSMillisecondsToTicks(10), alarmHandler);
     bool sawPreemption = false;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (std::chrono::steady_clock::now() < deadline) {
         BOOL e = OSDisableInterrupts();
         OSRestoreInterrupts(e);
@@ -939,7 +940,253 @@ void testTryHostBlocking() {
     OSJoinThread(&spinner, nullptr);
 }
 
+// The baton monitor: an OS thread holding the CPU that blocks in a host lock
+// (what write_data_grow did behind the FIFO processor) is reported with its
+// site; the same wait with the CPU released, or a short one, is not.
+std::mutex gHostLock;
+
+__attribute__((noinline)) void waitForHostLockHoldingCpu() {
+    std::lock_guard<std::mutex> guard(gHostLock);
+    asm volatile("" ::: "memory");
+}
+
+bool hasSite(const PetariNative::Platform::OS::BatonBlockStats& stats, const char* part) {
+    for (const std::string& site : stats.sites) {
+        if (site.find(part) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Holds gHostLock on a host thread for `ms` while `wait` runs on this OS thread.
+template <class Wait>
+void contend(int ms, Wait wait) {
+    std::atomic<bool> held{false};
+    std::thread host([&] {
+        std::lock_guard<std::mutex> guard(gHostLock);
+        held = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+    });
+    while (!held.load()) {
+        std::this_thread::yield();
+    }
+    wait();
+    host.join();
+}
+
+PetariNative::Platform::OS::BatonBlockStats settledBlockStats() {
+    // The monitor finishes a stretch at its next poll (every 2 ms). Sleeping
+    // with the CPU would itself be a host wait while holding it.
+    petari_os_begin_host_blocking();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    petari_os_end_host_blocking();
+    return PetariNative::Platform::OS::batonBlockStats();
+}
+
+void testBatonMonitor() {
+    namespace OSI = PetariNative::Platform::OS;
+    OSI::setBatonBlockThresholdMs(20.0);
+    const auto before = settledBlockStats();
+
+    contend(250, [] { waitForHostLockHoldingCpu(); });
+    const auto blocked = settledBlockStats();
+    check(blocked.stretches == before.stretches + 1, "a host wait while holding the CPU is counted");
+    check(blocked.maxMs >= 150.0, "with its length");
+    check(hasSite(blocked, "waitForHostLockHoldingCpu"), "and its site in the executable");
+    check(hasSite(blocked, "[waiting in __psynch_mutexwait"), "and the host primitive it waits in");
+
+    contend(250, [] {
+        petari_os_begin_host_blocking();
+        waitForHostLockHoldingCpu();
+        petari_os_end_host_blocking();
+    });
+    check(settledBlockStats().stretches == blocked.stretches, "the same wait with the CPU released is not counted");
+
+    contend(5, [] { waitForHostLockHoldingCpu(); });
+    check(settledBlockStats().stretches == blocked.stretches, "a wait shorter than the threshold is not counted");
+}
+
+// Tests fork (aborts()) while the monitor may be printing a stretch, holding
+// stderr's lock; a child that then touches stderr must not hang. A
+// higher-priority OS thread keeps blocking in a host lock while holding the
+// CPU, the monitor logs every stretch, and this thread forks children that
+// reopen and write stderr, with the CPU released.
+std::atomic<bool> gStopBlocker{false};
+std::atomic<int> gBlockerLoops{0};
+std::mutex gToggledLock;
+void* blockerThread(void*) {
+    while (!gStopBlocker.load()) {
+        ++gBlockerLoops;
+        { std::lock_guard<std::mutex> guard(gToggledLock); }  // blocks while the toggler holds it
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(4);
+        while (std::chrono::steady_clock::now() < until) {  // game code (runs, never blocks)
+        }
+    }
+    return nullptr;
+}
+
+void testMonitorForkSafety() {
+    namespace OSI = PetariNative::Platform::OS;
+    OSI::setBatonBlockThresholdMs(1.0);
+    OSI::setBatonBlockLogAll(true);
+    gStopBlocker = false;
+    std::thread toggler([] {
+        while (!gStopBlocker.load()) {
+            {
+                std::lock_guard<std::mutex> guard(gToggledLock);
+                std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(4));  // the blocker runs (spins)
+        }
+    });
+    static OSThread blocker;
+    alignas(32) static u8 stack[0x4000];
+    OSCreateThread(&blocker, blockerThread, nullptr, stack + sizeof(stack), sizeof(stack), 10, 0);
+    const auto logged = OSI::batonBlockStats().stretches;
+    petari_os_begin_host_blocking();  // the blocker holds the CPU from here
+    OSResumeThread(&blocker);
+    int hung = 0, forks = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    for (int i = 0; hung == 0 && OSI::batonBlockStats().stretches < logged + 15 &&
+                    std::chrono::steady_clock::now() < deadline;
+         ++i, ++forks) {
+        std::fflush(nullptr);
+        const pid_t pid = ::fork();
+        if (pid == 0) {
+            std::freopen("/dev/null", "w", stderr);
+            std::fprintf(stderr, "child %d\n", i);
+            ::_exit(0);
+        }
+        int status = 0;
+        pid_t done = 0;
+        for (int waited = 0; waited < 5000 && (done = ::waitpid(pid, &status, WNOHANG)) == 0; ++waited) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (done == 0) {
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, &status, 0);
+            ++hung;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));  // the monitor logs meanwhile
+    }
+    const auto after = OSI::batonBlockStats().stretches;
+    gStopBlocker = true;
+    toggler.join();
+    petari_os_end_host_blocking();
+    OSJoinThread(&blocker, nullptr);
+    OSI::setBatonBlockLogAll(false);
+    OSI::setBatonBlockThresholdMs(20.0);
+    std::printf("monitor fork safety: %d forks, %llu stretches logged meanwhile\n", forks,
+                static_cast<unsigned long long>(after - logged));
+    check(after >= logged + 5, "the monitor was logging stretches throughout");
+    check(hung == 0, "children forked while the monitor logs never hang on stderr");
+}
+
 }  // namespace
+
+// ---- Forced preemption of busy-waits (observatory Good Egg hang) ----
+// GameScene::init waits for scenario wave data with an empty loop. The ARAM
+// stream thread that finishes the load is made ready by a DVD interrupt while
+// the loop's lower-priority thread holds the CPU. With no OS call in the loop
+// the pending preemption was never delivered: the load, and the game, hung.
+// The functions below are at file scope with game-style names, as the
+// decompiled game's are (the monitor preempts only inside game code).
+std::atomic<bool> gWaveDataLoaded{false};
+std::atomic<bool> gBusyWaitDone{false};
+std::atomic<bool> gSpinning{false};  // the loop runs (its host thread is executing it)
+OSMessageQueue gLoaderQueue;
+OSMessage gLoaderSlot;
+
+void* GameStyleBusyWait(void*) {
+    gSpinning = true;
+    while (!gWaveDataLoaded.load(std::memory_order_relaxed)) {
+    }
+    gBusyWaitDone = true;
+    return nullptr;
+}
+
+void* GameStyleLoader(void*) {
+    OSMessage msg;
+    OSReceiveMessage(&gLoaderQueue, &msg, OS_MESSAGE_BLOCK);  // DVD completion
+    gWaveDataLoaded = true;
+    return nullptr;
+}
+
+namespace PetariNative::PreemptionTest {
+std::atomic<bool> gRelease{false};
+// Host code spinning: never preempted (it could hold host locks).
+void* HostSpin(void*) {
+    gSpinning = true;
+    while (!gRelease.load(std::memory_order_relaxed)) {
+    }
+    return nullptr;
+}
+}  // namespace PetariNative::PreemptionTest
+
+// Waits (with the CPU released) until `done`, or fails after `ms`: a hung
+// thread cannot be joined.
+template <class Done>
+bool waitReleased(Done done, int ms) {
+    for (int i = 0; i < ms && !done(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return done();
+}
+
+void testForcedPreemption() {
+    namespace OSI = PetariNative::Platform::OS;
+    const auto before = OSI::batonBlockStats();
+    OSInitMessageQueue(&gLoaderQueue, &gLoaderSlot, 1);
+    static OSThread loader, poller;
+    alignas(32) static u8 loaderStack[0x4000], pollerStack[0x4000];
+    OSCreateThread(&loader, GameStyleLoader, nullptr, loaderStack + sizeof(loaderStack), sizeof(loaderStack), 8, 0);
+    OSResumeThread(&loader);  // runs at once and waits for its "DVD" message
+    OSCreateThread(&poller, GameStyleBusyWait, nullptr, pollerStack + sizeof(pollerStack), sizeof(pollerStack), 17, 0);
+    OSResumeThread(&poller);
+    gSpinning = false;
+    petari_os_begin_host_blocking();  // the poller (priority 17) takes the CPU and spins
+    check(waitReleased([] { return gSpinning.load(); }, 3000), "the poller is spinning");
+    std::thread dvdInterrupt([] { OSSendMessage(&gLoaderQueue, nullptr, OS_MESSAGE_NOBLOCK); });
+    dvdInterrupt.join();
+    if (!waitReleased([] { return gBusyWaitDone.load(); }, 3000)) {
+        std::fprintf(stderr, "FAIL: a busy-wait holding the CPU was never preempted for the ready loader (hang)\n");
+        std::fflush(stderr);
+        ::_exit(1);
+    }
+    petari_os_end_host_blocking();
+    OSJoinThread(&loader, nullptr);
+    OSJoinThread(&poller, nullptr);
+    const auto after = OSI::batonBlockStats();
+    check(after.forcedPreemptions == before.forcedPreemptions + 1, "the busy-wait was preempted once, at a safe point");
+
+    // The same spin in host code is left alone (and reported).
+    static OSThread spinner;
+    alignas(32) static u8 spinnerStack[0x4000];
+    OSInitMessageQueue(&gLoaderQueue, &gLoaderSlot, 1);
+    gWaveDataLoaded = false;
+    OSCreateThread(&loader, GameStyleLoader, nullptr, loaderStack + sizeof(loaderStack), sizeof(loaderStack), 8, 0);
+    OSResumeThread(&loader);
+    OSCreateThread(&spinner, PetariNative::PreemptionTest::HostSpin, nullptr, spinnerStack + sizeof(spinnerStack),
+                   sizeof(spinnerStack), 17, 0);
+    gSpinning = false;
+    OSResumeThread(&spinner);
+    petari_os_begin_host_blocking();
+    check(waitReleased([] { return gSpinning.load(); }, 3000), "the host spinner is spinning");
+    std::thread interrupt([] { OSSendMessage(&gLoaderQueue, nullptr, OS_MESSAGE_NOBLOCK); });
+    interrupt.join();
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    const bool loaderRanEarly = gWaveDataLoaded.load();
+    const auto refused = OSI::batonBlockStats();
+    PetariNative::PreemptionTest::gRelease = true;  // the spinner returns; its exit schedules the loader
+    const bool finished = waitReleased([] { return gWaveDataLoaded.load(); }, 3000);
+    petari_os_end_host_blocking();
+    check(finished, "the loader runs once the host spin ends");
+    OSJoinThread(&loader, nullptr);
+    OSJoinThread(&spinner, nullptr);
+    check(!loaderRanEarly && refused.forcedPreemptions == after.forcedPreemptions, "host code is never preempted");
+    check(refused.unsafePreemptions > after.unsafePreemptions, "and the refusal is counted");
+}
 
 int main() {
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -958,6 +1205,9 @@ int main() {
     testCache();
     testHostBlocking();
     testTryHostBlocking();
+    testBatonMonitor();
+    testMonitorForkSafety();
+    testForcedPreemption();
     testDispatchBeforeWake();
     testHolderQosOverride();
     OSReport("platform OS tests passed (%d checks)\n", checks);

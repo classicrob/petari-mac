@@ -12,10 +12,16 @@
 #include <revolution/sc.h>
 #include <revolution/vi.h>
 
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
 #include <pthread.h>
+#include <pthread/qos.h>
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <mutex>
 
 #include "os_internal.hpp"
 #include "petari/frame_telemetry.hpp"
@@ -142,36 +148,91 @@ void retraceInterrupt() {
     }
 }
 
+// Retrace timer thread scheduling: a Mach time-constraint (real-time) thread,
+// so a busy host does not delay retraces the way it delays ordinary threads.
+// A retrace does little work (callbacks, a latch, thread wake-ups).
+void makeRetraceThreadRealtime(Clock::duration period) {
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+    const auto ticks = [&](double ms) { return static_cast<std::uint32_t>(ms * 1e6 * timebase.denom / timebase.numer); };
+    thread_time_constraint_policy_data_t policy;
+    policy.period = ticks(std::chrono::duration<double, std::milli>(period).count());
+    policy.computation = ticks(0.5);
+    policy.constraint = ticks(2.0);
+    policy.preemptible = TRUE;
+    if (thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY,
+                          reinterpret_cast<thread_policy_t>(&policy), THREAD_TIME_CONSTRAINT_POLICY_COUNT) != KERN_SUCCESS) {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+}
+
+// Sleeps until an absolute steady-clock deadline without holding any lock.
+void sleepUntil(Clock::time_point deadline) {
+    static const mach_timebase_info_data_t timebase = [] {
+        mach_timebase_info_data_t info;
+        mach_timebase_info(&info);
+        return info;
+    }();
+    const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - Clock::now()).count();
+    if (remaining <= 0) {
+        return;
+    }
+    const std::uint64_t ticks = static_cast<std::uint64_t>(remaining) * timebase.denom / timebase.numer;
+    mach_wait_until(mach_absolute_time() + ticks);
+}
+
+Clock::duration fieldPeriodLocked() {
+    return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / VIN::fieldRateFor(gLatched.tvMode)));
+}
+
+// The retrace clock. Waits for each deadline with no lock held, then takes
+// the interrupt lock (as the hardware interrupt waits while interrupts are
+// disabled) and delivers one retrace. A stop request is seen at the next
+// deadline, within one field.
 void* viThreadMain(void*) {
+    namespace Telemetry = PetariNative::FrameTelemetry;
     OSDisableInterrupts();
-    std::unique_lock<std::mutex> lock(OS::interruptMutex(), std::adopt_lock);
+    Clock::duration period = fieldPeriodLocked();
+    OSEnableInterrupts();
+    // PETARI_VI_LEGACY_TIMER=1: default scheduling and a condition-variable
+    // timed wait, as before, for A/B measurement.
+    const char* legacyValue = std::getenv("PETARI_VI_LEGACY_TIMER");
+    const bool legacy = legacyValue != nullptr && legacyValue[0] != '\0' && legacyValue[0] != '0';
+    if (!legacy) {
+        makeRetraceThreadRealtime(period);
+    }
     auto next = Clock::now();
-    while (!gStopRequested) {
-        const auto period = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / VIN::fieldRateFor(gLatched.tvMode)));
+    while (true) {
         next += period;
-        viCv().wait_until(lock, next, [] { return gStopRequested; });
+        if (legacy) {
+            std::mutex sleepLock;
+            std::condition_variable sleeper;
+            std::unique_lock<std::mutex> lock(sleepLock);
+            sleeper.wait_until(lock, next, [] { return false; });
+        } else {
+            sleepUntil(next);
+        }
+        const auto woke = Clock::now();
+        if (woke > next) {
+            Telemetry::add(Telemetry::ViTimerLate, std::chrono::duration_cast<std::chrono::nanoseconds>(woke - next).count());
+        }
+        OSDisableInterrupts();
+        Telemetry::add(Telemetry::ViInterruptLockWait,
+                       std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - woke).count());
         if (gStopRequested) {
+            OSEnableInterrupts();
             break;
         }
         // One interrupt per wake-up, like the hardware. After a long host
         // stall the timeline restarts instead of firing a burst.
-        const auto now = Clock::now();
-        if (now > next) {
-            PetariNative::FrameTelemetry::add(PetariNative::FrameTelemetry::ViTimerLate,
-                std::chrono::duration_cast<std::chrono::nanoseconds>(now - next).count());
-        }
-        if (now - next > 4 * period) {
-            next = now;
+        if (woke - next > 4 * period) {
+            next = woke;
         }
         retraceInterrupt();
-        // Interrupt return: deliver any reschedule the handlers requested.
-        lock.release();
+        period = fieldPeriodLocked();
+        // Interrupt return: delivers any reschedule the handlers requested.
         OSEnableInterrupts();
-        OSDisableInterrupts();
-        lock = std::unique_lock<std::mutex>(OS::interruptMutex(), std::adopt_lock);
     }
-    lock.release();
-    OSEnableInterrupts();
     return nullptr;
 }
 

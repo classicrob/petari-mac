@@ -59,8 +59,9 @@ void abortApplied(std::uint64_t processed, std::uint64_t written);
 // ticket (1, 2, ... in stream order). The hook runs on the processor thread
 // right after the token is processed and before any later command, with no
 // platform lock held; the renderer captures the EFB there. That token's
-// interrupt, and every event after it, is delivered only after
-// snapshotReady(ticket), from any thread. The processor is never blocked by
+// interrupt, and every later token interrupt, is delivered only after
+// snapshotReady(ticket), from any thread; draw-done and breakpoint interrupts
+// are not held back by it (see waitTokensDelivered). The processor is never blocked by
 // an incomplete ticket. Every ticket must eventually be completed, including
 // across GXAbortFrame (a capture may complete as "unavailable").
 //
@@ -92,6 +93,13 @@ void clearBreakpoint();                      // GXDisableBreakPt
 // GXSetDrawDone: call after writing the draw-done BP; returns the draw-done
 // count to wait for.
 std::uint64_t noteDrawDoneIssued();
+// Frame boundary (GameSystem::frameLoop, after the retrace wait): waits until
+// every draw-sync token reported so far has been delivered, so the next
+// frame's game code sees all of the previous frame's token callbacks (draw
+// done no longer waits for token-time EFB captures). OS threads give up the
+// CPU while waiting. Reports after 1 s; gives up after kTokenWaitGiveUpSeconds.
+void waitTokensDelivered();
+constexpr int kTokenWaitGiveUpSeconds = 10;
 // GXDrawDone/GXWaitDrawDone: waits until that many draw-done interrupts have
 // been delivered. OS threads sleep (other game threads run); host threads wait
 // on a condition variable. Aborts if called from interrupt context.

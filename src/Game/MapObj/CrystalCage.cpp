@@ -4,6 +4,7 @@
 #include "Game/LiveActor/Nerve.hpp"
 #include "Game/MapObj/DummyDisplayModel.hpp"
 #include "Game/Util.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include "math_types.hpp"
 #include <JSystem/JGeometry/TUtil.hpp>
 #include <JSystem/JMath.hpp>
@@ -292,6 +293,9 @@ void CrystalCage::tryOnSwitchDead() {
 }
 
 void CrystalCage::exeWait() {
+#ifdef PETARI_NATIVE
+    MR::Native::publishActor("CrystalCage", mPosition, -mGravity, 0, PETARI_ACTOR_READY);
+#endif
     if (_C8 > 0) {
         _C8--;
     }

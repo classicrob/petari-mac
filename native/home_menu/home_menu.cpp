@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <mutex>
 
 namespace PetariNative::HomeMenu {
@@ -19,10 +20,24 @@ constexpr float kItemTop = -0.2f;
 constexpr float kItemHeight = 0.2f;
 constexpr float kItemSpacing = 0.26f;
 
-constexpr const char* kListLabels[] = {"Resume", "Restart from Title", "Quit"};
+// The Controls page: a larger panel, the lines, and Back at the bottom.
+constexpr float kControlsHalfWidth = 0.86f;
+constexpr float kControlsTop = -0.92f;
+constexpr float kControlsTitleY = -0.82f;
+constexpr float kControlsMessageY = -0.73f;
+constexpr float kControlsLinesTop = -0.66f;
+constexpr float kControlsLinesBottom = 0.62f;
+constexpr float kControlsLinesHalfWidth = 0.8f;
+constexpr float kControlsBackTop = 0.68f;
+constexpr float kControlsBackHeight = 0.15f;
+constexpr float kControlsBackHalfWidth = 0.2f;
+
+constexpr const char* kListLabels[] = {"Resume", "Controls", "Restart from Title", "Quit"};
+constexpr int kListCount = 4;
 constexpr int kListResume = 0;
-constexpr int kListRestart = 1;
-constexpr int kListQuit = 2;
+constexpr int kListControls = 1;
+constexpr int kListRestart = 2;
+constexpr int kListQuit = 3;
 constexpr int kConfirmAccept = 0;
 constexpr int kConfirmCancel = 1;
 
@@ -102,6 +117,7 @@ void Menu::update(const FrameInput& input) {
         return;
     case Phase::List:
     case Phase::Confirm:
+    case Phase::Controls:
         break;
     }
 
@@ -157,11 +173,22 @@ void Menu::update(const FrameInput& input) {
     }
 }
 
+void Menu::setControls(const ControlsEntry* entries, int count) {
+    mControlCount = std::clamp(count, 0, kMaxControls);
+    for (int i = 0; i < mControlCount; i++) {
+        mControls[i] = entries[i];
+        // Always terminated, even if the caller filled every byte.
+        mControls[i].action[sizeof(mControls[i].action) - 1] = '\0';
+        mControls[i].inputs[sizeof(mControls[i].inputs) - 1] = '\0';
+    }
+}
+
 void Menu::startBlackOut() {
     switch (mPhase) {
     case Phase::Opening:
     case Phase::List:
     case Phase::Confirm:
+    case Phase::Controls:
     case Phase::Closing:
         blackOut(Selection::Restart);
         break;
@@ -188,6 +215,7 @@ View Menu::view() const {
         break;
     case Phase::List:
     case Phase::Confirm:
+    case Phase::Controls:
         view.panelOpacity = 1.0f;
         break;
     case Phase::Closing:
@@ -204,10 +232,21 @@ View Menu::view() const {
     const float ax = adjustX();
 
     const bool confirm = mConfirming != Selection::None;
-    if (!confirm) {
+    const bool controls = mPhase == Phase::Controls;
+    if (controls) {
+        view.title = "Controls";
+        view.message = "Change them in controls.txt in the game's user folder.";
+        view.items[0].label = "Back";
+        view.lineCount = mControlCount;
+        for (int i = 0; i < mControlCount; i++) {
+            view.lines[i] = mControls[i];
+        }
+        view.linesArea = {-kControlsLinesHalfWidth / ax, kControlsLinesTop, kControlsLinesHalfWidth / ax,
+                          kControlsLinesBottom};
+    } else if (!confirm) {
         view.title = "Super Mario Galaxy";
         view.message = "Paused";
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < kListCount; i++) {
             view.items[i].label = kListLabels[i];
         }
     } else {
@@ -218,8 +257,18 @@ View Menu::view() const {
         view.items[kConfirmCancel].label = "Cancel";
     }
     view.itemCount = itemCount();
-    view.panel = {-kPanelHalfWidth / ax, kPanelTop, kPanelHalfWidth / ax,
-                  itemRect(view.itemCount - 1).y1 + kPanelBottomMargin};
+    if (controls) {
+        view.panel = {-kControlsHalfWidth / ax, kControlsTop, kControlsHalfWidth / ax,
+                      itemRect(0).y1 + kPanelBottomMargin};
+        view.titleY = kControlsTitleY;
+        view.messageY = kControlsMessageY;
+    } else {
+        view.panel = {-kPanelHalfWidth / ax, kPanelTop, kPanelHalfWidth / ax,
+                      itemRect(view.itemCount - 1).y1 + kPanelBottomMargin};
+        const float firstItemTop = itemRect(0).y0;
+        view.titleY = kPanelTop + (firstItemTop - kPanelTop) * 0.33f;
+        view.messageY = kPanelTop + (firstItemTop - kPanelTop) * 0.66f;
+    }
     for (int i = 0; i < view.itemCount; i++) {
         view.items[i].rect = itemRect(i);
         view.items[i].focused = i == mFocus;
@@ -228,11 +277,18 @@ View Menu::view() const {
 }
 
 int Menu::itemCount() const {
-    return mConfirming != Selection::None ? 2 : 3;
+    if (mPhase == Phase::Controls) {
+        return 1;
+    }
+    return mConfirming != Selection::None ? 2 : kListCount;
 }
 
 Rect Menu::itemRect(int index) const {
     const float ax = adjustX();
+    if (mPhase == Phase::Controls) {
+        return {-kControlsBackHalfWidth / ax, kControlsBackTop, kControlsBackHalfWidth / ax,
+                kControlsBackTop + kControlsBackHeight};
+    }
     const float top = kItemTop + kItemSpacing * static_cast<float>(index);
     return {-kItemHalfWidth / ax, top, kItemHalfWidth / ax, top + kItemHeight};
 }
@@ -279,6 +335,12 @@ void Menu::activate(int index) {
             play(Sound::ReturnApp);
             close();
             break;
+        case kListControls:
+            play(Sound::Select);
+            mPhase = Phase::Controls;
+            mFocus = 0;
+            mRepeatDir = 0;
+            break;
         case kListRestart:
         case kListQuit:
             play(Sound::Select);
@@ -288,6 +350,11 @@ void Menu::activate(int index) {
             mRepeatDir = 0;
             break;
         }
+    } else if (mPhase == Phase::Controls) {
+        play(Sound::Cancel);
+        mPhase = Phase::List;
+        mFocus = kListControls;
+        mRepeatDir = 0;
     } else if (mPhase == Phase::Confirm) {
         if (index == kConfirmAccept) {
             play(mConfirming == Selection::Restart ? Sound::ResetApp : Sound::GotoMenu);
@@ -305,6 +372,8 @@ void Menu::activate(int index) {
 void Menu::back() {
     if (mPhase == Phase::Confirm) {
         activate(kConfirmCancel);
+    } else if (mPhase == Phase::Controls) {
+        activate(0);
     } else {
         play(Sound::ReturnApp);
         close();

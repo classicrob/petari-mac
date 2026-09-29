@@ -19,6 +19,7 @@
 #include "Game/Util/MathUtil.hpp"
 #include "Game/Util/ModelUtil.hpp"
 #include "Game/Util/MtxUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include "Game/Util/NerveUtil.hpp"
 #include "Game/Util/ObjUtil.hpp"
 #include "Game/Util/PlayerUtil.hpp"
@@ -272,6 +273,20 @@ void SpinDriver::makeActorDead() {
 }
 
 void SpinDriver::control() {
+#ifdef PETARI_NATIVE
+    {
+        s32 state = 0;
+        if (isNerve(GET_NERVE(SpinDriver, SpinDriverNrvWait))) {
+            state = 1;
+        } else if (isNerve(GET_NERVE(SpinDriver, SpinDriverNrvCapture)) || isNerve(GET_NERVE(SpinDriver, SpinDriverNrvShootStart))) {
+            state = 2;
+        } else if (isNerve(GET_NERVE(SpinDriver, SpinDriverNrvShoot))) {
+            state = 3;
+        }
+        MR::Native::publishActor("SlingStar", mPosition, _E8, state,
+                                 (state == 1 ? PETARI_ACTOR_READY : 0u) | (_8C != nullptr ? PETARI_ACTOR_BOUND : 0u));
+    }
+#endif
     if (!_141 && mPosition.squared(*MR::getPlayerPos()) > 122500.0f) {
         _141 = true;
     }

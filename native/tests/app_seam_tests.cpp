@@ -197,6 +197,16 @@ bool SDL_GetWindowSize(SDL_Window*, int* w, int* h) {
     *h = windowHeight;
     return true;
 }
+// Smoke result gates in the seam; these tests never trip them.
+std::uint64_t petari_layout_missing_reference_count() {
+    return 0;
+}
+std::uint64_t petari_sound_missing_reference_count() {
+    return 0;
+}
+std::uint64_t petari_gx_pipeline_manifest_failure_count() {
+    return 0;
+}
 }
 
 namespace {
@@ -380,7 +390,7 @@ void testFrameStats() {
     add(21.0, FrameStats::Phase::Loading);  // the run continues across phases for the total
     add(16.68, FrameStats::Phase::Gameplay);
     add(1500.0, FrameStats::Phase::Loading);
-    add(9000.0, FrameStats::Phase::Unfocused);  // past the histogram: max still exact
+    add(9000.0, FrameStats::Phase::Menu);  // past the histogram: max still exact
 
     const auto& total = stats.totals(FrameStats::kPhaseCount);
     const auto& gameplay = stats.totals(static_cast<unsigned>(FrameStats::Phase::Gameplay));
@@ -406,9 +416,9 @@ void testFrameStats() {
         lines.push_back(line);
     }
     std::remove(csv.c_str());
-    check(lines.size() == 5 && lines[0].rfind("frame,phase,interval_ms,efb_captures,pipeline_resolves,seam_compose_ms", 0) == 0,
+    check(lines.size() == 5 && lines[0].rfind("frame,phase,unfocused,interval_ms,efb_captures,pipeline_resolves,texture_uploads,seam_compose_ms", 0) == 0,
           "CSV header and the ring's last 4 frames");
-    check(lines[1].rfind("99,loading,21.000,", 0) == 0 && lines[4].rfind("102,unfocused,9000.000,", 0) == 0,
+    check(lines[1].rfind("99,loading,0,21.000,", 0) == 0 && lines[4].rfind("102,menu,0,9000.000,", 0) == 0,
           "CSV rows oldest first");
     // Summaries print without crashing on these values.
     std::FILE* sink = std::fopen("/dev/null", "w");
@@ -467,13 +477,17 @@ void testSeamTiming() {
     AuroraEvent lostEvent{};
     lostEvent.type = AURORA_SDL_EVENT;
     lostEvent.sdl = lost;
-    const unsigned unfocused = static_cast<unsigned>(FrameStats::Phase::Unfocused);
-    const auto unfocusedBefore = stats->totals(unfocused).frames;
+    // Focus is a flag beside the phase: automated runs play unfocused.
+    const auto unfocusedCount = [&] { return stats->totals(FrameStats::kPhaseCount).unfocused; };
+    const auto gameplayCount = [&] { return stats->totals(static_cast<unsigned>(FrameStats::Phase::Gameplay)).frames; };
+    const auto unfocusedBefore = unfocusedCount();
+    const auto gameplayBefore = gameplayCount();
     updates = {{lostEvent}};
     petari_host_frame_seam();  // the event arrives in this seam, inside the next frame
     petari_host_frame_seam();
     petari_host_frame_seam();
-    check(stats->totals(unfocused).frames == unfocusedBefore + 2, "frames with focus lost count as unfocused");
+    check(unfocusedCount() == unfocusedBefore + 2, "frames with focus lost are flagged unfocused");
+    check(gameplayCount() == gameplayBefore + 3, "every frame still counts in its phase, focused or not");
     SDL_Event gained{};
     gained.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
     AuroraEvent gainedEvent{};
@@ -484,7 +498,7 @@ void testSeamTiming() {
     petari_host_frame_seam();
     petari_host_frame_seam();
     // The frame that began in the seam where focus returned was unfocused at its start.
-    check(stats->totals(unfocused).frames == unfocusedBefore + 4,
+    check(unfocusedCount() == unfocusedBefore + 4,
           "frames stay unfocused through the one focus returned in; later ones are not");
 }
 

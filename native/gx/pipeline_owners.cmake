@@ -1,0 +1,21 @@
+foreach(_relative lib/dolphin/gx/GXVert.cpp lib/dolphin/gx/GXDispList.cpp lib/gx/command_processor.cpp)
+    get_filename_component(_kind "${_relative}" NAME)
+    set(_original "${aurora_SOURCE_DIR}/${_relative}")
+    if(_kind STREQUAL "command_processor.cpp")
+        set(_input "${CMAKE_CURRENT_BINARY_DIR}/sync/${_relative}")
+    else()
+        set(_input "${_original}")
+    endif()
+    set(_output "${CMAKE_CURRENT_BINARY_DIR}/pipeline-owners/${_relative}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/patch_pipeline_owners.py" "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_owner.hpp" "${_original}")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_pipeline_owners.py"
+        "${_input}" "${_output}" "${_kind}" COMMAND_ERROR_IS_FATAL ANY)
+    get_target_property(_sources aurora_gx SOURCES)
+    list(REMOVE_ITEM _sources "${_relative}" "${_original}" "${_input}")
+    list(APPEND _sources "${_output}")
+    set_property(TARGET aurora_gx PROPERTY SOURCES "${_sources}")
+    get_filename_component(_original_dir "${_original}" DIRECTORY)
+    set_source_files_properties("${_output}" TARGET_DIRECTORY aurora_gx PROPERTIES
+        COMPILE_OPTIONS "-iquote${_original_dir};-iquote${aurora_SOURCE_DIR}/lib")
+endforeach()

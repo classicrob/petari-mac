@@ -1,6 +1,7 @@
 #include <petari/audio_sdl.hpp>
 #include <petari/host_allocation.hpp>
 #include <petari/platform/audio.hpp>
+#include <petari/platform/os_host.hpp>
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_error.h>
@@ -232,6 +233,14 @@ void stop(void*) {
 }
 void start(std::uint32_t rate, void*) {
     PetariNative::HostAllocationScope host;
+    // Opening the CoreAudio device waits ~75 ms on SDL's device thread: do it
+    // with the OS CPU released when the calling game thread can release it.
+    struct CpuRelease {
+        const int released = petari_os_try_begin_host_blocking();
+        ~CpuRelease() {
+            if (released) petari_os_end_host_blocking();
+        }
+    } cpu;
     if (device) stop(nullptr);
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "SDL audio initialization failed: %s\n", SDL_GetError());

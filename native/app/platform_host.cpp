@@ -39,6 +39,7 @@ namespace {
 // the window, so no platform shutdowns (which join their threads) run here.
 void leave(const Platform::Power::Exit& exit, void*) {
     Seam::reportFrameStats();
+    petari_platform_report_diagnostics();
     std::fflush(stdout);
     std::fflush(stderr);
     if (exit.intent == Platform::Power::Intent::Restart) {
@@ -54,6 +55,7 @@ void leave(const Platform::Power::Exit& exit, void*) {
 void dumpHangState(const char* reason) {
     std::fprintf(stderr, "[hang] renderer: blocking pipeline wait %s\n", petari_gx_waiting_for_pipeline() ? "yes" : "no");
     petari_platform_dump_hang_state(reason);
+    petari_platform_report_diagnostics();
 }
 
 }  // namespace
@@ -123,6 +125,7 @@ void requestQuit() {
 
 void forceQuit() {
     Seam::reportFrameStats();
+    petari_platform_report_diagnostics();
     std::fputs("Petari: quitting immediately\n", stderr);
     std::fflush(stderr);
     std::_Exit(0);

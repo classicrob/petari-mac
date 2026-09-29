@@ -164,9 +164,10 @@ void testLifecycle() {
     }
     check(menu.phase() == HM::Phase::List, "list after the fade in");
     const HM::View list = menu.view();
-    check(list.itemCount == 3 && std::strcmp(list.items[0].label, "Resume") == 0 &&
-              std::strcmp(list.items[1].label, "Restart from Title") == 0 && std::strcmp(list.items[2].label, "Quit") == 0,
-          "list offers Resume, Restart from Title, Quit");
+    check(list.itemCount == 4 && std::strcmp(list.items[0].label, "Resume") == 0 &&
+              std::strcmp(list.items[1].label, "Controls") == 0 &&
+              std::strcmp(list.items[2].label, "Restart from Title") == 0 && std::strcmp(list.items[3].label, "Quit") == 0,
+          "list offers Resume, Controls, Restart from Title, Quit");
     check(list.items[0].focused && !list.items[1].focused, "Resume focused first");
 
     for (int i = 0; i < 300; i++) {
@@ -195,6 +196,7 @@ void testSelections() {
         HM::Menu menu = newMenu();
         openToList(menu);
         menu.update(press(Down));
+        menu.update(press(Down));
         if (quit) {
             menu.update(press(Down));
         }
@@ -208,7 +210,7 @@ void testSelections() {
         check(std::strcmp(confirm.items[0].label, quit ? "Quit" : "Restart") == 0, "confirm names the action");
         check(menu.focus() == 1, "Cancel focused by default");
         menu.update(press(A));
-        check(menu.phase() == HM::Phase::List && menu.focus() == (quit ? 2 : 1), "A on Cancel returns to the item");
+        check(menu.phase() == HM::Phase::List && menu.focus() == (quit ? 3 : 2), "A on Cancel returns to the item");
 
         menu.update(press(A));
         menu.update(press(Up));
@@ -238,10 +240,11 @@ void testCancellation() {
 
     openToList(menu);
     menu.update(press(Down));
+    menu.update(press(Down));
     menu.update(press(A));
     sounds.clear();
     menu.update(press(Plus | B));
-    check(menu.phase() == HM::Phase::List && menu.focus() == 1, "Escape in a confirmation goes back");
+    check(menu.phase() == HM::Phase::List && menu.focus() == 2, "Escape in a confirmation goes back");
     check(played(HM::Sound::Cancel), "cancel sound");
 
     menu.update(press(A));
@@ -261,7 +264,9 @@ void testCancellation() {
 
     openToList(menu);
     menu.update(press(Down));
+    menu.update(press(Down));
     menu.update(press(A));
+    check(menu.phase() == HM::Phase::Confirm, "at a confirmation");
     menu.update(pointer(0.95f, 0.95f, B));
     check(menu.phase() == HM::Phase::List, "a left click outside a confirmation cancels it");
 
@@ -298,6 +303,7 @@ void testBlackOut() {
         }
         if (at == HM::Phase::Confirm) {
             menu.update(press(Down));
+            menu.update(press(Down));
             menu.update(press(A));
         } else if (at == HM::Phase::Closing) {
             menu.update(press(A));
@@ -315,6 +321,7 @@ void testBlackOut() {
 
     // A reset during a Quit fade keeps its timing and becomes the reset result.
     openToList(menu);
+    menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(A));
@@ -359,18 +366,24 @@ void testFocusAndRepeat() {
         menu.update(hold(Up));
     }
     check(menu.focus() == 0, "repeat upward");
-    // Repeat interval, on the three-item list: Down press at 0, hold to 24 (1 -> 2 is the press+repeat).
+    // Repeat interval, on the four-item list: Down press at 0, hold to 24 (1 -> 2 is the press+repeat).
     openToList(menu);
     menu.update(press(Down));
     for (int i = 0; i < 24; i++) {
         menu.update(hold(Down));
     }
     check(menu.focus() == 2, "press + first repeat");
+    for (int i = 0; i < 5; i++) {
+        menu.update(hold(Down));
+    }
+    check(menu.focus() == 2, "no second repeat before 6 more frames");
+    menu.update(hold(Down));
+    check(menu.focus() == 3, "second repeat 6 frames later");
     sounds.clear();
     for (int i = 0; i < 12; i++) {
         menu.update(hold(Down));
     }
-    check(menu.focus() == 2 && sounds.empty(), "repeats stop at the end without sound");
+    check(menu.focus() == 3 && sounds.empty(), "repeats stop at the end without sound");
 
     // Interval, counted on the Up side: from item 2, press Up at 0 -> 1, repeat at 24 -> 0.
     openToList(menu);
@@ -410,26 +423,26 @@ void testFocusAndRepeat() {
     openToList(menu);
     const HM::View view = menu.view();
     float x, y;
-    center(view.items[2].rect, &x, &y);
+    center(view.items[3].rect, &x, &y);
     sounds.clear();
     menu.update(pointer(x, y));
-    check(menu.focus() == 2 && playedCount(HM::Sound::Focus) == 1, "pointer moving onto Quit focuses it");
+    check(menu.focus() == 3 && playedCount(HM::Sound::Focus) == 1, "pointer moving onto Quit focuses it");
     menu.update(pointer(x, y));
     check(playedCount(HM::Sound::Focus) == 1, "no sound while resting");
     HM::FrameInput up = pointer(x, y, Up);
     menu.update(up);
-    check(menu.focus() == 1, "keyboard moves the focus under a resting pointer");
+    check(menu.focus() == 2, "keyboard moves the focus under a resting pointer");
     menu.update(pointer(x, y));
-    check(menu.focus() == 1, "resting pointer does not steal the focus back");
+    check(menu.focus() == 2, "resting pointer does not steal the focus back");
     menu.update(pointer(x + 0.01f, y));
-    check(menu.focus() == 2, "moving the pointer takes the focus");
+    check(menu.focus() == 3, "moving the pointer takes the focus");
     menu.update(pointer(0.95f, 0.95f));
-    check(menu.focus() == 2, "leaving the items keeps the focus");
+    check(menu.focus() == 3, "leaving the items keeps the focus");
     menu.update(pointer(x, y, B));
     check(menu.phase() == HM::Phase::Confirm && menu.confirming() == HM::Selection::Quit, "left click on Quit");
 
     openToList(menu);
-    center(menu.view().items[1].rect, &x, &y);
+    center(menu.view().items[2].rect, &x, &y);
     menu.update(pointer(x, y));
     menu.update(pointer(0.95f, 0.95f));
     menu.update(press(A));
@@ -453,6 +466,91 @@ void testFocusAndRepeat() {
     check(std::fabs(menu.view().panel.x1 - narrow * 608.0f / 832.0f) < 1e-5f, "16:9 narrows the panel in pointer space");
     center(menu.view().items[0].rect, &x, &y);
     check(menu.view().items[0].rect.x1 < narrow, "items narrow too");
+}
+
+// Sixteen lines like the input layer's summary, the longest it writes.
+std::vector<HM::ControlsEntry> sampleControls(int count = 16) {
+    std::vector<HM::ControlsEntry> entries(count);
+    for (int i = 0; i < count; i++) {
+        std::snprintf(entries[i].action, sizeof(entries[i].action), "Tilt the remote by hand %d", i);
+        std::snprintf(entries[i].inputs, sizeof(entries[i].inputs), "Hold Tab + W A S D / Right mouse / Keypad %d", i);
+    }
+    return entries;
+}
+
+void testControlsPage() {
+    HM::Menu menu = newMenu();
+    const std::vector<HM::ControlsEntry> entries = sampleControls();
+    menu.setControls(entries.data(), static_cast<int>(entries.size()));
+    openToList(menu);
+    menu.update(press(Down));
+    sounds.clear();
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::Controls && played(HM::Sound::Select), "Controls opens its page");
+    HM::View view = menu.view();
+    check(std::strcmp(view.title, "Controls") == 0 && view.itemCount == 1 && std::strcmp(view.items[0].label, "Back") == 0 &&
+              view.items[0].focused,
+          "the page has a title and a focused Back");
+    check(view.lineCount == 16 && std::strcmp(view.lines[3].action, entries[3].action) == 0 &&
+              std::strcmp(view.lines[15].inputs, entries[15].inputs) == 0,
+          "the page shows the lines it was given, in order");
+    check(view.panel.y0 < view.titleY && view.titleY < view.messageY && view.messageY < view.linesArea.y0 &&
+              view.linesArea.y1 < view.items[0].rect.y0 && view.items[0].rect.y1 < view.panel.y1,
+          "title, message, lines, and Back stack inside the panel");
+    check(view.panel.y0 >= -1.0f && view.panel.y1 <= 1.0f && view.panel.x0 >= -1.0f && view.panel.x1 <= 1.0f,
+          "the page fits the image");
+
+    // Up and Down have nowhere to go; A, B, Plus and a click on Back return
+    // to the list with Controls focused; Home closes.
+    menu.update(press(Down));
+    menu.update(press(Up));
+    check(menu.phase() == HM::Phase::Controls && menu.focus() == 0, "Up and Down stay on Back");
+    sounds.clear();
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::List && menu.focus() == 1 && played(HM::Sound::Cancel), "A on Back returns");
+    menu.update(press(A));
+    menu.update(press(B));
+    check(menu.phase() == HM::Phase::List && menu.focus() == 1, "B returns");
+    menu.update(press(A));
+    menu.update(press(Plus));
+    check(menu.phase() == HM::Phase::List && menu.focus() == 1, "Escape returns");
+    menu.update(press(A));
+    float x, y;
+    center(menu.view().items[0].rect, &x, &y);
+    menu.update(pointer(x, y, B));
+    check(menu.phase() == HM::Phase::List, "a click on Back returns");
+    menu.update(press(A));
+    menu.update(press(Home));
+    check(menu.phase() == HM::Phase::Closing && framesUntilSelection(menu) == 10 &&
+              menu.selection() == HM::Selection::Resume,
+          "Home on the page resumes the game");
+
+    // Kept across opens; a reset during the page blacks out.
+    openToList(menu);
+    menu.update(press(Down));
+    menu.update(press(A));
+    check(menu.view().lineCount == 16, "lines kept across opens");
+    menu.startBlackOut();
+    check(menu.phase() == HM::Phase::BlackOut && framesUntilSelection(menu) == 30 &&
+              menu.selection() == HM::Selection::Restart,
+          "console reset from the page");
+
+    // At most kMaxControls lines; text always terminated.
+    std::vector<HM::ControlsEntry> many = sampleControls(HM::kMaxControls + 5);
+    std::memset(many[0].action, 'x', sizeof(many[0].action));
+    std::memset(many[0].inputs, 'y', sizeof(many[0].inputs));
+    HM::Menu full = newMenu();
+    full.setControls(many.data(), static_cast<int>(many.size()));
+    openToList(full);
+    full.update(press(Down));
+    full.update(press(A));
+    const HM::View fullView = full.view();
+    check(fullView.lineCount == HM::kMaxControls, "lines capped at kMaxControls");
+    check(std::strlen(fullView.lines[0].action) == sizeof(fullView.lines[0].action) - 1 &&
+              std::strlen(fullView.lines[0].inputs) == sizeof(fullView.lines[0].inputs) - 1,
+          "unterminated text is cut, not overrun");
+    full.setControls(nullptr, 0);
+    check(full.view().lineCount == 0, "lines can be cleared");
 }
 
 void setPad(KPADStatus* status, u32 holdBits, u32 trigBits) {
@@ -555,6 +653,7 @@ void testWrapper() {
         frame(0, 0);
     }
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
+    frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_A, WPAD_BUTTON_A);
     check(HM::instance().phase() == HM::Phase::Confirm, "Restart chosen through RSO::HBMCalc");
     frame(WPAD_BUTTON_UP, WPAD_BUTTON_UP);
@@ -583,6 +682,7 @@ void testWrapper() {
     for (int i = 0; i < 10; i++) {
         frame(0, 0);
     }
+    frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_A, WPAD_BUTTON_A);
@@ -675,6 +775,7 @@ void testImGuiOverlay() {
             confirm.setWidescreen(wide != 0);
             openToList(confirm);
             confirm.update(press(Down));
+            confirm.update(press(Down));
             if (quit) {
                 confirm.update(press(Down));
             }
@@ -694,6 +795,58 @@ void testImGuiOverlay() {
         }
     }
 
+    // The Controls page at the game's 640x480 and in a 16:9 image: every row's
+    // inputs text is drawn inside the panel and at least 8 pixels tall.
+    for (int wide = 0; wide < 2; wide++) {
+        HM::Menu page = newMenu();
+        page.setWidescreen(wide != 0);
+        const std::vector<HM::ControlsEntry> entries = sampleControls();
+        page.setControls(entries.data(), static_cast<int>(entries.size()));
+        openToList(page);
+        page.update(press(Down));
+        page.update(press(A));
+        HM::View view = page.view();
+        view.dimOpacity = 0.0f;
+        HM::publish(view);
+        const float w = wide ? 854.0f : 640.0f;
+        const float h = 480.0f;
+        ImGuiIO& pageIo = ImGui::GetIO();
+        pageIo.DisplaySize = ImVec2(1280.0f, 800.0f);
+        pageIo.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        HM::drawImGuiOverlay(0.0f, 0.0f, w, h);
+        ImGui::Render();
+        const float px0 = (view.panel.x0 + 1.0f) * 0.5f * w;
+        const float px1 = (view.panel.x1 + 1.0f) * 0.5f * w;
+        const float top = (view.linesArea.y0 + 1.0f) * 0.5f * h;
+        const float rowHeight = (view.linesArea.y1 - view.linesArea.y0) * 0.5f * h / static_cast<float>(view.lineCount);
+        std::vector<float> rowMin(view.lineCount, 1e9f);
+        std::vector<float> rowMax(view.lineCount, -1e9f);
+        bool inside = true;
+        const ImDrawData* data = ImGui::GetDrawData();
+        for (int i = 0; i < data->CmdListsCount; i++) {
+            for (const ImDrawVert& v : data->CmdLists[i]->VtxBuffer) {
+                const ImVec4 c = ImGui::ColorConvertU32ToFloat4(v.col);
+                if (!(c.x > 0.99f && std::fabs(c.y - 0.92f) < 0.01f && std::fabs(c.z - 0.55f) < 0.01f)) {
+                    continue;  // not the inputs text
+                }
+                inside = inside && v.pos.x >= px0 && v.pos.x <= px1;
+                const int row = static_cast<int>((v.pos.y - top) / rowHeight);
+                if (row >= 0 && row < view.lineCount) {
+                    rowMin[row] = std::fmin(rowMin[row], v.pos.y);
+                    rowMax[row] = std::fmax(rowMax[row], v.pos.y);
+                }
+            }
+        }
+        float smallest = 1e9f;
+        for (int row = 0; row < view.lineCount; row++) {
+            smallest = std::fmin(smallest, rowMax[row] - rowMin[row]);
+        }
+        check(inside, "controls text stays inside the panel");
+        check(smallest >= 8.0f, "controls text readable at 480 lines (" + std::to_string(smallest) + " px)");
+    }
+
+    menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(A));
     menu.update(press(Up));
@@ -729,6 +882,7 @@ int main() {
     testCancellation();
     testBlackOut();
     testFocusAndRepeat();
+    testControlsPage();
     testBridgeInput();
     testWrapper();
 #ifdef PETARI_HOME_MENU_TEST_IMGUI

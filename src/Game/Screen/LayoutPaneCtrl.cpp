@@ -1,3 +1,6 @@
+#ifdef PETARI_NATIVE
+#include <petari/asset_diagnostics.hpp>
+#endif
 #include "Game/Screen/LayoutPaneCtrl.hpp"
 #include "Game/Animation/LayoutAnmPlayer.hpp"
 #include "Game/Screen/LayoutManager.hpp"
@@ -27,6 +30,9 @@ void LayoutPaneCtrl::calcAnim() {
 }
 
 void LayoutPaneCtrl::start(const char* pAnimName, u32 layer) {
+#ifdef PETARI_NATIVE
+    if (!mPane || !getFrameCtrl(layer) || !mHost->getAnimTransform(pAnimName)) return;
+#endif
     LayoutAnmPlayer* pAnmPlayer = mAnmPlayerArray[layer];
 
     if (pAnmPlayer->mAnimTransform != nullptr) {
@@ -48,15 +54,25 @@ void LayoutPaneCtrl::start(const char* pAnimName, u32 layer) {
 }
 
 void LayoutPaneCtrl::stop(u32 layer) {
+#ifdef PETARI_NATIVE
+    if (!getFrameCtrl(layer)) return;
+#endif
     mAnmPlayerArray[layer]->stop();
 }
 
 bool LayoutPaneCtrl::isAnimStopped(u32 layer) const {
+#ifdef PETARI_NATIVE
+    if (!getFrameCtrl(layer)) return true;
+#endif
     return mAnmPlayerArray[layer]->isStop();
 }
 
 void LayoutPaneCtrl::reflectFollowPos() {
-    if (mFollowPos == nullptr) {
+    if (mFollowPos == nullptr
+#ifdef PETARI_NATIVE
+        || !mPane
+#endif
+    ) {
         return;
     }
 
@@ -108,6 +124,12 @@ void LayoutPaneCtrl::reflectFollowPos() {
 }
 
 J3DFrameCtrl* LayoutPaneCtrl::getFrameCtrl(u32 layer) const {
+#ifdef PETARI_NATIVE
+    if (layer >= mAnmPlayerArray.size() || !mAnmPlayerArray[layer]) {
+        PetariNative::reportMissingLayoutReference(mHost->mLayoutName, mPane ? mPane->mName : nullptr, "animation layer");
+        return nullptr;
+    }
+#endif
     return &mAnmPlayerArray[layer]->mFrameCtrl;
 }
 

@@ -36,6 +36,20 @@ void centeredText(ImDrawList* list, ImFont* font, float size, float maxWidth, Im
     list->AddText(font, size, ImVec2(center.x - extent.x * 0.5f, center.y - extent.y * 0.5f), col, text);
 }
 
+// Text starting at a point's x, vertically centered on it, scaled down if
+// needed to fit maxWidth.
+void leftText(ImDrawList* list, ImFont* font, float size, float maxWidth, ImVec2 left, ImU32 col, const char* text) {
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+    ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+    if (extent.x > maxWidth && extent.x > 0.0f) {
+        size *= maxWidth / extent.x;
+        extent = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+    }
+    list->AddText(font, size, ImVec2(left.x, left.y - extent.y * 0.5f), col, text);
+}
+
 }  // namespace
 
 void drawImGuiOverlay(float imageX, float imageY, float imageWidth, float imageHeight) {
@@ -70,13 +84,36 @@ void drawImGuiOverlay(float imageX, float imageY, float imageWidth, float imageH
         const float titleSize = imageHeight * 0.05f;
         const float messageSize = imageHeight * 0.034f;
         const float itemSize = imageHeight * 0.04f;
-        const float firstItemTop = view.itemCount > 0 ? image.point(0.0f, view.items[0].rect.y0).y : panelMax.y;
-        const float titleY = panelMin.y + (firstItemTop - panelMin.y) * 0.33f;
-        const float messageY = panelMin.y + (firstItemTop - panelMin.y) * 0.66f;
+        const float titleY = image.point(0.0f, view.titleY).y;
+        const float messageY = image.point(0.0f, view.messageY).y;
         centeredText(list, font, titleSize, textWidth, ImVec2(panelCenterX, titleY), color(1.0f, 1.0f, 1.0f, alpha),
                      view.title);
         centeredText(list, font, messageSize, textWidth, ImVec2(panelCenterX, messageY),
                      color(0.78f, 0.82f, 0.92f, alpha), view.message);
+
+        // Controls page: action names on the left, inputs on the right, one
+        // row each, with a light band on every other row for reading across.
+        if (view.lineCount > 0) {
+            const ImVec2 areaMin = image.point(view.linesArea.x0, view.linesArea.y0);
+            const ImVec2 areaMax = image.point(view.linesArea.x1, view.linesArea.y1);
+            const float rowHeight = (areaMax.y - areaMin.y) / static_cast<float>(view.lineCount);
+            const float areaWidth = areaMax.x - areaMin.x;
+            const float textSize = std::min(rowHeight * 0.72f, imageHeight * 0.034f);
+            const float pad = areaWidth * 0.02f;
+            const float split = areaMin.x + areaWidth * 0.42f;
+            for (int i = 0; i < view.lineCount; i++) {
+                const float top = areaMin.y + rowHeight * static_cast<float>(i);
+                const float middle = top + rowHeight * 0.5f;
+                if (i % 2 == 0) {
+                    list->AddRectFilled(ImVec2(areaMin.x, top), ImVec2(areaMax.x, top + rowHeight),
+                                        color(1.0f, 1.0f, 1.0f, 0.06f * alpha));
+                }
+                leftText(list, font, textSize, split - areaMin.x - 2.0f * pad, ImVec2(areaMin.x + pad, middle),
+                         color(0.78f, 0.82f, 0.92f, alpha), view.lines[i].action);
+                leftText(list, font, textSize, areaMax.x - split - 2.0f * pad, ImVec2(split + pad, middle),
+                         color(1.0f, 0.92f, 0.55f, alpha), view.lines[i].inputs);
+            }
+        }
 
         for (int i = 0; i < view.itemCount; i++) {
             const ViewItem& item = view.items[i];

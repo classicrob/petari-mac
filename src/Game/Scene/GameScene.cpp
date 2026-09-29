@@ -40,6 +40,11 @@
 #include "Game/Util/SystemUtil.hpp"
 #include <JSystem/J3DGraphBase/J3DSys.hpp>
 
+#ifdef PETARI_NATIVE
+// native/platform/include/petari/platform/os_host.hpp
+extern "C" void petari_os_preemption_point(void);
+#endif
+
 namespace {
     CometRetryButton* getCometRetryButton() {
         return MR::getSceneObj< CometRetryButton >(SceneObj_CometRetryButton);
@@ -143,6 +148,11 @@ void GameScene::init() {
         SleepControlFunc::initSyncSleepController();
 
         while (!GameSceneFunction::isLoadDoneScenarioWaveData()) {
+#ifdef PETARI_NATIVE
+            // The load finishes on higher-priority threads (ARAM stream, wave
+            // archive loader) that a Wii interrupt would let preempt this loop.
+            petari_os_preemption_point();
+#endif
         }
     }
 }

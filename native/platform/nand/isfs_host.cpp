@@ -186,6 +186,7 @@ ISFSError hostError(int err) {
 }
 
 ISFSError createNode(const char* path, bool dir, u32 attr, u32 ownerAcc, u32 groupAcc, u32 othersAcc) {
+    PetariNative::HostAllocationScope hostAllocations;  // NAND calls come from game threads
     std::vector<std::string> parts;
     if (!parse(path, parts) || parts.empty() || ownerAcc > 3 || groupAcc > 3 || othersAcc > 3) {
         return ISFS_ERROR_INVALID;
@@ -201,7 +202,6 @@ ISFSError createNode(const char* path, bool dir, u32 attr, u32 ownerAcc, u32 gro
     if (kindOf(host) != Kind::Missing) {
         return ISFS_ERROR_EXISTS;
     }
-    PetariNative::HostAllocationScope hostAllocations;
     if (dir) {
         if (::mkdir(host.c_str(), 0755) != 0) {
             return hostError(errno);
@@ -326,6 +326,7 @@ void setCaller(IOSUid uid, IOSGid gid) {
 }
 
 ISFSError ensureSystemDir(const char* path, const Attr& attr) {
+    PetariNative::HostAllocationScope hostAllocations;  // NAND calls come from game threads
     std::vector<std::string> parts;
     if (!parse(path, parts) || parts.empty()) {
         return ISFS_ERROR_INVALID;
@@ -334,7 +335,6 @@ ISFSError ensureSystemDir(const char* path, const Attr& attr) {
     if (!state().mounted) {
         return ISFS_ERROR_NOTREADY;
     }
-    PetariNative::HostAllocationScope hostAllocations;
     const fs::path host = hostPath(parts);
     switch (kindOf(host)) {
     case Kind::Dir:
@@ -354,6 +354,7 @@ ISFSError ensureSystemDir(const char* path, const Attr& attr) {
 }
 
 ISFSError clearDir(const char* path) {
+    PetariNative::HostAllocationScope hostAllocations;  // NAND calls come from game threads
     std::vector<std::string> parts;
     if (!parse(path, parts)) {
         return ISFS_ERROR_INVALID;
@@ -362,7 +363,6 @@ ISFSError clearDir(const char* path) {
     if (!state().mounted) {
         return ISFS_ERROR_NOTREADY;
     }
-    PetariNative::HostAllocationScope hostAllocations;
     const fs::path host = hostPath(parts);
     if (kindOf(host) != Kind::Dir) {
         return ISFS_ERROR_NOEXISTS;
@@ -386,6 +386,7 @@ ISFSError createDir(const char* path, u32 attr, u32 ownerAcc, u32 groupAcc, u32 
 }
 
 s32 open(const char* path, u32 access) {
+    PetariNative::HostAllocationScope hostAllocations;  // NAND calls come from game threads
     std::vector<std::string> parts;
     if (!parse(path, parts) || access == 0 || access > 3) {
         return ISFS_ERROR_INVALID;
@@ -420,7 +421,6 @@ s32 open(const char* path, u32 access) {
     if (hostFd < 0) {
         return hostError(errno);
     }
-    PetariNative::HostAllocationScope hostAllocations;
     Descriptor& d = state().fds[slot];
     d.used = true;
     d.hostFd = hostFd;
@@ -548,6 +548,7 @@ ISFSError fileStats(s32 fd, ISFSFileStats* stats) {
 }
 
 ISFSError remove(const char* path) {
+    PetariNative::HostAllocationScope hostAllocations;  // NAND calls come from game threads
     std::vector<std::string> parts;
     if (!parse(path, parts) || parts.empty()) {
         return ISFS_ERROR_INVALID;
@@ -559,7 +560,6 @@ ISFSError remove(const char* path) {
     if (ISFSError e = checkParentWritable(parts); e != ISFS_ERROR_OK) {
         return e;
     }
-    PetariNative::HostAllocationScope hostAllocations;
     const fs::path host = hostPath(parts);
     if (kindOf(host) == Kind::Missing) {
         return ISFS_ERROR_NOEXISTS;
@@ -573,6 +573,7 @@ ISFSError remove(const char* path) {
 }
 
 ISFSError rename(const char* oldPath, const char* newPath) {
+    PetariNative::HostAllocationScope hostAllocations;  // NAND calls come from game threads
     std::vector<std::string> from, to;
     if (!parse(oldPath, from) || !parse(newPath, to) || from.empty() || to.empty()) {
         return ISFS_ERROR_INVALID;
@@ -587,7 +588,6 @@ ISFSError rename(const char* oldPath, const char* newPath) {
     if (ISFSError e = checkParentWritable(to); e != ISFS_ERROR_OK) {
         return e;
     }
-    PetariNative::HostAllocationScope hostAllocations;
     const fs::path source = hostPath(from);
     const fs::path target = hostPath(to);
     const Kind kind = kindOf(source);
@@ -635,6 +635,7 @@ ISFSError rename(const char* oldPath, const char* newPath) {
 }
 
 ISFSError getAttr(const char* path, Attr* attr) {
+    PetariNative::HostAllocationScope hostAllocations;  // NAND calls come from game threads
     std::vector<std::string> parts;
     if (!parse(path, parts)) {
         return ISFS_ERROR_INVALID;
@@ -643,7 +644,6 @@ ISFSError getAttr(const char* path, Attr* attr) {
     if (!state().mounted) {
         return ISFS_ERROR_NOTREADY;
     }
-    PetariNative::HostAllocationScope hostAllocations;
     const fs::path host = hostPath(parts);
     if (kindOf(host) == Kind::Missing) {
         return ISFS_ERROR_NOEXISTS;
@@ -653,6 +653,7 @@ ISFSError getAttr(const char* path, Attr* attr) {
 }
 
 ISFSError getUsage(const char* path, u32* blocks, u32* inodes) {
+    PetariNative::HostAllocationScope hostAllocations;  // NAND calls come from game threads
     std::vector<std::string> parts;
     if (!parse(path, parts)) {
         return ISFS_ERROR_INVALID;
@@ -661,7 +662,6 @@ ISFSError getUsage(const char* path, u32* blocks, u32* inodes) {
     if (!state().mounted) {
         return ISFS_ERROR_NOTREADY;
     }
-    PetariNative::HostAllocationScope hostAllocations;
     const fs::path host = hostPath(parts);
     switch (kindOf(host)) {
     case Kind::Missing:
@@ -680,6 +680,7 @@ ISFSError getUsage(const char* path, u32* blocks, u32* inodes) {
 }
 
 ISFSError countDir(const char* path, u32* count) {
+    PetariNative::HostAllocationScope hostAllocations;  // NAND calls come from game threads
     std::vector<std::string> parts;
     if (!parse(path, parts)) {
         return ISFS_ERROR_INVALID;
@@ -688,7 +689,6 @@ ISFSError countDir(const char* path, u32* count) {
     if (!state().mounted) {
         return ISFS_ERROR_NOTREADY;
     }
-    PetariNative::HostAllocationScope hostAllocations;
     const fs::path host = hostPath(parts);
     switch (kindOf(host)) {
     case Kind::Missing:

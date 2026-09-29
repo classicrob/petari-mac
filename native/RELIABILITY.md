@@ -216,3 +216,25 @@ remains unknown; the leading hypothesis is a game thread blocked on the GX FIFO
 buffer mutex while holding the emulated-CPU baton during a compile. The smoke
 watchdog now samples host stacks and dumps OS/GX state before exiting, so the
 next occurrence should explain itself.
+
+### Observatory run 7: integrated stall fixes (2026-09-29)
+
+Checkpoint `da36808e5` plus the stage-ABI allocation fix. The first attempt
+crashed at boot: `petari_gx_pipeline_stage_wait` allocated through global
+`operator new` on the game thread (JKR heap). Stage ABI entry points now open a
+`HostAllocationScope`.
+
+Run 7 (`build/observatory-7.log`, CSV `build/observatory-7-frames.csv`) used a
+new fixture with empty app pipeline/Dawn caches (the macOS Metal shader cache
+was not cleared) and `PETARI_PIPELINE_SEED_DIR=build/pipeline-seeds`
+(shared-observed seeds, which already include run 6's Good Egg configurations).
+It **passed** the same Good Egg mission 1 route. Blocking pipeline resolves:
+**1 (519 ms)**, versus 65 totalling 31.5 s in run 6; every stage-ready gate
+completed with <0.05 ms residual wait. Frame intervals: p50 16.61, p95 20.81,
+p99 26.03 ms; 309/6421 late (>20.85 ms), 27 over 33.3 ms. Late frames are
+dominated by draw-done wait (EFB round trips) and VI timer overshoot; the worst
+frame was a 1.59 s draw-done wait at mission entry with no counted pipeline
+resolve (under investigation). Audio: 1 replay (startup), 0 underrun frames,
+0 DMA waits, 0 DSP holds, shortest block ~16.0 ms. Host load average ~20 from
+unrelated applications. Seeds were derived from earlier runs of this same
+route, so this does not demonstrate coverage for unvisited stages.

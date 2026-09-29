@@ -8,6 +8,7 @@ selection have been exercised in the full game; later controls remain unverified
 | --- | --- |
 | WASD | Move |
 | Space | Jump / confirm |
+| Return | Start / confirm (the title's "press A and B") |
 | F | Spin |
 | Shift | Crouch / ground pound |
 | Mouse motion | Move the Star Pointer / collect Star Bits |
@@ -15,7 +16,7 @@ selection have been exercised in the full game; later controls remain unverified
 | Hold right mouse button | Interact with pointer targets / Pull Stars |
 | Q / E | Rotate camera |
 | C | Recenter camera |
-| Escape (hold briefly) | Pause; tap again to resume |
+| Escape | Pause; tap again to resume |
 | Backspace | Back in menus |
 
 Bindings are loaded from `controls.txt` in the app's user directory (normally
@@ -27,20 +28,51 @@ have input-component tests but have not been approved through gameplay:
 
 | Input | Action |
 | --- | --- |
-| Arrow keys | D-pad; Up enables first-person view where supported |
+| Arrow keys | D-pad; Up enters first-person view where supported, Down or Space leaves it |
 | F1 | Native Home menu (Resume, Restart from Title, Quit) |
-| Minus | Remote Minus |
-| 1 / 2 | Remote 1 / 2 |
-| Hold Tab + WASD | Tilt for motion-controlled activities |
-| T | Toggle upright remote posture for Star Ball |
+| Minus | Remote Minus (also pauses) |
+| 1 / 2 | Remote 1 / 2 (the game never needs them) |
+| Keypad Enter | Same as Return |
+| Hold Tab + WASD | Tilt the remote by hand (rarely needed; see Star Ball and Ray) |
+| T | Toggle upright remote posture by hand |
 | Hold Left Alt | Walk (half-strength stick) |
 
-How the game treats these, in ways that can surprise:
+## Wii Remote moves on a keyboard
 
+Every action the game asks for can be done with a single key or a natural
+hold:
+
+| The game asks you to | On the keyboard |
+| --- | --- |
+| Press A and B (title screen) | Return. Or hold Space, then press Backspace |
+| Press any button (strap warning, 60 Hz prompt) | Space |
+| Shake the remote (spin; climb vines; swing from plants; jump off the Ray; launch from slingshots) | F |
+| Point at and grab a Pull Star or a pointer target | Put the mouse on it and hold the right button; release to let go |
+| Hold B and stroke the pointer (turning platforms, pointer-steered rings, snow tiles) | Hold the left button and move the mouse |
+| Hold the remote upright and tilt it (Star Ball) | Nothing extra: while you ride, WASD tilt it. Space jumps; holding it brakes |
+| Hold the remote level and twist it (Ray surfing) | Nothing extra: while you ride, A and D turn. W and S do nothing. Space speeds up, F jumps |
+| Press Z | Shift |
+| Hold C and press Z (a developer camera; not reachable in normal play) | Hold C, then press Shift |
+| Hold A to skip a movie or speed up text | Hold Space |
+| Press + to pause | Tap Escape |
+
+One Wii move is not available: holding Z and moving the remote toward or away
+from the screen to zoom (`CameraDPD`).
+
+## How the game treats these, in ways that can surprise
+
+- **Return.**
+  - It sends A and B together only while the title screen's "press A and B"
+    prompt is showing (the title reports the prompt every frame, and the
+    report lapses 100 ms after it stops).
+  - Everywhere else it is plain A, like Space. It never sends the B that backs
+    out of menus: on star select and the galaxy map, B wins over A when both
+    arrive on the same frame.
 - **Spin (F).**
   - Mario ignores a swing that starts within 10 frames of pressing A or B. A
-    spin pressed that soon after Space (or a Star Bit shot) is therefore
-    delayed until the window has passed, up to 13 frames after the jump.
+    spin pressed that soon after Space, Return, or a Star Bit shot is
+    therefore delayed until the window has passed, up to 13 frames after the
+    jump.
   - Each F press is one shake, and shakes are at least 250 ms apart:
     - mashing F shakes about four times a second, and Mario's own spin
       timing decides how many of those become spins;
@@ -57,11 +89,27 @@ How the game treats these, in ways that can surprise:
   - Their directions swap while the camera is upside down.
 - **Right mouse button.** It is the remote's A button, so pressing it while
   the pointer is not on a Pull Star or another target makes Mario jump.
-- **Tilt and posture** are manual for now: press T before Star Ball (it asks
-  for the remote to be raised) and again afterwards. The Star Pointer is
-  hidden while the remote is upright.
+  A Pull Star keeps pulling while the button is held and lets go shortly
+  after it is released.
+- **Pause (Escape or Minus).**
+  - The game pauses only after + or - has been held for 12 frames. Each
+    Escape or Minus press is therefore held for at least 250 ms, so a tap
+    pauses; holding longer does not pause again.
+  - The game refuses to pause while A or B is held, or while the remote is
+    moving (just after a spin, or while tilting). Let go of Space and the
+    mouse buttons, then tap Escape.
+  - Escape sends only Plus, and Backspace sends B separately.
+- **Star Ball and Ray surfing.** While Mario rides, the game reports that it
+  steers by tilt, and the keys adapt without Tab or T:
+  - Star Ball: the remote stands upright and WASD tilt it.
+  - Ray: the remote stays level, A and D twist it, and W and S are ignored,
+    because tipping it forward would stop the surfing lesson from accepting
+    "straight".
+  - The Star Pointer is hidden while the remote is upright, as on the Wii.
+  - When the ride ends, WASD move Mario again within 100 ms.
+- **Tab and T** still work by hand for anything else that reads the remote's
+  tilt. T toggles the upright posture; the Star Pointer is hidden while it is
+  upright.
 
-Escape sends only Plus: the game requires a 12-frame hold and refuses to pause
-while B is held. Backspace sends B separately. Focus loss releases
-all held controls and hides the pointer; key repeats come from the game's KPAD
-logic rather than the operating system.
+Focus loss releases all held controls and hides the pointer. Key repeats come
+from the game's KPAD logic, not from the operating system.

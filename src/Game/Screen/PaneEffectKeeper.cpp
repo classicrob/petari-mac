@@ -43,6 +43,9 @@ void PaneEffectKeeper::add(const char* pName1, const char* pName2, const char* p
         mHost->createPaneMtxRef(pName1);
     }
 
+#ifdef PETARI_NATIVE
+    if (!mHost->getPaneMtxRef(pName1)) return;
+#endif
     MultiEmitter* pEmitter = new MultiEmitter(pName2, mHost->getPaneMtxRef(pName1), TVec3f(0.0f, 0.0f, 0.0f));
 
     registerEffect(pEmitter, pName3);

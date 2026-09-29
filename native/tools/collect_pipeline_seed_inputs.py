@@ -197,7 +197,18 @@ def collect(files, repo, stages, shared):
 
     def read(path):
         if path not in archive_cache:
-            archive_cache[path] = list(archive_files(path.read_bytes()))
+            records = []
+            for entry, name, data in archive_files(path.read_bytes()):
+                if name.lower().endswith(('.bcsv', '.csv')) or (path.parent.name == 'StageData' and name.lower().split('.')[0].endswith('info')):
+                    records.append((entry, name, 'table', list(bcsv_strings(data))))
+                elif name.lower().endswith(('.bdl', '.bmd')):
+                    model = model_inventory(data)
+                    model.update(archive=str(path.relative_to(files)), resource=name, entry=entry,
+                                 sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+                    records.append((entry, name, 'model', model))
+                else:
+                    records.append((entry, name, 'other', None))
+            archive_cache[path] = records
         return archive_cache[path]
 
     result = {'schema': 1, 'kind': 'pipeline-replay-inputs', 'files_root': str(files.resolve()),
@@ -208,8 +219,8 @@ def collect(files, repo, stages, shared):
                               'Manifest pairs must still be replayed through native J3D/GX config builder before producing a seed DB.']}
     for stage in stages:
         scenario = files / 'StageData' / stage / (stage + 'Scenario.arc')
-        require(scenario.is_file() and stage in stage_paths, 'stage/scenario archive missing: ' + stage)
-        queue = [scenario, stage_paths[stage]]
+        require(scenario.is_file(), 'scenario archive missing: ' + stage)
+        queue = [scenario] + ([stage_paths[stage]] if stage in stage_paths else [])
         selected, reasons, objects, unresolved = set(), {}, set(), set()
 
         def add(path, reason):
@@ -249,12 +260,9 @@ def collect(files, repo, stages, shared):
             if path in selected:
                 continue
             selected.add(path)
-            for entry, name, data in read(path):
-                if name.lower().endswith(('.bcsv', '.csv')) or (path.parent.name == 'StageData' and name.lower().split('.')[0].endswith('info')):
-                    try:
-                        rows = list(bcsv_strings(data))
-                    except ValueError as error:
-                        raise ValueError(f'{path}:{name}: {error}') from error
+            for entry, name, kind, payload in read(path):
+                if kind == 'table':
+                    rows = payload
                     for row in rows:
                         for value in row.values():
                             if value in stage_paths:
@@ -266,11 +274,8 @@ def collect(files, repo, stages, shared):
                             objects.add(actor)
                             if not add_object(actor, 'placement: ' + actor):
                                 unresolved.add(actor)
-                elif name.lower().endswith(('.bdl', '.bmd')):
-                    model = model_inventory(data)
-                    model.update(archive=str(path.relative_to(files)), resource=name, entry=entry,
-                                 sha256=hashlib.sha256(data).hexdigest(), size=len(data))
-                    models.append(model)
+                elif kind == 'model':
+                    models.append(payload)
                 elif name.lower().endswith(('.brlyt', '.jpc', '.bmt')):
                     nonmodels.add(str(path.relative_to(files)) + ':' + name)
         result['stages'][stage] = {
@@ -286,10 +291,12 @@ if __name__ == '__main__':
     parser.add_argument('--files', type=Path, required=True, help='extracted RMGE01/files directory')
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument('--stage', action='append', help='defaults to AstroGalaxy and EggStarGalaxy')
+    parser.add_argument('--all-stages', action='store_true', help='all scenario stage roots')
     parser.add_argument('--shared', action='append', default=[], help='additional ObjectData archive basename')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    manifest = collect(args.files, args.repo, args.stage or ['AstroGalaxy', 'EggStarGalaxy'], args.shared)
+    stages = sorted(p.parent.name for p in (args.files / 'StageData').glob('*/*Scenario.arc')) if args.all_stages else args.stage or ['AstroGalaxy', 'EggStarGalaxy']
+    manifest = collect(args.files, args.repo, stages, args.shared)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest, indent=2) + '\n')
     for stage, data in manifest['stages'].items():

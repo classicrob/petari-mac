@@ -10,6 +10,7 @@
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -31,17 +32,46 @@ void logMessage(AuroraLogLevel level, const char* module, const char* message, u
 }
 
 void usage() {
-    std::fputs("Usage: petari [--disc DIR] [--user DIR] [--test-fixture observatory]\n"
+    std::fputs("Usage: petari [--disc DIR] [--user DIR] [--test-fixture observatory|stage]\n"
                "  --disc DIR  extracted disc (containing files/); default: $PETARI_GAME_DIR,\n"
                "              else build/game-data/RMGE01 under the working directory\n"
                "  --user DIR  saves, settings, controls and crash reports;\n"
                "              default: ~/Library/Application Support/Petari\n"
-               "  --test-fixture observatory  post-tutorial test progression; requires a marked isolated --user\n",
+               "  --test-fixture observatory  post-tutorial test progression; requires a marked isolated --user\n"
+               "  --test-fixture stage  synthetic entry to $PETARI_STAGE scenario $PETARI_SCENARIO after the file\n"
+               "              loads (observatory progression otherwise); requires --user marked \"stage\"\n",
                stderr);
+}
+
+// --test-fixture stage: PETARI_STAGE (a stage directory name) and PETARI_SCENARIO
+// (1..8). Existence of the stage on the disc is checked once the disc is known.
+bool stageFixtureFromEnvironment() {
+    const char* stage = std::getenv("PETARI_STAGE");
+    const char* scenario = std::getenv("PETARI_SCENARIO");
+    if (stage == nullptr || stage[0] == '\0' || scenario == nullptr || scenario[0] == '\0') {
+        std::fputs("petari: --test-fixture stage requires PETARI_STAGE and PETARI_SCENARIO\n", stderr);
+        return false;
+    }
+    for (const char* c = stage; *c != '\0'; ++c) {
+        if (!std::isalnum(static_cast<unsigned char>(*c))) {
+            std::fprintf(stderr, "petari: PETARI_STAGE \"%s\" is not a stage name\n", stage);
+            return false;
+        }
+    }
+    char* end = nullptr;
+    const long number = std::strtol(scenario, &end, 10);
+    if (end == nullptr || *end != '\0' || number < 1 || number > 8) {
+        std::fprintf(stderr, "petari: PETARI_SCENARIO \"%s\" is not a scenario number (1..8)\n", scenario);
+        return false;
+    }
+    PetariNative::TestFixture::stage = stage;
+    PetariNative::TestFixture::stageScenario = static_cast<int>(number);
+    return true;
 }
 
 bool resolvePaths(int argc, char** argv, App::Paths* paths) {
     bool fixture = false;
+    bool stageFixture = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
             paths->disc = argv[++i];
@@ -51,6 +81,10 @@ bool resolvePaths(int argc, char** argv, App::Paths* paths) {
                    std::strcmp(argv[i + 1], "observatory") == 0) {
             ++i;
             fixture = true;
+        } else if (std::strcmp(argv[i], "--test-fixture") == 0 && i + 1 < argc &&
+                   std::strcmp(argv[i + 1], "stage") == 0) {
+            ++i;
+            fixture = stageFixture = true;
         } else {
             return false;
         }
@@ -63,17 +97,38 @@ bool resolvePaths(int argc, char** argv, App::Paths* paths) {
         const bool normalUser = home && !paths->user.empty() &&
             std::filesystem::weakly_canonical(paths->user) ==
             std::filesystem::weakly_canonical(std::filesystem::path(home) / "Library/Application Support/Petari");
-        if (paths->user.empty() || normalUser || kind != "observatory") {
-            std::fputs("petari: fixture requires explicit isolated --user with .petari-test-fixture containing observatory\n", stderr);
+        const char* wanted = stageFixture ? "stage" : "observatory";
+        if (paths->user.empty() || normalUser || kind != wanted) {
+            std::fprintf(stderr, "petari: fixture requires explicit isolated --user with .petari-test-fixture containing %s\n", wanted);
+            return false;
+        }
+        if (stageFixture && !stageFixtureFromEnvironment()) {
             return false;
         }
         PetariNative::TestFixture::observatory = true;
         std::fputs("PETARI FIXTURE: post-tutorial observatory progression; not earned progression\n", stderr);
     }
+    // The stage smoke script needs the stage fixture's entry.
+    const char* smoke = std::getenv("PETARI_SMOKE");
+    if (smoke != nullptr && std::strcmp(smoke, "stage") == 0 && !stageFixture) {
+        std::fputs("petari: PETARI_SMOKE=stage requires --test-fixture stage\n", stderr);
+        return false;
+    }
     if (paths->disc.empty()) {
         const char* env = std::getenv("PETARI_GAME_DIR");
         paths->disc = env != nullptr && env[0] != '\0' ? std::filesystem::path(env)
                                                       : std::filesystem::current_path() / "build/game-data/RMGE01";
+    }
+    if (stageFixture) {
+        const std::string& stage = PetariNative::TestFixture::stage;
+        if (!std::filesystem::is_regular_file(paths->disc / "files/StageData" / stage / (stage + "Scenario.arc"))) {
+            std::fprintf(stderr, "petari: PETARI_STAGE %s has no StageData/%s/%sScenario.arc on the disc\n",
+                         stage.c_str(), stage.c_str(), stage.c_str());
+            return false;
+        }
+        std::fprintf(stderr, "PETARI FIXTURE: synthetic stage entry requested: %s scenario %d (test entry through the "
+                     "after-loading galaxy move; no progression claims)\n", stage.c_str(),
+                     PetariNative::TestFixture::stageScenario);
     }
     if (paths->user.empty()) {
         const char* home = std::getenv("HOME");

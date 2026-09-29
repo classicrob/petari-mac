@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <initializer_list>
 #include <sstream>
 #include <utility>
 
@@ -15,7 +16,7 @@ constexpr int kActionCount = static_cast<int>(Action::Count);
 const char* const kActionNames[kActionCount] = {
     "StickUp", "StickDown", "StickLeft", "StickRight", "A",        "B",        "Plus",     "Minus",     "Home",   "One",
     "Two",     "DpadUp",    "DpadDown",  "DpadLeft",   "DpadRight", "NunchukC", "NunchukZ", "Shake",     "TiltHold",
-    "PostureToggle", "Walk",
+    "PostureToggle", "Walk",   "Start",
 };
 
 const char* const kMouseNames[static_cast<int>(MouseButton::Count)] = {"Left", "Middle", "Right", "X1", "X2"};
@@ -39,6 +40,7 @@ const NamedKey kKeyNames[] = {
     {"Slash", Key::Slash}, {"CapsLock", Key::CapsLock},
     {"F1", Key::F1}, {"F2", Key::F2}, {"F3", Key::F3}, {"F4", Key::F4}, {"F5", Key::F5}, {"F6", Key::F6},
     {"F7", Key::F7}, {"F8", Key::F8}, {"F9", Key::F9}, {"F10", Key::F10}, {"F11", Key::F11}, {"F12", Key::F12},
+    {"KeypadEnter", Key::KeypadEnter},
     {"Right", Key::Right}, {"Left", Key::Left}, {"Down", Key::Down}, {"Up", Key::Up},
     {"LeftCtrl", Key::LeftCtrl}, {"LeftShift", Key::LeftShift}, {"LeftAlt", Key::LeftAlt}, {"LeftGui", Key::LeftGui},
     {"RightCtrl", Key::RightCtrl}, {"RightShift", Key::RightShift}, {"RightAlt", Key::RightAlt},
@@ -90,7 +92,117 @@ bool parseBinding(const std::string& text, Binding* binding) {
     return false;
 }
 
+// Player-facing names where keyName's differ.
+const NamedKey kDisplayNames[] = {
+    {"Return", Key::Return},         {"Keypad Enter", Key::KeypadEnter}, {"Left Shift", Key::LeftShift},
+    {"Right Shift", Key::RightShift}, {"Left Ctrl", Key::LeftCtrl},       {"Right Ctrl", Key::RightCtrl},
+    {"Left Alt", Key::LeftAlt},       {"Right Alt", Key::RightAlt},       {"Left Cmd", Key::LeftGui},
+    {"Right Cmd", Key::RightGui},     {"Up arrow", Key::Up},              {"Down arrow", Key::Down},
+    {"Left arrow", Key::Left},        {"Right arrow", Key::Right},        {"-", Key::Minus},
+    {"=", Key::Equals},               {"Caps Lock", Key::CapsLock},       {"`", Key::Grave},
+};
+
+const char* const kMouseDisplayNames[static_cast<int>(MouseButton::Count)] = {
+    "Left mouse", "Middle mouse", "Right mouse", "Mouse button 4", "Mouse button 5"};
+
+// The inputs bound to any of the actions, in order, without repeats.
+std::vector<Binding> inputsOf(const Bindings& bindings, std::initializer_list<Action> actions) {
+    std::vector<Binding> result;
+    for (const Action action : actions) {
+        for (const Binding& input : bindings.inputs(action)) {
+            if (std::find(result.begin(), result.end(), input) == result.end()) {
+                result.push_back(input);
+            }
+        }
+    }
+    return result;
+}
+
+std::string joined(const std::vector<Binding>& inputs, const char* separator) {
+    if (inputs.empty()) {
+        return "(not bound)";
+    }
+    std::string text;
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        if (i > 0) {
+            text += separator;
+        }
+        // Left and right modifiers bound together read as one key.
+        const Binding& input = inputs[i];
+        if (input.device == Binding::Device::Key && i + 1 < inputs.size()) {
+            const Binding& next = inputs[i + 1];
+            const std::string name = displayName(input);
+            const std::string nextName = displayName(next);
+            if (name.rfind("Left ", 0) == 0 && nextName == "Right " + name.substr(5)) {
+                text += name.substr(5);
+                ++i;
+                continue;
+            }
+        }
+        text += displayName(input);
+    }
+    return text;
+}
+
+// The first input of each action, e.g. "W A S D". Unbound actions show "-".
+std::string firstOfEach(const Bindings& bindings, std::initializer_list<Action> actions, const char* separator) {
+    std::string text;
+    bool any = false;
+    for (const Action action : actions) {
+        if (!text.empty()) {
+            text += separator;
+        }
+        const auto& inputs = bindings.inputs(action);
+        text += inputs.empty() ? "-" : displayName(inputs.front());
+        any = any || !inputs.empty();
+    }
+    return any ? text : "(not bound)";
+}
+
 }  // namespace
+
+std::string displayName(Binding input) {
+    if (input.device == Binding::Device::Mouse) {
+        return input.code < static_cast<int>(MouseButton::Count) ? kMouseDisplayNames[input.code] : "Mouse";
+    }
+    for (const NamedKey& key : kDisplayNames) {
+        if (key.code == input.code) {
+            return key.name;
+        }
+    }
+    std::string name = keyName(input.code);
+    if (name.size() == 4 && name.rfind("Num", 0) == 0) {
+        return name.substr(3);  // Num1 -> 1
+    }
+    return name;
+}
+
+std::vector<ControlsLine> controlsSummary(const Bindings& b) {
+    const std::string move = firstOfEach(b, {Action::StickUp, Action::StickLeft, Action::StickDown, Action::StickRight}, " ");
+    // "Hold <inputs><suffix>", or "(not bound)".
+    auto hold = [&b](std::initializer_list<Action> actions, const std::string& suffix) {
+        const std::vector<Binding> inputs = inputsOf(b, actions);
+        return inputs.empty() ? std::string("(not bound)") : "Hold " + joined(inputs, " / ") + suffix;
+    };
+    return {
+        {"Move", move},
+        {"Jump / confirm", joined(inputsOf(b, {Action::A}), " / ")},
+        {"Start (title: A and B)", joined(inputsOf(b, {Action::Start}), " / ")},
+        {"Spin", joined(inputsOf(b, {Action::Shake}), " / ")},
+        {"Crouch / ground pound", joined(inputsOf(b, {Action::NunchukZ}), " / ")},
+        {"Star Pointer", "Mouse"},
+        {"Shoot Star Bits / back", joined(inputsOf(b, {Action::B}), " / ")},
+        {"Grab (Pull Stars)", hold({Action::A}, " on the target")},
+        {"Rotate camera", firstOfEach(b, {Action::DpadLeft, Action::DpadRight}, " / ")},
+        {"Recenter camera", joined(inputsOf(b, {Action::NunchukC}), " / ")},
+        {"First-person view", joined(inputsOf(b, {Action::DpadUp}), " / ")},
+        {"Walk slowly", hold({Action::Walk}, "")},
+        {"Pause", joined(inputsOf(b, {Action::Plus, Action::Minus}), " / ")},
+        {"Star Ball / Ray", move + " tilt while riding"},
+        {"Tilt the remote by hand", hold({Action::TiltHold}, " + " + move)},
+        {"This menu", joined(inputsOf(b, {Action::Home}), " / ")},
+    };
+}
 
 Bindings Bindings::defaults() {
     Bindings b;
@@ -122,6 +234,10 @@ Bindings Bindings::defaults() {
     b.bind(Action::TiltHold, Binding::key(Key::Tab));
     b.bind(Action::PostureToggle, Binding::key(Key::T));
     b.bind(Action::Walk, Binding::key(Key::LeftAlt));
+    // Return confirms (A). On the title's "press A and B" prompt it is A and
+    // B together; it never sends B elsewhere, where B backs out of menus.
+    b.bind(Action::Start, Binding::key(Key::Return));
+    b.bind(Action::Start, Binding::key(Key::KeypadEnter));
     return b;
 }
 

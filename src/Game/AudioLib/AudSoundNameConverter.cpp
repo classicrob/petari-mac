@@ -1,3 +1,6 @@
+#ifdef PETARI_NATIVE
+#include <petari/asset_diagnostics.hpp>
+#endif
 #include "Game/AudioLib/AudSoundNameConverter.hpp"
 #include <JSystem/JAudio2/JAUSoundTable.hpp>
 #include <JSystem/JGadget/hashcode.hpp>
@@ -19,6 +22,12 @@ AudSoundNameConverter::AudSoundNameConverter()
 }
 
 JAISoundID AudSoundNameConverter::getSoundID(const char* pName) const {
+#ifdef PETARI_NATIVE
+    if (!pName) {
+        PetariNative::reportMissingSoundReference(pName);
+        return -1;
+    }
+#endif
     return getSoundID(pName, JGadget::getHashCode(pName));
 }
 
@@ -41,6 +50,12 @@ inline s32 AudSoundNameConverter::getOtherSoundCategory(const char* pName) const
 }
 
 JAISoundID AudSoundNameConverter::getSoundID(const char* pName, u32 hash) const {
+#ifdef PETARI_NATIVE
+    if (!pName || strlen(pName) < 5) {
+        PetariNative::reportMissingSoundReference(pName);
+        return -1;
+    }
+#endif
     bool isSE;
     if (pName[0] == 'S' && pName[1] == 'E') {
         isSE = true;
@@ -48,6 +63,13 @@ JAISoundID AudSoundNameConverter::getSoundID(const char* pName, u32 hash) const 
         isSE = false;
     }
 
+#ifdef PETARI_NATIVE
+    const s32 category = isSE ? getSeSoundCategory(pName) : getOtherSoundCategory(pName);
+    if (category < 0 || !mGroupItemOffsets) {
+        PetariNative::reportMissingSoundReference(pName);
+        return -1;
+    }
+#endif
     s32 startingOffset;
     if (isSE) {
         startingOffset = mGroupItemOffsets[getSeSoundCategory(pName)];
@@ -61,6 +83,9 @@ JAISoundID AudSoundNameConverter::getSoundID(const char* pName, u32 hash) const 
             return data.mID;
         }
     }
+#ifdef PETARI_NATIVE
+    PetariNative::reportMissingSoundReference(pName);
+#endif
     return -1;
 }
 

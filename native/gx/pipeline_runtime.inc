@@ -1,6 +1,23 @@
 static void petari_note_stage_config(HashType hash, PipelineRef runtimeKey);
 static void petari_stage_reset();
 static void petari_stage_flush_logs();
+static void petari_seed_global();
+static PetariPipeline::Clock::time_point petariGlobalStarted{}, petariGlobalLastLog{};
+static size_t petariGlobalInitialPending = 0;
+static bool petariGlobalActive = false;
+static void petari_global_progress() {
+  std::lock_guard lock{g_pipelineMutex};
+  if (!petariGlobalActive) return;
+  const auto now = PetariPipeline::Clock::now();
+  const auto remaining = g_pendingPipelines.size();
+  if (remaining && now - petariGlobalLastLog < std::chrono::seconds(5)) return;
+  petariGlobalLastLog = now;
+  const auto completed = petariGlobalInitialPending - std::min(petariGlobalInitialPending, remaining);
+  std::fprintf(stderr, "[gx global prep] completed=%zu total=%zu remaining=%zu elapsed_ms=%.3f state=%s\n",
+               completed, petariGlobalInitialPending, remaining,
+               PetariPipeline::milliseconds(now - petariGlobalStarted), remaining ? "preparing" : "ready");
+  if (!remaining) petariGlobalActive = false;
+}
 struct PetariPipelineSample {
   ShaderType type = ShaderType::GX;
   HashType configKey = 0;
@@ -38,7 +55,13 @@ struct PetariPipelineWait {
   ~PetariPipelineWait() {
     if (!active) return;
     petariPipelineWaiters.fetch_sub(1, std::memory_order_relaxed);
-    const auto ms = PetariPipeline::milliseconds(PetariPipeline::Clock::now() - start);
+    const auto waited = PetariPipeline::Clock::now() - start;
+    // Frame telemetry: real waits only; a ready pipeline returns in microseconds.
+    const auto waitedNs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(waited).count());
+    if (waitedNs >= 50000) {
+      PetariNative::FrameTelemetry::add(PetariNative::FrameTelemetry::PipelineWait, waitedNs);
+    }
+    const auto ms = PetariPipeline::milliseconds(waited);
     if (PetariPipeline::diagnostics() && ms >= 10.0) {
       std::fprintf(stderr, "[gx pipeline] blocking resolve %.2f ms key=%016llx\n", ms,
                    static_cast<unsigned long long>(key));

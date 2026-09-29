@@ -134,7 +134,8 @@ set(_pipeline_output "${CMAKE_CURRENT_BINARY_DIR}/aurora-pipeline-cache.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline.py" "${_pipeline_source}"
     "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_profile.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_runtime.inc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_worker.inc" "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_stage.inc")
+    "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_worker.inc" "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_stage.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_global.inc")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline.py"
     "${_pipeline_source}" "${_pipeline_output}" COMMAND_ERROR_IS_FATAL ANY)
 get_target_property(_sources aurora_gx SOURCES)
@@ -344,3 +345,28 @@ if(_petari_build_testing AND EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/
         "${CMAKE_SOURCE_DIR}/native/tests/galaxy_name_plate_tests.py"
         "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files/LayoutData/GalaxyNamePlate.arc")
 endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/pipeline_replay.cmake")
+
+# Frame telemetry: first-use GX texture hashing and static texture creation.
+foreach(_relative lib/gx/texture.cpp lib/gfx/texture.cpp)
+    set(_source "${aurora_SOURCE_DIR}/${_relative}")
+    set(_output "${CMAKE_CURRENT_BINARY_DIR}/texture-timing/${_relative}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_texture_timing.py" "${_source}")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_texture_timing.py"
+        "${_source}" "${_output}" COMMAND_ERROR_IS_FATAL ANY)
+    get_target_property(_sources aurora_gx SOURCES)
+    list(REMOVE_ITEM _sources "${_relative}" "${_source}")
+    list(APPEND _sources "${_output}")
+    set_property(TARGET aurora_gx PROPERTY SOURCES "${_sources}")
+    get_filename_component(_original_dir "${_source}" DIRECTORY)
+    set_source_files_properties("${_output}" TARGET_DIRECTORY aurora_gx PROPERTIES
+        COMPILE_OPTIONS "-iquote${_original_dir};-iquote${aurora_SOURCE_DIR}/lib")
+endforeach()
+
+if(_petari_build_testing)
+    include("${CMAKE_SOURCE_DIR}/native/tests/asset_reference_sweep.cmake")
+endif()
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/pipeline_owners.cmake")

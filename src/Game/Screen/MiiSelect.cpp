@@ -235,12 +235,18 @@ void MiiSelect::control() {
     if (_20[0]->isFirstStepWait() && !_20[1]->isFirstStepWait() && _20[1]->isWait()) {
         pAnimCtrl = MR::getPaneAnimCtrl(this, _20[0]->mPaneName, 0);
 
+#ifdef PETARI_NATIVE
+        if (pAnimCtrl)
+#endif
         pAnimCtrl->setFrame(MR::getPaneAnimFrame(this, _20[1]->mPaneName, 0));
     }
 
     if (_20[1]->isFirstStepWait() && !_20[0]->isFirstStepWait() && _20[0]->isWait()) {
         pAnimCtrl = MR::getPaneAnimCtrl(this, _20[1]->mPaneName, 0);
 
+#ifdef PETARI_NATIVE
+        if (pAnimCtrl)
+#endif
         pAnimCtrl->setFrame(MR::getPaneAnimFrame(this, _20[0]->mPaneName, 0));
     }
 
@@ -413,6 +419,9 @@ void MiiSelect::getIconID(FileSelectIconID* pIconID, s32 param2) const {
 }
 
 void MiiSelect::onSelect(s32 param1, nw4r::lyt::TexMap* pTexMap) {
+#ifdef PETARI_NATIVE
+    if (!pTexMap) return;
+#endif
     _1F0 = param1;
     _1F4 = pTexMap;
 

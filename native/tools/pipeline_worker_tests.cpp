@@ -113,6 +113,8 @@ void parallelTest() {
 int main(int argc, char** argv) {
     const bool expectAsync = argc == 2 && std::strcmp(argv[1], "async") == 0;
     aurora::gfx::require(PetariPipeline::asynchronous() == expectAsync, "pipeline policy is not opt-in");
+    if (!std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE"))
+        aurora::gfx::require(!PetariPipeline::globalPrecompile(), "full global preparation must remain opt-in");
     aurora::gfx::priorityTest();
     aurora::gfx::parallelTest();
     std::puts("Pipeline worker: requested priority, concurrent progress, isolated timing state and shutdown pass");

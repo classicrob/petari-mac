@@ -1,3 +1,6 @@
+#ifdef PETARI_NATIVE
+#include "Game/Screen/LayoutManager.hpp"
+#endif
 #include "Game/Screen/PowerStarList.hpp"
 #include "Game/LiveActor/Nerve.hpp"
 #include "Game/Map/FileSelectFunc.hpp"
@@ -697,6 +700,9 @@ void PowerStarList::setSeparatorPaneSize() {
         }
 
         nw4r::lyt::Pane* pPane = MR::getPane(this, pPaneName);
+#ifdef PETARI_NATIVE
+        if (!pPane) continue;
+#endif
         nw4r::lyt::Size size = pPane->mSize;
         size.height = mSeparatorArray[idx]._0;
         pPane->mSize = size;
@@ -704,6 +710,11 @@ void PowerStarList::setSeparatorPaneSize() {
 }
 
 void PowerStarList::setTotalPowerStarNumForMessageBoardCapture() {
+#ifdef PETARI_NATIVE
+    // The RMGE01 capture layout has no total-star field (nor does its DOL name
+    // this pane). Preserve capture for that region without inventing a target.
+    if (!getLayoutManager()->findPaneByName("TxtStarTotal")) return;
+#endif
     wchar_t message[256];
     wchar_t* pMessage;
     pMessage = MR::addPictureFontTag(MR::addPictureFontTag(message, L'7'), L'@');

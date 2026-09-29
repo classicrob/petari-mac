@@ -16,6 +16,7 @@
 #include "Game/Util/ObjUtil.hpp"
 #include "Game/Util/PlayerUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
 #include <JSystem/JGeometry/TUtil.hpp>
 
@@ -185,6 +186,10 @@ void Karikari::killedInFrozenState() {
 }
 
 void Karikari::control() {
+#ifdef PETARI_NATIVE
+    MR::Native::publishActor("Karipon", mPosition, -mGravity, isNerve(GET_NERVE(Karikari, HostTypeNrvCling)) ? 1 : 0,
+                             PETARI_ACTOR_HOSTILE);
+#endif
     if (MR::isInDeath(this, TVec3f(0.0f, 0.0f, 0.0f)) || MR::isInWater(mPosition)) {
         kill();
     }

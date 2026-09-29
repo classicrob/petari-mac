@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Copy a saved-file seed into a new, explicitly marked observatory test directory."""
+"""Copy a saved-file seed into a new, explicitly marked observatory (or stage) test directory.
+
+--kind stage marks it for --test-fixture stage (synthetic stage entry, see
+native/tools/stage_sweep.py); the saved file is the same.
+"""
 import argparse
 import hashlib
 import json
@@ -7,7 +11,7 @@ from pathlib import Path
 import shutil
 
 
-def create(source: Path, output: Path) -> None:
+def create(source: Path, output: Path, kind: str = "observatory") -> None:
     source = source.resolve(strict=True)
     output = output.absolute()
     if output.exists() or output.is_symlink():
@@ -22,9 +26,9 @@ def create(source: Path, output: Path) -> None:
         for p in sorted((output / "NAND").rglob("*")) if p.is_file()
     }
     (output / "fixture-source-hashes.json").write_text(json.dumps(hashes, indent=2) + "\n")
-    (output / ".petari-test-fixture").write_text("observatory\n")
+    (output / ".petari-test-fixture").write_text(kind + "\n")
     print(f"Created {output}. Source NAND was only read.")
-    print("Launch with --user PATH --test-fixture observatory.")
+    print(f"Launch with --user PATH --test-fixture {kind}.")
     print("This supplies post-tutorial progression at load; it does not prove tutorial completion.")
 
 
@@ -32,8 +36,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path, help="user directory with an existing saved file")
     parser.add_argument("--output", required=True, type=Path, help="new test directory; existing directories are refused")
+    parser.add_argument("--kind", choices=("observatory", "stage"), default="observatory",
+                        help="fixture marker: observatory (default) or stage (synthetic stage entry)")
     args = parser.parse_args()
     try:
-        create(args.source, args.output)
+        create(args.source, args.output, args.kind)
     except (OSError, ValueError) as error:
         parser.exit(1, f"fixture: {error}\n")

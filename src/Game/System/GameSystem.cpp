@@ -38,6 +38,8 @@
 #ifdef PETARI_NATIVE
 #include <JSystem/JKernel/JKRSolidHeap.hpp>
 #include <petari/app.hpp>
+// native/platform/gx_sync (GXSync::waitTokensDelivered)
+extern "C" void petari_gx_sync_wait_tokens_delivered(void);
 #include <cstdlib>
 
 // Boot progress diagnostics, enabled by setting PETARI_TRACE_BOOT. They only report;
@@ -334,6 +336,10 @@ void GameSystem::frameLoop() {
     MainLoopFramework::sManager->waitForRetrace();
 #ifdef PETARI_NATIVE
     petari_host_frame_mark(PETARI_FRAME_MARK_RETRACE_DONE);
+    // Draw done no longer waits for the frame's token-time EFB captures; the
+    // token callbacks (star pointer, lens flare, talk Z peeks) finish here,
+    // before any of the next frame's game code reads what they wrote.
+    petari_gx_sync_wait_tokens_delivered();
 #endif
 }
 

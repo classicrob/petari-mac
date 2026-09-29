@@ -36,6 +36,16 @@ class FixtureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 fixture.create(source, link)
 
+    def test_stage_kind_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            save = source / "NAND/title/00010000/524d4745/data/GameData.bin"
+            save.parent.mkdir(parents=True)
+            save.write_bytes(b"seed")
+            fixture.create(source, root / "stage", "stage")
+            self.assertEqual((root / "stage/.petari-test-fixture").read_text(), "stage\n")
+
     def test_missing_seed_leaves_no_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

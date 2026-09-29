@@ -11,16 +11,16 @@
 
 namespace PetariNative::App::FrameStats {
 
-// What the game was doing when a frame ended (Host::framePhase), or Unfocused
-// when the window lacked focus or could not present at any time in the frame.
+// What the game was doing when a frame ended (Host::framePhase). Window focus
+// is a separate per-frame flag (Frame::unfocused): automated runs play
+// without focus, and their gameplay still counts as gameplay.
 enum class Phase : std::uint8_t {
     Startup,    // no game scene has finished initializing yet
     Loading,    // the current scene is initializing (scene change, stage load)
     Menu,       // a ready scene other than a game stage: logo, file select, ...
     Gameplay,   // a ready Game scene on a stage other than file select
-    Unfocused,  // window unfocused or not presentable during the frame
 };
-constexpr unsigned kPhaseCount = 5;
+constexpr unsigned kPhaseCount = 4;
 const char* phaseName(Phase phase);
 
 // Parts of a frame, in microseconds. The frame is the interval between two
@@ -47,6 +47,10 @@ enum Part : unsigned {
     FrameSubmit,     // render worker: frame command-buffer submit (sum)
     PresentCall,     // render worker: present call, submission side (sum)
     ViTimerLateMax,  // VI thread: largest retrace-timer overshoot (max)
+    ViLockWaitMax,   // VI thread: largest wait for the interrupt lock after waking (max)
+    TextureHash,     // GX processor: texture source hashing on cache misses (sum)
+    TextureUpload,   // GX processor: static texture creation, conversion, upload (sum)
+    TokenBarrierWait,// game thread, inside game work: waiting for the previous frame's tokens (sum)
     PartCount
 };
 const char* partName(unsigned part);
@@ -58,6 +62,8 @@ struct Frame {
     Phase phase = Phase::Startup;
     std::uint32_t efbCaptures = 0;
     std::uint32_t pipelineWaits = 0;
+    std::uint32_t textureUploads = 0;
+    bool unfocused = false;  // window unfocused or not presentable at any time in the frame
     std::uint32_t us[PartCount] = {};
 };
 
@@ -97,6 +103,8 @@ public:
         std::uint64_t allSum[PartCount] = {};   // us, over all frames
         std::uint64_t efbCaptures = 0;
         std::uint64_t pipelineWaits = 0;
+        std::uint64_t textureUploads = 0;
+        std::uint64_t unfocused = 0;
     };
     const Totals& totals(unsigned phase) const { return mTotals[phase]; }
 

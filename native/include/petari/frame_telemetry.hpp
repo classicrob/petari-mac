@@ -39,6 +39,16 @@ enum Counter : unsigned {
     FrameSubmit,
     // VI thread: retrace timer woke after its deadline (overshoot).
     ViTimerLate,
+    // VI thread: after the timer woke, waiting for the OS interrupt lock
+    // (a game thread with interrupts disabled delays the retrace interrupt).
+    ViInterruptLockWait,
+    // GX processor thread: hashing texture sources on a texture-object cache miss.
+    TextureHash,
+    // GX processor thread: creating, converting and uploading a static texture.
+    TextureUpload,
+    // Game thread: waiting at the frame boundary for the previous frame's
+    // draw-sync tokens (EFB readbacks) to be delivered.
+    TokenBarrierWait,
     CounterCount
 };
 

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../app/smoke.hpp"
+#include "../app/smoke_goodegg.hpp"
 #include "petari/milestone.hpp"
 
 namespace Smoke = PetariNative::App::Smoke;
@@ -1713,6 +1714,406 @@ void testMilestones() {
     check(std::string(petari_milestone_at(petari_milestone_count() - 1)) == "Test.Many", "latest kept");
 }
 
+
+// --- Good Egg mission 1 (smoke_goodegg.hpp) ---
+
+struct EggRun {
+    Smoke::GoodEggDriver driver;
+    std::vector<Event> events;
+    std::vector<std::string> log;
+    int quits = 0;
+    int pointerMoves = 0;
+
+    explicit EggRun(bool synthetic = true, unsigned long limit = 1000000)
+        : driver(limit, Smoke::GoodEggConfig{synthetic}) {}
+
+    Smoke::Step frame(const Observation& observation) {
+        const Smoke::Step step = driver.step(observation);
+        for (const Smoke::Press& press : step.presses) {
+            events.push_back({driver.frame(), press.button, press.down, step.assertFocus});
+        }
+        for (const std::string& line : driver.log()) {
+            log.push_back(line);
+        }
+        quits += step.requestQuit ? 1 : 0;
+        pointerMoves += step.pointer ? 1 : 0;
+        return step;
+    }
+    void frames(const Observation& observation, unsigned long count) {
+        for (unsigned long i = 0; i < count; i++) {
+            frame(observation);
+        }
+    }
+    int count(Button button, bool down) const {
+        int n = 0;
+        for (const Event& e : events) {
+            n += e.button == button && e.down == down;
+        }
+        return n;
+    }
+    // The last press or release of the button was a press.
+    bool held(Button button) const {
+        for (auto it = events.rbegin(); it != events.rend(); ++it) {
+            if (it->button == button) {
+                return it->down;
+            }
+        }
+        return false;
+    }
+    bool logged(const std::string& text) const {
+        for (const std::string& line : log) {
+            if (line.find(text) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+// Good Egg mission 1 in play: Mario at a point, gravity -y (or +y), camera
+// looking along -z with +y up.
+Observation egg(float x, float y, float z, bool upsideDown = false) {
+    Observation o;
+    o.scene = "Game";
+    o.stage = "EggStarGalaxy";
+    o.scenario = 1;
+    o.sceneReady = true;
+    o.videoConfigured = true;
+    o.videoBlack = false;
+    o.playerValid = o.playerOnGround = o.pausePermitted = true;
+    o.playerX = x;
+    o.playerY = y;
+    o.playerZ = z;
+    o.gravityY = upsideDown ? 1.0f : -1.0f;
+    o.camXx = 1.0f; o.camXy = 0.0f; o.camXz = 0.0f;
+    o.camZx = 0.0f; o.camZy = 0.0f; o.camZz = -1.0f;
+    o.powerStars = 1;
+    o.playerLife = 3;
+    return o;
+}
+
+Observation actor(Observation o, const char* kind, float x, float y, float z, int state, unsigned flags) {
+    Observation::Actor a;
+    a.kind = kind;
+    a.x = x; a.y = y; a.z = z;
+    a.state = state;
+    a.flags = flags;
+    o.actors.push_back(a);
+    return o;
+}
+
+// The synthetic-entry boot: title, the saved file, Start, then the stage.
+void toGoodEgg(EggRun& run) {
+    run.frames(Observation{}, 10);
+    run.frames(logo(false), 30);
+    run.frames(logo(true), 200);
+    run.frames(fileSelect(false), 50);
+    run.frame(with(fileSelect(true), "FileSelector.Title"));
+    run.frame(with(fileSelect(true), "TitleSequence.BgmPrepare"));
+    run.frames(fileSelect(true), 30);
+    run.frame(with(fileSelect(true), "TitleSequence.LogoDisplay"));
+    run.frames(fileSelect(true), 31);
+    run.frame(with(fileSelect(true), "FileSelector.TitleEnd"));
+    run.frame(with(fileSelect(true), "FileSelector.FileSelect"));
+    run.frames(target(fileSelect(true), "FileSelect.Slot", 0, .3f, .5f, kSel | kPoint), 3);
+    run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+    run.frames(target(fileSelect(true), "FileSelect.Start", 0, .5f, .5f, kSel | kPoint), 3);
+    Observation loading = egg(0, 0, 0);
+    loading.stage = "FileSelect";
+    run.frame(with(loading, "FileSelector.DemoStartWait"));
+}
+
+void testGoodEggGeometry() {
+    using Smoke::Planet;
+    check(Smoke::planetAt({-3265, -13081, -15332}) == Planet::DiskGarden, "mission start is on the Disk Garden");
+    check(Smoke::planetAt({-4671, -16600, -16381}) == Planet::DiskGarden, "the stem's bottom is on the Disk Garden");
+    check(Smoke::planetAt({-10547.9f, -14915.6f, -2485.1f}) == Planet::Peanut, "a Peanut chip is on the Peanut");
+    check(Smoke::planetAt({-18416.7f, -15888.5f, -8672.8f}) == Planet::BeanB, "the Piranha Plant is on Bean B");
+    check(Smoke::planetAt({-17716.7f, -10726.9f, -9460.3f}) == Planet::FruitPeel, "the Hammer Head is on the Fruit Peel");
+    check(Smoke::planetAt({-18586.7f, -5200.0f, -12112.8f}) == Planet::BeanC, "the crystal is on Bean C");
+    check(Smoke::planetAt({-8670.0f, -6174.4f, -37890.0f}) == Planet::Dino, "the launch star lands on Dino Piranha's planet");
+    check(Smoke::planetAt({0, 20000, 0}) == Planet::None, "open space is no planet");
+    const auto& route = Smoke::diskGardenRoute();
+    check(route.size() == 29 && route.back().y < -16500.0f, "the Disk Garden rail ends at the stem's bottom");
+    check(Smoke::planetAt(Smoke::fruitPeelRoute().front()) == Planet::FruitPeel &&
+              Smoke::planetAt(Smoke::fruitPeelRoute().back()) == Planet::FruitPeel &&
+              Smoke::planetAt(Smoke::beanCRoute().front()) == Planet::BeanC &&
+              Smoke::planetAt(Smoke::beanCRoute().back()) == Planet::BeanC,
+          "the Fruit Peel and Bean C routes lie on their planets");
+    for (const auto* r : {&Smoke::diskGardenRoute(), &Smoke::fruitPeelRoute(), &Smoke::beanCRoute()}) {
+        float longest = 0.0f;
+        for (size_t i = 1; i < r->size(); ++i) {
+            const float dx = (*r)[i].x - (*r)[i - 1].x, dy = (*r)[i].y - (*r)[i - 1].y, dz = (*r)[i].z - (*r)[i - 1].z;
+            longest = std::max(longest, std::sqrt(dx * dx + dy * dy + dz * dz));
+        }
+        check(longest < 600.0f, "route points are close enough to steer between");
+    }
+
+    // Stick directions relative to the camera, on the ground and upside down.
+    Observation o = egg(0, 0, 0);
+    Smoke::StickKeys k = Smoke::stickKeysForWorld(o, {0, 0, -1});
+    check(k.up && !k.down && !k.left && !k.right, "away from a level camera is stick up");
+    k = Smoke::stickKeysForWorld(o, {1, 0, 0});
+    check(k.right && !k.up && !k.down, "camera right is stick right");
+    k = Smoke::stickKeysForWorld(o, {0, 5, 0});
+    check(!k.up && !k.down && !k.left && !k.right, "straight up has no ground direction");
+    Observation down = o;
+    down.camZx = 0; down.camZy = -1; down.camZz = 0;  // looking straight down, screen-up is -z
+    k = Smoke::stickKeysForWorld(down, {0, 0, -1});
+    check(k.up && !k.down, "a camera above Mario: screen-up is stick up");
+    Observation under = egg(0, 0, 0, true);  // standing under a disk, camera level
+    k = Smoke::stickKeysForWorld(under, {-1, 0, -1});
+    check(k.up && k.left, "upside down, a level camera still maps screen directions");
+    Observation degenerate = o;
+    degenerate.camXx = 0; degenerate.camXy = 1;  // camera right along gravity
+    k = Smoke::stickKeysForWorld(degenerate, {1, 0, 0});
+    check(!k.up && !k.down && !k.left && !k.right, "degenerate camera axes give no keys");
+}
+
+void testGoodEggMission() {
+    EggRun run;
+    toGoodEgg(run);
+    check(run.driver.result() == Result::Running && std::string(run.driver.phase()).find("Good Egg") == std::string::npos,
+          "boot still running before the stage");
+    run.frame(egg(-3265, -13081, -15332));
+    check(run.logged("taking over from the synthetic stage entry"), "synthetic entry hands over on EggStarGalaxy");
+    // The start: steering toward the first rail point (south-west, away from the camera and left).
+    run.frames(egg(-3265, -13081, -15332), 5);
+    check(run.logged("stars at mission start: 1"), "stars counted at the start");
+    check(run.logged("on Disk Garden") && run.held(Button::StickUp) && run.held(Button::StickLeft),
+          "walks toward the rail with the stick");
+    // A demo stops input.
+    Observation demo = egg(-3265, -13081, -15332);
+    demo.demoActive = true;
+    run.frame(demo);
+    check(!run.held(Button::StickUp) && !run.held(Button::StickLeft), "a demo releases the stick");
+
+    // Under the floating Luma at the stem's bottom (standing upside down): a
+    // run resumed there starts from the nearest rail point, the last.
+    const auto& route = Smoke::diskGardenRoute();
+    EggRun bottom;
+    toGoodEgg(bottom);
+    bottom.frames(egg(route.back().x, route.back().y, route.back().z, true), 2);
+    check(bottom.logged("Disk Garden rail: from point 28 of 29"), "resumes at the nearest rail point");
+    Observation luma = actor(egg(-4675, -16517, -16385, true), "Luma", -4671, -16693, -16381, 0, 0);
+    int a = bottom.count(Button::A, true);
+    bottom.frames(luma, 30);
+    check(bottom.count(Button::A, true) == a && !bottom.held(Button::StickUp) && !bottom.held(Button::StickDown),
+          "under the Luma: waits, no A until the game offers the talk");
+    bottom.frame(target(luma, "Talk.Start", 0, .5f, .5f, kSel));
+    check(bottom.count(Button::A, true) == a + 1, "A when Talk.Start is offered");
+    Observation page = target(luma, "Talk.Advance", 0, .5f, .5f, kSel);
+    page.talkActive = true;
+    bottom.frames(page, 46);
+    check(bottom.count(Button::A, true) == a + 2, "talk pages advance with A, debounced");
+    Observation sling = actor(egg(-4675, -16517, -16385, true), "SlingStar", -4679, -16727, -16337, 1, Smoke::kActorReady);
+    bottom.frame(sling);
+    check(bottom.logged("the Luma's talk ended"), "talk end noticed");
+    int spins = bottom.count(Button::Spin, true);
+    bottom.frames(sling, 2);
+    check(bottom.count(Button::Spin, true) == spins + 1, "spin at the ready Sling Star");
+    bottom.frames(sling, 20);
+    check(bottom.count(Button::Spin, true) == spins + 1, "spins are rate limited");
+
+    // A launch star captures Mario: spin; while bound, nothing.
+    Observation captured = actor(egg(-4630, -17500, -16400, true), "LaunchStar", -4631, -17641, -16400, 2, 0);
+    captured.playerOnGround = false;
+    spins = run.count(Button::Spin, true);
+    run.frames(captured, 40);
+    check(run.count(Button::Spin, true) >= spins + 1, "spin when the launch star holds Mario");
+    Observation flying = egg(-7000, -16000, -9000);
+    flying.playerInBind = true;
+    flying.playerOnGround = false;
+    const size_t before = run.events.size();
+    run.frames(flying, 60);
+    bool quiet = true;
+    for (size_t i = before; i < run.events.size(); ++i) {
+        quiet = quiet && !run.events[i].down;
+    }
+    check(quiet, "no presses while bound in flight");
+
+    // Hanging on a vine: spin every 20 frames, no stick.
+    Observation vine = actor(egg(-18425, -15500, -8667), "Vine", -18425, -15480, -8667, 2, Smoke::kActorBound);
+    vine.playerOnGround = false;
+    spins = run.count(Button::Spin, true);
+    run.frames(vine, 61);
+    check(run.count(Button::Spin, true) >= spins + 3 && !run.held(Button::StickUp), "climbing: spins, no stick");
+
+    // An unknown prompt is not answered.
+    EggRun blocked;
+    toGoodEgg(blocked);
+    blocked.frame(egg(-3265, -13081, -15332));
+    blocked.frame(prompt(egg(-3265, -13081, -15332), "System_Other", 2));
+    check(blocked.driver.result() == Result::Blocked && blocked.quits == 1, "unexpected prompt BLOCKED");
+
+    // Death fails with where it happened.
+    EggRun died;
+    toGoodEgg(died);
+    died.frames(egg(-3265, -13081, -15332), 5);
+    Observation dead = egg(-3265, -13081, -15332);
+    dead.playerDead = true;
+    died.frame(dead);
+    check(died.driver.result() == Result::Fail && died.driver.reason().find("Mario died") != std::string::npos &&
+              died.driver.reason().find("synthetic stage-fixture entry") != std::string::npos,
+          "death FAILs and the synthetic entry is named");
+
+    // Not moving at all: recoveries (jumps and sidesteps), then FAIL.
+    EggRun stuck;
+    toGoodEgg(stuck);
+    stuck.frames(egg(-3265, -13081, -15332), 3000);
+    check(stuck.driver.result() == Result::Fail && stuck.driver.reason().find("stuck going to Disk Garden rail") != std::string::npos &&
+              stuck.count(Button::A, true) >= 4,
+          "stuck walking FAILs after jump and sidestep recoveries");
+
+    // Leaving the galaxy without the star.
+    EggRun left;
+    toGoodEgg(left);
+    left.frames(egg(-3265, -13081, -15332), 5);
+    Observation dome = egg(0, 0, 0);
+    dome.stage = "AstroDome";
+    left.frame(dome);
+    check(left.driver.result() == Result::Fail && left.driver.reason().find("without the Power Star") != std::string::npos,
+          "leaving Good Egg without the star FAILs");
+
+    // The galaxy route does not accept the synthetic shortcut.
+    EggRun viaRoute(false);
+    toGoodEgg(viaRoute);
+    viaRoute.frames(egg(-3265, -13081, -15332), 2);
+    check(viaRoute.driver.result() == Result::Fail && viaRoute.driver.reason().find("before the mission") != std::string::npos,
+          "galaxy-route mode FAILs if Good Egg appears without the observatory route");
+}
+
+// From the Power Star to the saved file in the Terrace.
+void testGoodEggReturn() {
+    auto touch = [](EggRun& run) {
+        toGoodEgg(run);
+        run.frames(egg(-8400, -6700, -37800), 5);
+        Observation star = actor(egg(-8400, -6700, -37800), "PowerStar", -8400, -6374, -37800, 1, Smoke::kActorReady);
+        run.frames(star, 3);
+        run.frame(with(egg(-8400, -6700, -37800), "PowerStar.Get"));
+        run.frames(Observation{}, 10);
+    };
+    auto dome = [](int stars, bool recorded) {
+        Observation o = egg(0, 0, 0);
+        o.stage = "AstroDome";
+        o.powerStars = stars;
+        o.starEggStar1 = recorded;
+        return o;
+    };
+    EggRun run;
+    touch(run);
+    check(run.driver.result() == Result::Running && std::string(run.driver.phase()) == "Good Egg: star get",
+          "star touched: the star-get sequence plays");
+    Observation back = dome(2, true);
+    back.demoActive = true;
+    run.frames(back, 30);
+    check(run.logged("back in AstroDome"), "return noticed");
+    const int a = run.count(Button::A, true);
+    run.frame(prompt(back, "System_Save00", 2));
+    run.frames(target(back, "Prompt.Yes", 0, .4f, .6f, kSel), 5);
+    check(run.count(Button::A, true) == a && run.pointerMoves > 0, "points at Yes, no A before the game reports pointing");
+    run.frames(target(back, "Prompt.Yes", 0, .4f, .6f, kSel | kPoint), 3);
+    check(run.count(Button::A, true) == a + 1, "A on Yes");
+    Observation saving = back;
+    saving.saveSequence = true;
+    run.frame(prompt(saving, "System_Save01", 1));
+    run.frames(saving, 30);
+    run.frame(prompt(saving, "System_Save02", 0));
+    run.frames(saving, 45);
+    check(run.count(Button::A, true) == a + 2, "A on the save-finished window");
+    check(run.driver.result() == Result::Running, "not before the dome is playable");
+    Observation ready = dome(2, true);
+    run.frames(ready, 61);
+    check(run.driver.result() == Result::Pass && run.quits == 1 &&
+              run.driver.reason().find("file records the star (2 stars, was 1)") != std::string::npos,
+          "PASS: star recorded, saved, back in the Terrace");
+
+    EggRun unrecorded;
+    touch(unrecorded);
+    unrecorded.frames(dome(1, false), 5);
+    unrecorded.frame(prompt(dome(1, false), "System_Save00", 2));
+    unrecorded.frames(target(dome(1, false), "Prompt.Yes", 0, .4f, .6f, kSel | kPoint), 3);
+    unrecorded.frame(prompt(dome(1, false), "System_Save02", 0));
+    unrecorded.frames(dome(1, false), 130);
+    check(unrecorded.driver.result() == Result::Fail && unrecorded.driver.reason().find("does not record") != std::string::npos,
+          "a save without the star FAILs");
+
+    EggRun unsaved;
+    touch(unsaved);
+    unsaved.frames(dome(2, true), 3000);
+    check(unsaved.driver.result() == Result::Running, "no PASS without the save");
+    unsaved.frames(dome(2, true), 7200);
+    check(unsaved.driver.result() == Result::Fail && unsaved.driver.reason().find("save prompt not shown") != std::string::npos,
+          "no save prompt: FAIL after the return limit");
+
+    EggRun helped;
+    touch(helped);
+    Observation helpedDome = dome(2, true);
+    helpedDome.physical.gameplay = 1;
+    helped.frames(helpedDome, 3);
+    helped.frame(prompt(helpedDome, "System_Save00", 2));
+    helped.frames(target(helpedDome, "Prompt.Yes", 0, .4f, .6f, kSel | kPoint), 3);
+    helped.frame(prompt(helpedDome, "System_Save02", 0));
+    helped.frames(helpedDome, 130);
+    check(helped.driver.result() == Result::Assisted, "physical input makes the pass ASSISTED");
+}
+
+// Planet objectives with static observations: what the driver presses.
+void testGoodEggObjectives() {
+    // Peanut: a chip floating out of reach overhead gets a jump.
+    EggRun chips;
+    toGoodEgg(chips);
+    Observation under = actor(egg(-10547, -15100, -2485), "StarChip", -10547.9f, -14915.6f, -2485.1f, 1, Smoke::kActorReady);
+    chips.frames(under, 3);
+    check(chips.logged("on Peanut") && chips.logged("jump for the chip"), "a chip 185 above: jump");
+    // Five chips got: the launch star they form, which floats above the ground.
+    EggRun star;
+    toGoodEgg(star);
+    star.frames(egg(-12100, -15600, -3000), 2);
+    for (int i = 0; i < 5; ++i) {
+        star.frame(with(egg(-12100, -15600, -3000), "StarChip.Got"));
+    }
+    star.frames(egg(-12100, -15600, -3000), 2);
+    check(star.logged("going to the Peanut launch star"), "after five chips: the launch star");
+    const int spins = star.count(Button::Spin, true);
+    Observation held = actor(egg(-12216, -15700, -3022), "LaunchStar", -12216.7f, -15424.5f, -3022.8f, 2, 0);
+    star.frames(held, 3);
+    check(star.count(Button::Spin, true) == spins + 1, "held by the launch star 300 above the feet: spin");
+
+    // Fruit Peel: the head down (READY) and close: spin, then jump onto it.
+    EggRun hammer;
+    toGoodEgg(hammer);
+    // (At the Fruit Peel route's end: the spiral comes first.)
+    Observation down = actor(egg(-17710, -10818, -9431), "HammerHead", -17600, -10800, -9440, 0,
+                             Smoke::kActorReady | Smoke::kActorHostile);
+    hammer.frames(down, 2);
+    check(hammer.count(Button::Spin, true) == 1 && hammer.logged("jump onto the Hammer Head"),
+          "Hammer Head's head down: spin and jump onto it");
+    // Up again (not READY): stand off near its base, no jumping at it.
+    Observation up = actor(egg(-17710, -10818, -9431), "HammerHead", -17716, -10500, -9460, 0, Smoke::kActorHostile);
+    const int jumps = hammer.count(Button::A, true);
+    hammer.frames(up, 60);
+    check(hammer.count(Button::A, true) == jumps && !hammer.held(Button::StickUp) && !hammer.held(Button::StickDown),
+          "Hammer Head up: wait near its base");
+
+    // Dino Piranha: ball ready behind it and within reach: spin; ball flying: move away.
+    EggRun dino;
+    toGoodEgg(dino);
+    Observation fight = actor(egg(-8400, -6680, -37700), "DinoPiranha", -8400, -6690, -38100, 3, Smoke::kActorHostile);
+    fight.actors.back().dz = -1.0f;  // facing away from Mario
+    fight = actor(fight, "DinoBall", -8400, -6690, -37750, 1, Smoke::kActorReady);
+    dino.frames(fight, 2);
+    check(dino.count(Button::Spin, true) == 1 && dino.logged("Dino Piranha phase 3"), "tail ball in reach: spin");
+    Observation flying = fight;
+    flying.actors.back().flags = 0;
+    dino.frames(flying, 3);
+    check(dino.logged("going to away from Dino Piranha"), "ball flying back: keep away");
+    // A ready Power Star 300 above: jump under it.
+    Observation starOver = actor(egg(-8400, -6680, -37800), "PowerStar", -8400, -6374, -37800, 1, Smoke::kActorReady);
+    dino.frames(starOver, 2);
+    check(dino.logged("jump for the Power Star"), "Power Star overhead: jump");
+}
+
 }  // namespace
 
 int main() {
@@ -1740,6 +2141,10 @@ int main() {
     testPlayableGuards();
     testGalaxy();
     testMilestones();
+    testGoodEggGeometry();
+    testGoodEggMission();
+    testGoodEggReturn();
+    testGoodEggObjectives();
     std::printf("native app smoke tests passed (%d checks)\n", checks);
     return 0;
 }

@@ -199,6 +199,8 @@ if(BUILD_TESTING)
     add_executable(petari_platform_baton_diag_tests ${PETARI_REPO_ROOT}/native/tests/platform_baton_diag_tests.cpp)
     target_link_libraries(petari_platform_baton_diag_tests PRIVATE petari_platform)
     add_test(NAME native_platform_baton_diag COMMAND petari_platform_baton_diag_tests)
+    # Asserts on-CPU time of a spinning holder; parallel test load makes it fail spuriously.
+    set_tests_properties(native_platform_baton_diag PROPERTIES RUN_SERIAL TRUE)
 
     # Host audio device pacing (native/audio/paced_ring.hpp) against the real AI.
     add_executable(petari_audio_pacing_tests ${PETARI_REPO_ROOT}/native/tests/audio_pacing_tests.cpp)

@@ -17,6 +17,7 @@
 #include "Game/Util/LiveActorUtil.hpp"
 #include "Game/Util/MathUtil.hpp"
 #include "Game/Util/MtxUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include "Game/Util/NPCUtil.hpp"
 #include "Game/Util/RailUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
@@ -224,6 +225,9 @@ void Tico::calcAndSetBaseMtx() {
 }
 
 void Tico::control() {
+#ifdef PETARI_NATIVE
+    MR::Native::publishActor("Luma", mPosition, -mGravity, isNerve(GET_NERVE(Tico, TicoNrvMeta)) ? 1 : 0, 0);
+#endif
     if (_178) {
         TVec3f trans;
         MR::extractMtxTrans(_178, &trans);
@@ -296,7 +300,7 @@ void Tico::exeReaction() {
 
     if (_DB) {
         MR::limitedStarPieceHitSound();
-        MR::startSound(this, "SE_BM_BUTLER_ABSORB");
+        MR::startSound(this, "SE_SM_BUTLER_ABSORB");
     }
 
     if (MR::tryStartReactionAndPopNerve(this)) {

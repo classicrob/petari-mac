@@ -5,6 +5,14 @@
 
 #include <revolution/wpad.h>
 
+#ifdef PETARI_HOME_MENU_INPUT
+#include <algorithm>
+#include <cstring>
+
+#include "petari/host_allocation.hpp"
+#include "petari/input.hpp"
+#endif
+
 namespace PetariNative::HomeMenu {
 
 static_assert(static_cast<int>(Selection::None) == HBM_SELECT_NULL);
@@ -105,10 +113,28 @@ void create(const HBMDataInfo* info) {
     publish(View{});
 }
 
+#ifdef PETARI_HOME_MENU_INPUT
+// The Controls page, from the bindings in effect now (controls.txt included).
+void refreshControls() {
+    HostAllocationScope scope;  // HBMInit runs on a game thread
+    const std::vector<Input::ControlsLine> summary = Input::controlsSummary(Input::bindings());
+    ControlsEntry entries[kMaxControls];
+    const int count = std::min(static_cast<int>(summary.size()), kMaxControls);
+    for (int i = 0; i < count; i++) {
+        std::strncpy(entries[i].action, summary[i].action.c_str(), sizeof(entries[i].action) - 1);
+        std::strncpy(entries[i].inputs, summary[i].inputs.c_str(), sizeof(entries[i].inputs) - 1);
+    }
+    instance().setControls(entries, count);
+}
+#endif
+
 void init() {
     for (std::uint32_t& hold : gStickHold) {
         hold = 0;
     }
+#ifdef PETARI_HOME_MENU_INPUT
+    refreshControls();
+#endif
     instance().open();
 }
 

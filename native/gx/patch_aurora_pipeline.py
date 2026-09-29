@@ -14,6 +14,36 @@ def patch(text):
         text = text.replace(old, new)
 
     text = f'#include "{here / "pipeline_profile.hpp"}"\n#include <vector>\n' + text
+    replace('\n  bool schemaMatch = false;', '''
+  // This immutable SDL VFS cannot create SQLite sort spill files. Larger stage
+  // manifests may need a temporary sort when supplied without a load-order index.
+  if (sqlite3_exec(seedDb, "PRAGMA temp_store=MEMORY", nullptr, nullptr, nullptr) != SQLITE_OK) {
+    sqlite3_close(seedDb);
+    return nullptr;
+  }
+  bool schemaMatch = false;''')
+    replace('static void seed_pipeline_cache() {', 'static void seed_pipeline_cache_path(const std::string& seedPath) {')
+    replace('  const auto seedPath = pipeline_cache_seed_path();\n', '')
+    replace('  seed_pipeline_cache();', '  seed_pipeline_cache_path(pipeline_cache_seed_path());\n  petari_seed_global();')
+    replace('static void start_pipeline_cache_writer() {',
+            (here / 'pipeline_global.inc').read_text() + '\nstatic void start_pipeline_cache_writer() {')
+    replace('    const auto firstFrameUsed = static_cast<uint32_t>(sqlite3_column_int64(g_pipelineCacheLoadStmt, 1));',
+            '    const auto firstFrameUsed = static_cast<uint32_t>(sqlite3_column_int64(g_pipelineCacheLoadStmt, 1));\n'
+            '    if (!PetariPipeline::globalPrecompile() && firstFrameUsed == UINT32_MAX) continue;')
+    replace('  const size_t loadedCount = load_pipeline_cache();\n  rebuild_pipeline_cache();', '''  petariGlobalStarted = PetariPipeline::Clock::now();
+  const size_t loadedCount = load_pipeline_cache();
+  rebuild_pipeline_cache();
+  if (PetariPipeline::globalPrecompile()) {
+    {
+      std::lock_guard lock{g_pipelineMutex};
+      petariGlobalInitialPending = g_pendingPipelines.size();
+      petariGlobalActive = true;
+      petariGlobalLastLog = {};
+      std::fprintf(stderr, "[gx global prep] configs_known=%zu pending_variants=%zu workers=%u performance_cores=%u background_qos=utility\\n",
+                   g_knownPipelines.size(), petariGlobalInitialPending, PetariPipeline::workerCount(), PetariPipeline::performanceCores());
+    }
+    petari_global_progress();
+  }''')
     replace('static std::thread g_pipelineThread;', 'static std::vector<std::thread> g_pipelineThreads;')
     anchor = '''enum class PipelinePriority {
   Background, // cache warmup

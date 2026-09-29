@@ -26,6 +26,7 @@
 
 #include "isfs_host.hpp"
 #include "nand_internal.hpp"
+#include "petari/host_allocation.hpp"
 #include "petari/platform/nand.hpp"
 
 namespace Fs = PetariNative::Platform::NAND::Fs;
@@ -155,6 +156,7 @@ bool mountFromEnvironment() {
     if (root == nullptr || *root == '\0') {
         return false;
     }
+    PetariNative::HostAllocationScope hostAllocations;  // NANDInit, on a game thread
     std::string error;
     if (!PetariNative::Platform::NAND::mount(root, &error)) {
         OSReport("NAND: cannot mount %s=%s: %s\n", PetariNative::Platform::NAND::kRootEnvironmentVariable, root, error.c_str());

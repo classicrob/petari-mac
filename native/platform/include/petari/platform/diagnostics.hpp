@@ -18,6 +18,12 @@ void dumpOS(std::FILE* out);
 
 extern "C" {
 
+// Always-on detector summaries, to stderr (os_thread.cpp): game-heap
+// allocations from host code or with the CPU released (host_allocation.hpp),
+// and host waits made while holding the OS CPU (the baton monitor). For exit
+// and hang reports.
+void petari_platform_report_diagnostics(void);
+
 // GX sync state (GXSync::dumpState) and dumpOS, to stderr, framed by `reason`
 // (gx_sync.cpp).
 void petari_platform_dump_hang_state(const char* reason);

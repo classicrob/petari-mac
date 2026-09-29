@@ -17,6 +17,7 @@
 #include "Game/Util/ObjUtil.hpp"
 #include "Game/Util/PlayerUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
 #include <JSystem/JMath/JMath.hpp>
 
@@ -152,6 +153,9 @@ void Takobo::kill() {
 }
 
 void Takobo::control() {
+#ifdef PETARI_NATIVE
+    MR::Native::publishActor("Octoomba", mPosition, -mGravity, 0, PETARI_ACTOR_HOSTILE);
+#endif
     mScaleController->updateNerve();
 
     if (isNerve(GET_NERVE(Takobo, HostTypeNrvWait)) || isNerve(GET_NERVE(Takobo, HostTypeNrvMove)) || isNerve(GET_NERVE(Takobo, HostTypeNrvAttack)) ||

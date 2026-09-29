@@ -15,6 +15,10 @@
 #include "Game/Util/ObjUtil.hpp"
 #include "Game/Util/PlayerUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
+#ifdef PETARI_NATIVE
+#include <petari/milestone.hpp>
+#endif
 
 void ChipBase_FORCE_MATCH_SDATA2() {
     (void)1.0f;
@@ -190,6 +194,12 @@ void ChipBase::makeActorDead() {
 }
 
 void ChipBase::control() {
+#ifdef PETARI_NATIVE
+    {
+        const bool collectible = isNerve(GET_NERVE(ChipBase, ChipBaseNrvWait)) || isNerve(GET_NERVE(ChipBase, ChipBaseNrvFlashing));
+        MR::Native::publishActor("StarChip", mPosition, -mGravity, mChipType, collectible ? PETARI_ACTOR_READY : 0u);
+    }
+#endif
     if (mRailMover != nullptr) {
         mRailMover->movement();
         mPosition.set(mRailMover->_28);
@@ -339,6 +349,11 @@ void ChipBase::exeHide() {
 }
 
 void ChipBase::exeGot() {
+#ifdef PETARI_NATIVE
+    if (MR::isFirstStep(this)) {
+        petari_milestone("StarChip.Got");
+    }
+#endif
     if (MR::isFirstStep(this)) {
         if (hasAirBubble()) {
             MR::emitEffect(mAirBubble, "RecoveryBubbleBreak");

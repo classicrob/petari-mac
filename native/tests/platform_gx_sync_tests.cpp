@@ -433,6 +433,77 @@ void testSnapshotLifetime() {
     GXS::setSnapshotHook(nullptr, nullptr);
 }
 
+// Draw done does not wait for a token-time capture (a GPU round trip); the
+// frame boundary does (GameSystem::frameLoop): the next frame's game code runs
+// only after every token callback of the previous frame, as on the console,
+// where they all precede GXDrawDone. Other game threads run meanwhile.
+std::atomic<int> gBarrierSpins{0};
+std::atomic<bool> gStopBarrierSpin{false};
+void* barrierSpinner(void*) {
+    while (!gStopBarrierSpin) {
+        gBarrierSpins++;
+        OSYieldThread();
+    }
+    return nullptr;
+}
+
+void testTokensBeforeNextFrame() {
+    GXS::setDrawSyncCallback(drawSyncCallback);
+    GXS::setDrawDoneCallback(drawDoneCallback);
+    {
+        std::lock_guard<std::mutex> g(gLifetimeLock);
+        gLifetimeTickets.clear();
+    }
+    GXS::setSnapshotHook(lifetimeHook, nullptr);
+    {
+        std::lock_guard<std::mutex> g(gLogLock);
+        gLog.clear();
+    }
+    static OSThread thread;
+    alignas(32) static u8 stack[0x4000];
+    OSCreateThread(&thread, barrierSpinner, nullptr, stack + sizeof(stack), sizeof(stack), 24, 0);
+    OSResumeThread(&thread);
+
+    // Frame N: two peek tokens (star pointer, lens flare), then the frame's draw done.
+    gRenderer.write(Cmd::Draw, 0, 256);
+    GXSetDrawSyncTest(60);
+    gRenderer.write(Cmd::Draw, 0, 256);
+    GXSetDrawSyncTest(61);
+    GXDrawDoneTest();
+    const std::vector<std::uint64_t> tickets = lifetimeTickets(2);
+    check(tickets.size() == 2, "a ticket per token");
+    {
+        std::lock_guard<std::mutex> g(gLogLock);
+        check((gLog == std::vector<std::string>{"done"}), "GXDrawDone returns while the frame's captures are in flight");
+    }
+    // The captures complete later, out of order, from a renderer thread.
+    std::thread renderer([&tickets] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        GXS::snapshotReady(tickets[1]);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        GXS::snapshotReady(tickets[0]);
+    });
+    gBarrierSpins = 0;
+    GXS::waitTokensDelivered();  // frame N+1 starts after this
+    {
+        std::lock_guard<std::mutex> g(gLogLock);
+        gLog.push_back("next frame");
+    }
+    renderer.join();
+    {
+        std::lock_guard<std::mutex> g(gLogLock);
+        check((gLog == std::vector<std::string>{"done", "token60", "token61", "next frame"}),
+              "every token callback of a frame precedes the next frame's game code, in token order");
+    }
+    check(gBarrierSpins.load() > 0, "other game threads run during the frame-boundary wait");
+    const auto start = std::chrono::steady_clock::now();
+    GXS::waitTokensDelivered();
+    check(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(5), "nothing outstanding: no wait");
+    gStopBarrierSpin = true;
+    OSJoinThread(&thread, nullptr);
+    GXS::setSnapshotHook(nullptr, nullptr);
+}
+
 // ---- Hang check (the game's GX abort alarm, MainLoopFramework.cpp) ----
 // Driven directly, without the fake renderer (after a shutdown resets the
 // positions): the test plays the processor, and a host thread plays the alarm
@@ -627,6 +698,7 @@ int main() {
     testNoDropsAndInterruptsDisabled();
     testDrawSyncManagerProtocol();
     testSnapshotLifetime();
+    testTokensBeforeNextFrame();
     gRenderer.stop();
     GXS::shutdown();
     testCompileBurstIsNotAHang();

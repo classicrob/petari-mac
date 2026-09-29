@@ -8,6 +8,10 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Undo a BUILD_TESTING override left behind by a configure that failed inside native/gx.
+if(DEFINED CACHE{_PETARI_BUILD_TESTING_SAVED})
+    set(BUILD_TESTING "${_PETARI_BUILD_TESTING_SAVED}" CACHE BOOL "Build tests" FORCE)
+endif()
 option(PETARI_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
 include(native/cmake/LegacySources.cmake)
 
@@ -63,7 +67,7 @@ target_include_directories(petari_game_objects PRIVATE "${PETARI_LEGACY_ROOT}/li
 target_compile_options(petari_game_objects PRIVATE -Wno-inconsistent-missing-override -fno-rtti)
 
 include(CTest)
-add_library(petari_host_runtime STATIC native/src/host_allocation.cpp native/text/utf16.cpp)
+add_library(petari_host_runtime STATIC native/src/host_allocation.cpp native/src/asset_diagnostics.cpp native/text/utf16.cpp)
 target_link_libraries(petari_host_runtime PUBLIC petari_native_config)
 add_library(petari_memory STATIC native/memory/address_api.cpp native/memory/arena.cpp src/RVL_SDK/os/OSAlloc.c)
 petari_encode_target_sources(petari_memory)
@@ -191,9 +195,14 @@ endif()
 
 option(PETARI_BUILD_GX_PROBE "Build the native GX/Metal integration probe (downloads Aurora dependencies)" OFF)
 if(PETARI_BUILD_GX_PROBE)
+    # Aurora's extern forces BUILD_TESTING OFF in the cache. Keep the saved value in the
+    # cache too, so a configure that fails inside native/gx is repaired by the next one.
+    set(_PETARI_BUILD_TESTING_SAVED "${BUILD_TESTING}" CACHE INTERNAL "")
+    # native/gx registers its tests under this name (BUILD_TESTING is OFF inside it).
     set(_petari_build_testing "${BUILD_TESTING}")
     add_subdirectory(native/gx)
-    set(BUILD_TESTING "${_petari_build_testing}" CACHE BOOL "Build tests" FORCE)
+    set(BUILD_TESTING "${_PETARI_BUILD_TESTING_SAVED}" CACHE BOOL "Build tests" FORCE)
+    unset(_PETARI_BUILD_TESTING_SAVED CACHE)
 endif()
 
 add_subdirectory(native/home_menu)

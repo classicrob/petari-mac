@@ -130,6 +130,36 @@ DinoPackunVs1::~DinoPackunVs1() {
     return;
 }
 
+#ifdef PETARI_NATIVE
+s32 DinoPackunVs1::nativeObservePhase() const {
+    if (isNerve(GET_NERVE(DinoPackunVs1, DinoPackunVs1NrvWaitStart)) || isNerve(GET_NERVE(DinoPackunVs1, DinoPackunVs1NrvOpeningDemo))) {
+        return 0;
+    }
+    if (isNerve(GET_NERVE(DinoPackunVs1, DinoPackunVs1NrvBattleEgg))) {
+        return 1;
+    }
+    if (isNerve(GET_NERVE(DinoPackunVs1, DinoPackunVs1NrvCryDemo))) {
+        return 2;
+    }
+    if (isNerve(GET_NERVE(DinoPackunVs1, DinoPackunVs1NrvBattleLv1))) {
+        return 3;
+    }
+    if (isNerve(GET_NERVE(DinoPackunVs1, DinoPackunVs1NrvAngryDemo))) {
+        return 4;
+    }
+    if (isNerve(GET_NERVE(DinoPackunVs1, DinoPackunVs1NrvBattleLv2))) {
+        return 5;
+    }
+    if (isNerve(GET_NERVE(DinoPackunVs1, DinoPackunVs1NrvBattleLv3))) {
+        return 6;
+    }
+    if (isNerve(GET_NERVE(DinoPackunVs1, DinoPackunVs1NrvDownDemo))) {
+        return 7;
+    }
+    return 8;
+}
+#endif
+
 s32 DinoPackunVs1::getVsCount() const {
     return 1;
 }

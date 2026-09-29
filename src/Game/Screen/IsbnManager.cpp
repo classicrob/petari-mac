@@ -5,6 +5,7 @@
 #include <nw4r/lyt/textBox.h>
 #ifdef PETARI_NATIVE
 #include <cwchar>
+#include <petari/asset_diagnostics.hpp>
 #else
 #include <wstring.h>
 #endif
@@ -80,6 +81,13 @@ void IsbnManager::setNumber(const wchar_t* pIsbnNumber, const wchar_t* pRegistNu
     for (s32 i = 0; i < 5; i++) {
         nw4r::lyt::TextBox* pTextBox = nw4r::ut::DynamicCast< nw4r::lyt::TextBox* >(pRootPane->FindPaneByName(cIsbnNumberPaneName[i], true));
         length = isbnLength[i];
+#ifdef PETARI_NATIVE
+        if (!pTextBox) {
+            PetariNative::reportMissingLayoutReference("IsbnLayout_00", cIsbnNumberPaneName[i], "pane");
+            pIsbnNumber += length;
+            continue;
+        }
+#endif
         pTextBox->SetString(pIsbnNumber, 0, length);
         pIsbnNumber += length;
     }
@@ -91,6 +99,13 @@ void IsbnManager::setNumber(const wchar_t* pIsbnNumber, const wchar_t* pRegistNu
     for (s32 i = 0; i < 3; i++) {
         nw4r::lyt::TextBox* pTextBox = nw4r::ut::DynamicCast< nw4r::lyt::TextBox* >(pRootPane->FindPaneByName(cRegistNumberPaneName[i], true));
         partLength = registLength[i];
+#ifdef PETARI_NATIVE
+        if (!pTextBox) {
+            PetariNative::reportMissingLayoutReference("IsbnLayout_00", cRegistNumberPaneName[i], "pane");
+            pRegistNumber += partLength;
+            continue;
+        }
+#endif
         pTextBox->SetString(pRegistNumber, 0, partLength);
         pRegistNumber += partLength;
     }
@@ -102,6 +117,13 @@ void IsbnManager::setNumber(const wchar_t* pIsbnNumber, const wchar_t* pRegistNu
     for (s32 i = 0; i < 2; i++) {
         nw4r::lyt::TextBox* pTextBox = nw4r::ut::DynamicCast< nw4r::lyt::TextBox* >(pRootPane->FindPaneByName(cOtherNumberPaneName[i], true));
         otherPartLength = otherLength[i];
+#ifdef PETARI_NATIVE
+        if (!pTextBox) {
+            PetariNative::reportMissingLayoutReference("IsbnLayout_00", cOtherNumberPaneName[i], "pane");
+            pOtherNumber += otherPartLength;
+            continue;
+        }
+#endif
         pTextBox->SetString(pOtherNumber, 0, otherPartLength);
         pOtherNumber += otherPartLength;
     }

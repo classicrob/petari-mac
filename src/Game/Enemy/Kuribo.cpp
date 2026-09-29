@@ -23,6 +23,7 @@
 #include "Game/Util/PlayerUtil.hpp"
 #include "Game/Util/SceneUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
 #include "Game/Util/VectorUtil.hpp"
 #include <revolution/mtx.h>
@@ -203,6 +204,9 @@ void Kuribo::kill() {
 }
 
 void Kuribo::control() {
+#ifdef PETARI_NATIVE
+    MR::Native::publishActor("Goomba", mPosition, -mGravity, 0, PETARI_ACTOR_HOSTILE);
+#endif
     mScaleController->updateNerve();
     if (_C4) {
         MR::calcGravityOrZero(this);
