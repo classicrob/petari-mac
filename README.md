@@ -4,7 +4,7 @@ Petari
 
 This fork has an **in-progress native Apple Silicon port** on `port/macos-arm64`.
 See [native build instructions and current limitations](native/README.md).
-The native app runs the original game through startup into title initialization;
+The native app accepts title input, reaches selectable save slots, and shuts down cleanly;
 playable gameplay is **not yet verified**. The original Wii build instructions
 below are retained for the matching build.
 

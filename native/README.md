@@ -9,11 +9,13 @@ milestones.
 The full arm64 `Petari.app` now links and starts the Metal window, platform
 services, and original game entry point. The original frame loop runs at about
 60 Hz, audio initialization and stationed-resource loading complete, and the fresh
-save check finishes. Startup reaches Game/FileSelect and title music preparation.
-The latest full-app run stopped in streamed audio; completing title input and
-entering gameplay remain unverified. A separate audio boot test plays a real coin
+save check finishes. The full title smoke accepts A+B, reaches selectable save
+slots, and exits through the game's normal power-off path with status 0. Gameplay
+remains unverified: the first playable smoke selected an empty slot through the
+real pointer, then stalled when the create-file prompt appeared. A separate audio boot test plays a real coin
 sound and the title music through JAudio and the native DSP/AI path, including
-50 seconds of streaming through a loop. Focused
+50 seconds of streaming through a loop, and the transition to file-select music
+with its chord table. Focused
 tests have rendered both a J3D Mario model and the default
 Mii face/icon on Metal, with GPU pixel readback checks.
 
@@ -32,10 +34,15 @@ and frame progress. The trace is disabled by default.
 
 Set `PETARI_SMOKE=title` with a fresh `--user` directory to exercise strap-screen
 input and A+B on the title through the normal input layer. The script passes only
-when the file selector enters its start state, then requests the game's normal
+when the file selector enters its selectable state, then requests the game's normal
 shutdown. Exit statuses are 0 for pass, 1 for failure, 2 for a blocked save
 sequence, 124 for stalled frames, and 125 for shutdown timeout. Its component
-tests pass; a complete full-app smoke pass is still pending.
+tests and the complete full-app title run pass.
+
+`PETARI_SMOKE=playable PETARI_SMOKE_FRAMES=36000` extends the script to create a
+fresh Mario file, advance the prologue, and require Mario to move in response to
+the movement binding. It uses observed UI targets and the normal input layer.
+This extended run is still under development and has not passed end to end.
 
 ## Build the native core
 
@@ -246,9 +253,8 @@ object target, not a game executable.
 
 ## Work still required for a playable port
 
-1. Complete the title smoke, create a file, and enter playable gameplay. The
-   original frame loop now completes startup and first-run save checks; title
-   input acceptance and the full shutdown path still need verification.
+1. Create a file and enter playable gameplay. The title smoke and normal shutdown
+   pass; the extended smoke currently stalls at the create-file prompt.
 2. Continue serialized resource runtime validation. Archive, BCSV,
    BMG, KCL, models, layouts, fonts and TPL conversions have real-disc tests.
    All 1,761 disc model/material images construct real J3DModelData successfully.
