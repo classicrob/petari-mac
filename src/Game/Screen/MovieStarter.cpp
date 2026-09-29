@@ -12,12 +12,13 @@
 
 namespace {
     // Milestone names need static storage; only the two prologue movies are placed with
-    // MovieStarter (PeachCastleGardenGalaxy).
+    // MovieStarter (PeachCastleGardenGalaxy). PrologueB's end is noted by
+    // MoviePlayingSequence::exeEndWait, before its stage change can tear this actor down.
     void noteMovieMilestone(s32 movieType, bool isEnd) {
         if (movieType == 0) {
             petari_milestone(isEnd ? "Movie.PrologueA.End" : "Movie.PrologueA.Start");
-        } else if (movieType == 1) {
-            petari_milestone(isEnd ? "Movie.PrologueB.End" : "Movie.PrologueB.Start");
+        } else if (movieType == 1 && !isEnd) {
+            petari_milestone("Movie.PrologueB.Start");
         }
     }
 }  // namespace

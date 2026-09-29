@@ -16,6 +16,11 @@
 #include "Game/Util/StarPointerUtil.hpp"
 #include "Game/Util/StringUtil.hpp"
 
+#ifdef PETARI_NATIVE
+// Progress telemetry and the automated smoke run (native/app); observation only.
+#include <petari/milestone.hpp>
+#endif
+
 namespace {
     /// @brief A type of screen transition.
     enum WipeType {
@@ -400,6 +405,14 @@ void MoviePlayingSequence::exeEndWait() {
 
     if (MR::isStep(this, mInfo->mEndWaitTime)) {
         const MoviePlayingInfo* pInfo = mInfo;
+
+#ifdef PETARI_NATIVE
+        // PrologueB changes stage here; note its end before the request so the milestone does
+        // not depend on MovieStarter observing isEndMovie before the scene is torn down.
+        if (MR::isEqualStringCase(pInfo->mMovieName, "/MovieData/PrologueB.thp")) {
+            petari_milestone("Movie.PrologueB.End");
+        }
+#endif
 
         if (MR::isEqualStringCase(pInfo->mMovieName, "/MovieData/FinalBattle.thp")) {
             MR::requestStartScenarioSelect(pInfo->mStageName);

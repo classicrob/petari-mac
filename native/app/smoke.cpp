@@ -76,7 +76,14 @@ constexpr int kMaxRecoveries = 4;
 constexpr unsigned long kSidestepFrames = 40;
 constexpr unsigned long kSegmentLimit = 9000;
 constexpr unsigned long kMovieStartLimit = 900;
-constexpr unsigned long kMovieLimit = 7200;  // PrologueA.thp is 5591 frames
+// Movie.<X>.Start to .End (for PrologueB, or Stage.HeavensDoorGalaxy): the
+// THP's frames (PrologueA.thp 5591, PrologueB.thp 7076, at 59.94 fps) plus
+// MoviePlayingSequence's waits (PlayWait 75 for both, EndWait 60 for A and 0
+// for B), the 0.1% frame-rate drift and about 47 frames of player start and
+// teardown: 5779 measured for A in story-3, about 7205 expected for B. The
+// margin covers those 188 frames at most and a loading hitch.
+constexpr unsigned long kMovieFrames[2] = {5591, 7076};
+constexpr unsigned long kMovieMargin = 400;
 constexpr unsigned long kStoryReadyLimit = 7200;
 constexpr unsigned long kStageLimit = 3600;
 constexpr unsigned long kRouteLogInterval = 120;
@@ -807,9 +814,9 @@ void Driver::story(const Observation& observation, Step& step) {
             } else {
                 next(Phase::WaitStage);
             }
-        } else if (mPhaseFrames >= kMovieLimit) {
-            finish(Result::Fail, std::string("no ") + kMovieEnd[mSegment] + " within " + std::to_string(kMovieLimit) +
-                                     " frames",
+        } else if (mPhaseFrames >= kMovieFrames[mSegment] + kMovieMargin) {
+            finish(Result::Fail, std::string("no ") + kMovieEnd[mSegment] + " within " +
+                                     std::to_string(kMovieFrames[mSegment] + kMovieMargin) + " frames",
                    step);
         }
         break;

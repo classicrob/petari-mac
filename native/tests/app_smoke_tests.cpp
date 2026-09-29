@@ -986,6 +986,7 @@ struct StorySim {
     bool pressedA = false;
     int movie = -1;             // playing movie (0 A, 1 B)
     int movieFrames = 0;
+    int movieLength[2] = {300, 300};  // Start to End, in frames
     int afterMovie = -1;        // frames since PrologueA ended
     bool heavensDoor = false;
     std::vector<std::string> pending;
@@ -1067,7 +1068,7 @@ struct StorySim {
     void advance() {
         yaw += 0.002f;
         if (movie >= 0) {
-            if (++movieFrames == 300) {
+            if (++movieFrames == movieLength[movie]) {
                 pending.push_back(movie == 0 ? "Movie.PrologueA.End" : "Movie.PrologueB.End");
                 if (movie == 0) {
                     x = badRestart ? 9000.0f : -500.0f;
@@ -1209,6 +1210,28 @@ void testStoryRoute() {
     simulateStory(delayed, late, 40000);
     check(delayed.driver.result() == Result::Pass && delayed.logged("Movie.PrologueB.Start at"),
           "a movie starting while the driver waits at the last waypoint is recognised: " + delayed.driver.reason());
+
+    // Movies as long as the real ones: PrologueA took 5779 frames in story-3;
+    // PrologueB, about 7205 expected, here with A's full 188 frames of waits.
+    Run full(10000000, Smoke::Script::Story);
+    toStoryStart(full);
+    StorySim real;
+    real.movieLength[0] = 5779;
+    real.movieLength[1] = 7076 + 188;
+    simulateStory(full, real, 40000);
+    check(full.driver.result() == Result::Pass && full.logged("Movie.PrologueA.End after 5779 frames") &&
+              full.logged("Movie.PrologueB.End after 7264 frames"),
+          "movies of the real lengths pass: " + full.driver.reason());
+    // A movie still playing 400 frames after its THP should have ended FAILs.
+    Run overlong(10000000, Smoke::Script::Story);
+    toStoryStart(overlong);
+    StorySim hung;
+    hung.movieLength[1] = 7076 + 400 + 1;
+    simulateStory(overlong, hung, 40000);
+    check(overlong.driver.result() == Result::Fail &&
+              overlong.driver.reason() == "no Movie.PrologueB.End within 7476 frames",
+          "an overlong PrologueB FAILs: " + overlong.driver.reason());
+    check(allKeysReleased(overlong), "keys released after an overlong movie");
 
     // The stage change can come without Movie.PrologueB.End.
     Run noEnd(10000000, Smoke::Script::Story);
