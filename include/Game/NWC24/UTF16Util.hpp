@@ -1,7 +1,11 @@
 #pragma once
 
 #include <revolution.h>
+#ifdef PETARI_NATIVE
+#include <cstddef>
+#else
 #include <size_t.h>
+#endif
 
 namespace MR {
     /// @brief Returns the length of the given null-terminated wide string.

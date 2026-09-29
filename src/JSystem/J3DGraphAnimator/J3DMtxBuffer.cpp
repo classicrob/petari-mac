@@ -3,6 +3,7 @@
 #include "JSystem/J3DGraphBase/J3DMaterial.hpp"
 #include "JSystem/J3DGraphLoader/J3DModelLoader.hpp"
 #include "JSystem/JKernel/JKRHeap.hpp"
+#include <math.h>
 
 Mtx J3DMtxBuffer::sNoUseDrawMtx;
 Mtx33 J3DMtxBuffer::sNoUseNrmMtx;
@@ -178,6 +179,7 @@ s32 J3DMtxBuffer::createBumpMtxArray(J3DModelData* i_modelData, u32 mtxNum) {
 static f32 J3DUnit01[] = {0.0f, 1.0f};
 
 void J3DMtxBuffer::calcWeightEnvelopeMtx() {
+#ifdef __MWERKS__
     __REGISTER MtxPtr weightAnmMtx;
     __REGISTER MtxPtr worldMtx;
     __REGISTER MtxPtr invMtx;
@@ -302,6 +304,50 @@ void J3DMtxBuffer::calcWeightEnvelopeMtx() {
             ps_merge00 var_f30, var_f24, var_f24
         }
     }
+#else
+    // Each weighted envelope matrix is sum(weight * anmMtx * invJointMtx), with
+    // the inverse joint matrix treated as affine. Operation order and fused
+    // multiply-adds follow the paired-single sequence.
+    int max = mJointTree->getWEvlpMtxNum();
+    u16* indices = mJointTree->getWEvlpMixMtxIndex();
+    f32* weights = mJointTree->getWEvlpMixWeight();
+
+    for (int i = 0; i < max; i++) {
+        u8* pScale = &mpEvlpScaleFlagArr[i];
+        *pScale = 1;
+        MtxPtr weightAnmMtx = mpWeightEvlpMtx[i];
+        f32 sum[3][4] = {};
+
+        int j = 0;
+        int mixNum = mJointTree->getWEvlpMixMtxNum(i);
+        do {
+            int idx = *indices++;
+            MtxPtr invMtx = mJointTree->getInvJointMtx((u16)idx);
+            MtxPtr worldMtx = mpAnmMtx[idx];
+            f32 weight = *weights++;
+
+            for (int row = 0; row < 3; row++) {
+                for (int col = 0; col < 4; col++) {
+                    f32 value = invMtx[0][col] * worldMtx[row][0];
+                    value = fmaf(invMtx[1][col], worldMtx[row][1], value);
+                    value = fmaf(invMtx[2][col], worldMtx[row][2], value);
+                    if (col >= 2) {
+                        value = fmaf(J3DUnit01[col - 2], worldMtx[row][col], value);
+                    }
+                    sum[row][col] = fmaf(value, weight, sum[row][col]);
+                }
+            }
+
+            *pScale &= mpScaleFlagArr[idx];
+        } while (++j < mixNum);
+
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 4; col++) {
+                weightAnmMtx[row][col] = sum[row][col];
+            }
+        }
+    }
+#endif
 }
 
 void J3DMtxBuffer::calcDrawMtx(u32 mdlFlag, Vec const& param_1, Mtx const& param_2) {

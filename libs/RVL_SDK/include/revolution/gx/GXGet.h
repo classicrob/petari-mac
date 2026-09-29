@@ -9,6 +9,7 @@ extern "C" {
 #include "revolution/gx.h"
 
 void GXGetViewportv(f32 *);
+void GXGetCullMode(GXCullMode *);
 
 u32 GXGetTexObjTlut(const GXTexObj *);
 

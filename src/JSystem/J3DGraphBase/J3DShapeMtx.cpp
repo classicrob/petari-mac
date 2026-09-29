@@ -545,6 +545,12 @@ void J3DPSMtx33Copy(Mtx3P src, Mtx3P dst) {
         psq_st fr1, 0x18(destination), 0, 0
         stfs fr0, 0x20(destination)
     }
+#else
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+            dst[row][col] = src[row][col];
+        }
+    }
 #endif
 }
 
@@ -564,6 +570,13 @@ void J3DPSMtx33CopyFrom34(__REGISTER MtxPtr src, __REGISTER Mtx3P dst) {
         stfs w, 20(dst)
         psq_st u, 24(dst), 0, 0
         stfs v, 32(dst)
+    }
+#else
+    // Copies the 3x3 part of a 3x4 matrix.
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+            dst[row][col] = src[row][col];
+        }
     }
 #endif
 }

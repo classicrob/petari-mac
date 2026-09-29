@@ -457,7 +457,7 @@ void HammerHeadPackun::initShadow() {
 }
 
 inline s32 JMapInfo_getEntries(const JMapInfo* jmap) {
-    return jmap->mData ? jmap->mData->mNumEntries : nullptr;
+    return jmap->mData ? jmap->mData->mNumEntries : 0;
 }
 
 inline bool JMapInfo_inRange(const JMapInfoIter& rIter) {

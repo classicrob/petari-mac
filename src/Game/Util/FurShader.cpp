@@ -1,6 +1,9 @@
 #include "Game/Util/FurShader.hpp"
 #include "Game/Util/MathUtil.hpp"
 #include <JSystem/J3DGraphAnimator/J3DModelData.hpp>
+#ifdef PETARI_NATIVE
+#include <petari/endian.hpp>
+#endif
 #include <JSystem/J3DGraphBase/J3DMaterial.hpp>
 #include <JSystem/J3DGraphBase/J3DShape.hpp>
 #include <JSystem/J3DGraphBase/J3DShapeDraw.hpp>
@@ -208,8 +211,17 @@ void CShader::setup(J3DModelData* pData) {
 }
 
 namespace {
+    // Display lists are big-endian GX command streams.
+    inline u16 readDLU16(const u8* p) {
+#ifdef PETARI_NATIVE
+        return PetariNative::readU16BE(p);
+#else
+        return *reinterpret_cast< const u16* >(p);
+#endif
+    }
+
     inline s32 getCount(u8* pRead) {
-        return *reinterpret_cast< u16* >(pRead + 1);
+        return readDLU16(pRead + 1);
     }
 }
 
@@ -266,9 +278,9 @@ void CShader::makeIndexData(J3DShape* pShape) const {
 
             for (s32 i = 0; i < count; i++) {
                 u8* pVertex = pRead + 3 + stride * i;
-                u16 pos = *reinterpret_cast< u16* >(pVertex + posOffset);
-                u16 nrm = *reinterpret_cast< u16* >(pVertex + nrmOffset);
-                u16 tex = *reinterpret_cast< u16* >(pVertex + texOffset);
+                u16 pos = readDLU16(pVertex + posOffset);
+                u16 nrm = readDLU16(pVertex + nrmOffset);
+                u16 tex = readDLU16(pVertex + texOffset);
                 mIndexArray[pos]._0 = nrm;
                 mIndexArray[pos]._2 = tex;
             }
@@ -323,10 +335,10 @@ void CShader::checkBorderVtx(J3DModelData* pData, u32 shapeIndex) {
                     break;
                 }
 
-                s32 count = *reinterpret_cast< u16* >(pRead + 1);
+                s32 count = readDLU16(pRead + 1);
 
                 for (s32 i = 0; i < count; i++) {
-                    u16 pos = *reinterpret_cast< u16* >((pRead + stride * i) + (posOffset + 3));
+                    u16 pos = readDLU16((pRead + stride * i) + (posOffset + 3));
                     mIndexArray[pos]._0 = 0xFFFF;
                     mIndexArray[pos]._2 = 0xFFFF;
                 }

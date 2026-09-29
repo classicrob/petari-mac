@@ -128,7 +128,7 @@ void MarineSnow::draw(const TVec3f& rPosition, const TVec3f& rUp, f32 surfaceDis
                     continue;
                 }
 
-                GXColor color = {0, 0, 0, alpha};
+                GXColor color = {0, 0, 0, static_cast< u8 >(alpha)};
                 GXSetTevColor(GX_TEVREG0, color);
 
                 TMtx34f mtx;

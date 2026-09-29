@@ -24,7 +24,9 @@ namespace nw4r {
         };
 
         namespace detail {
-            #ifdef __MWERKS__
+            // The node offset must be the real member offset (the zero fallback is for
+// tooling builds only; natively it made list links overwrite the vtable pointer).
+#if defined(__MWERKS__) || defined(PETARI_NATIVE)
             typedef ut::LinkList<FontRefLink, offsetof(FontRefLink, mLink)>  FontRefList;
             #else
             typedef ut::LinkList<FontRefLink, 0> FontRefList;

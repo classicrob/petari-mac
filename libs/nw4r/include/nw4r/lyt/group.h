@@ -14,7 +14,9 @@ namespace nw4r {
             };
         };
 
-        #ifdef __MWERKS__
+        // The node offset must be the real member offset (the zero fallback is for
+// tooling builds only; natively it made list links overwrite the vtable pointer).
+#if defined(__MWERKS__) || defined(PETARI_NATIVE)
         typedef ut::LinkList<detail::PaneLink, offsetof(detail::PaneLink, mLink)> PaneLinkList;
         #else
         typedef ut::LinkList<detail::PaneLink, 0>   PaneLinkList;
@@ -49,7 +51,9 @@ namespace nw4r {
             u8 mPadding[2];
         };
 
-        #ifdef __MWERKS__
+        // The node offset must be the real member offset (the zero fallback is for
+// tooling builds only; natively it made list links overwrite the vtable pointer).
+#if defined(__MWERKS__) || defined(PETARI_NATIVE)
         typedef ut::LinkList<Group, offsetof(Group, mLink)> GroupList;
         #else
         typedef ut::LinkList<Group, 0> GroupList;

@@ -24,11 +24,17 @@
 
 template nw4r::lyt::TextBox* nw4r::ut::DynamicCast< nw4r::lyt::TextBox*, nw4r::lyt::Pane >(nw4r::lyt::Pane*);
 
+#ifndef PETARI_NATIVE
+// Matching-build instantiation; 4 is the Wii offset of the pane link (natively PaneList uses offsetof).
 template const nw4r::lyt::Pane* nw4r::ut::LinkList< nw4r::lyt::Pane, 4 >::ConstIterator::operator->() const;
+#endif
 template void JGeometry::TVec2< f32 >::set< f32 >(f32, f32);
 template void JGeometry::TBox2< f32 >::set(const TVec2f&, const TVec2f&);
 
+#ifndef PETARI_NATIVE
+// Emission-order instantiation for the matching build; the native LinkList iterator differs.
 template nw4r::lyt::PaneList::Iterator nw4r::ut::LinkList< nw4r::lyt::Pane, 4 >::Iterator::operator++(int);
+#endif
 
 extern "C" int vswprintf(wchar_t*, size_t, const wchar_t*, va_list);
 

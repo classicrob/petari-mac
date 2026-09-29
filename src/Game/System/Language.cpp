@@ -5,6 +5,12 @@
 #include "Game/Util/StringUtil.hpp"
 #include "Game/Util/SystemUtil.hpp"
 #include <revolution/sc.h>
+#ifdef PETARI_NATIVE
+#include <petari/locale.hpp>
+#include <revolution/dvd.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
 
 #define REGION_EU 0
 #define REGION_JP 1
@@ -125,6 +131,15 @@ namespace {
 namespace MR {
     u32 getDecidedLanguageFromIPL() {
         s32 language = SCGetLanguage();
+#ifdef PETARI_NATIVE
+        const auto* disc = DVDGetCurrentDiskID();
+        const auto selection = PetariNative::selectDiscLanguage(disc ? disc->gameName[3] : '\0', language);
+        if (!selection || !disc || disc->gameName[0] != 'R' || disc->gameName[1] != 'M' || disc->gameName[2] != 'G') {
+            std::fprintf(stderr, "Native language selection requires a mounted Super Mario Galaxy disc with a recognized region.\n");
+            std::abort();
+        }
+        return ::cSCLanguage2GameLanguageTable[selection->table][selection->language];
+#else
         s32 i;
 
         if (language < 0) {
@@ -140,6 +155,7 @@ namespace MR {
         }
 
         return ::cSCLanguage2GameLanguageTable[4][i];
+#endif
     }
 
     u32 getLanguage() {

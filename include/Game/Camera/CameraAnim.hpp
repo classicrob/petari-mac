@@ -1,6 +1,61 @@
 #pragma once
 
 #include "Game/Camera/Camera.hpp"
+#ifdef PETARI_NATIVE
+#include "Game/Util/BigEndian.hpp"
+#endif
+
+#ifdef PETARI_NATIVE
+// .canm files are big-endian; natively the fields decode on read (the resource is shared
+// and may be reached through several loaders, so it is not converted in place).
+typedef BigEndianValue< f32 > CanmValue;
+
+struct CanmFileHeader {
+    /* 0x00 */ u8 mMagic[4];
+    /* 0x04 */ u8 mType[4];
+    /* 0x08 */ BigEndianValue< s32 > _8;
+    /* 0x0C */ BigEndianValue< s32 > _C;
+    /* 0x10 */ BigEndianValue< s32 > _10;
+    /* 0x14 */ BigEndianValue< s32 > _14;
+    /* 0x18 */ BigEndianValue< u32 > mNrFrames;
+    /* 0x1C */ BigEndianValue< u32 > mValueOffset;
+};
+
+struct CanmKeyFrameComponentInfo {
+    /* 0x0 */ BigEndianValue< u32 > mCount;
+    /* 0x4 */ BigEndianValue< u32 > mOffset;
+    /* 0x8 */ BigEndianValue< u32 > mType;
+};
+
+struct CanmKeyFrameInfo {
+    /* 0x00 */ CanmKeyFrameComponentInfo mPosX;
+    /* 0x0C */ CanmKeyFrameComponentInfo mPosY;
+    /* 0x18 */ CanmKeyFrameComponentInfo mPosZ;
+    /* 0x24 */ CanmKeyFrameComponentInfo mWatchPosX;
+    /* 0x30 */ CanmKeyFrameComponentInfo mWatchPosY;
+    /* 0x3C */ CanmKeyFrameComponentInfo mWatchPosZ;
+    /* 0x48 */ CanmKeyFrameComponentInfo mTwist;
+    /* 0x54 */ CanmKeyFrameComponentInfo mFovy;
+};
+
+struct CamnFrameComponentInfo {
+    /* 0x0 */ BigEndianValue< u32 > mCount;
+    /* 0x4 */ BigEndianValue< u32 > mOffset;
+};
+
+struct CanmFrameInfo {
+    /* 0x00 */ CamnFrameComponentInfo mPosX;
+    /* 0x08 */ CamnFrameComponentInfo mPosY;
+    /* 0x10 */ CamnFrameComponentInfo mPosZ;
+    /* 0x18 */ CamnFrameComponentInfo mWatchPosX;
+    /* 0x20 */ CamnFrameComponentInfo mWatchPosY;
+    /* 0x28 */ CamnFrameComponentInfo mWatchPosZ;
+    /* 0x30 */ CamnFrameComponentInfo mTwist;
+    /* 0x38 */ CamnFrameComponentInfo mFovy;
+};
+
+#else
+typedef f32 CanmValue;
 
 struct CanmFileHeader {
     /* 0x00 */ u8 mMagic[4];
@@ -45,6 +100,8 @@ struct CanmFrameInfo {
     /* 0x30 */ CamnFrameComponentInfo mTwist;
     /* 0x38 */ CamnFrameComponentInfo mFovy;
 };
+
+#endif
 
 class BaseCamAnmDataAccessor;
 class CamAnmDataAccessor;
@@ -122,7 +179,7 @@ public:
     }
 
     /* 0x4 */ CanmFrameInfo* mInfo;
-    /* 0x8 */ f32* mValues;
+    /* 0x8 */ CanmValue* mValues;
 };
 
 class KeyCamAnmDataAccessor : public BaseCamAnmDataAccessor {
@@ -145,5 +202,5 @@ public:
     f32 calcHermite(f32, f32, f32, f32, f32, f32, f32) const;
 
     /* 0x4 */ CanmKeyFrameInfo* mInfo;
-    /* 0x8 */ f32* mValues;
+    /* 0x8 */ CanmValue* mValues;
 };

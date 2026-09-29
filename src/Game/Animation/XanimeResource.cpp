@@ -5,6 +5,9 @@
 #include "Game/Util/StringUtil.hpp"
 #include <cstring>
 #include <revolution/types.h>
+#ifdef PETARI_NATIVE
+#include <JSystem/J3DGraphAnimator/J3DAnimation.hpp>
+#endif
 
 static bool unknownByte;
 XanimeResourceTable::XanimeResourceTable(ResourceHolder* pArg) {
@@ -192,9 +195,18 @@ u32 XanimeResourceTable::initGroupInfo(ResourceHolder* pResourceHolder, XanimeGr
             entry->mLoop = 0.0f;
             entry->mAttribute = 0;
         } else {
+#ifdef PETARI_NATIVE
+            // The Wii reads J3DAnmBase::mAttribute and mFrameMax at their 32-bit byte offsets
+            // (after a 4-byte vtable pointer); natively the object layout differs.
+            const J3DAnmBase* pAnm = static_cast< const J3DAnmBase* >(entry->_20[0]);
+            entry->mAttribute = pAnm->getAttribute();
+            entry->mLoop = 0.0f;
+            entry->mEnd = static_cast< f32 >(pAnm->getFrameMax());
+#else
             entry->mAttribute = static_cast< u8* >(entry->_20[0])[4];
             entry->mLoop = 0.0f;
             entry->mEnd = static_cast< f32 >(reinterpret_cast< const s16* >(entry->_20[0])[3]);
+#endif
         }
 
         XanimeBckTable* ofsTables[1];
@@ -220,7 +232,7 @@ const XanimeGroupInfo* XanimeResourceTable::getGroupInfo(const char* pArg) const
     case 0:
         return nullptr;
 
-    case 1:
+    case 1: {
         s32 groupIndex = getGroupIndex(pArg);
         if (groupIndex == -1) {
             s32 simpleIndex = getSimpleIndex(pArg);
@@ -232,6 +244,7 @@ const XanimeGroupInfo* XanimeResourceTable::getGroupInfo(const char* pArg) const
         }
 
         return &mGroupInfos[groupIndex];
+    }
 
     case 2:
         return getGroupInfo(pArg, mDirectories);

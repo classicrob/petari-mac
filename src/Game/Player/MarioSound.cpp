@@ -14,6 +14,15 @@ struct SoundList {
     union SoundFlags {
         u32 _0;
         u8 _4[4];
+
+        // The table initializes _0 and code reads _4[0], the most significant byte on the Wii.
+        u8 getHighByte() const {
+#ifdef PETARI_NATIVE
+            return static_cast< u8 >(_0 >> 24);
+#else
+            return _4[0];
+#endif
+        }
     };
 
     const char* name;
@@ -1742,7 +1751,7 @@ void Mario::initSound() {
 void Mario::playSoundJ(const char* pSoundName, s32 timing) {
     u32 index;
     if (_96C->search(pSoundName, &index)) {
-        switch (soundlist[index]._8._4[0] & 0x3) {
+        switch (soundlist[index]._8.getHighByte() & 0x3) {
         case 0:
             MR::startSound(mActor, soundlist[index]._14, timing);
             break;
@@ -1760,7 +1769,7 @@ void Mario::playSoundJ(const char* pSoundName, s32 timing) {
             break;
         }
 
-        switch (soundlist[index]._8._4[0] & ~0x3) {
+        switch (soundlist[index]._8.getHighByte() & ~0x3) {
         case 0x4:
         case 0x8:
             if (mDrawStates.mIsUnderwater || mDrawStates._13) {
@@ -1779,7 +1788,7 @@ void Mario::playSoundJ(const char* pSoundName, s32 timing) {
 void Mario::stopSoundJ(const char* pSoundName, u32 delay) {
     u32 index;
     if (_96C->search(pSoundName, &index)) {
-        switch (soundlist[index]._8._4[0] & 0x3) {
+        switch (soundlist[index]._8.getHighByte() & 0x3) {
         case 0:
             MR::stopSound(mActor, soundlist[index]._14, delay);
             break;

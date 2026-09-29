@@ -30,6 +30,11 @@ public:
     /* 0x08 */ int mScaleCount;
     /* 0x0C */ AudChordData** mChordPtr;
     /* 0x10 */ AudScaleData** mScalePtr;
+#ifdef PETARI_NATIVE
+    /// @brief Host-side scale records. The resource stores 32-bit big-endian offsets, which
+    /// cannot be relocated in place into 64-bit pointers.
+    AudScaleData* mNativeScales;
+#endif
 };
 
 class AudChordInfo : public JASGlobalInstance< AudChordInfo > {

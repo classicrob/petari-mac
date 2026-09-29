@@ -1,6 +1,9 @@
 #pragma once
 
 #include <revolution/types.h>
+#ifdef PETARI_NATIVE
+#include "Game/Util/NativeOverload.hpp"
+#endif
 
 class ResFileInfo {
 public:
@@ -27,6 +30,11 @@ public:
     void newFileInfoTable(u32);
     ResFileInfo* add(const char*, void*, bool);
     const char* getResName(u32) const;
+#ifdef PETARI_NATIVE
+    // Wii u32 is unsigned long; `0UL` must select the index overload rather than const void*.
+    template < typename T, PETARI_WII_LONG_ARGS(T) >
+    const char* getResName(T index) const { return getResName(static_cast< u32 >(index)); }
+#endif
     void* getRes(u32) const;
     void* getRes(const char*) const;
     ResFileInfo* findFileInfo(const char*) const;

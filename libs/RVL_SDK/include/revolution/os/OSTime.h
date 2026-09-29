@@ -31,6 +31,9 @@ void OSTicksToCalendarTime(OSTime, OSCalendarTime*);
 
 #ifdef __MWERKS__
 vu32 OS_BUS_CLOCK_SPEED : 0x800000F8;
+#elif defined(PETARI_NATIVE)
+// Defined once by the native OS platform with the Wii bus clock value.
+extern vu32 OS_BUS_CLOCK_SPEED;
 #else
 vu32 OS_BUS_CLOCK_SPEED;
 #endif

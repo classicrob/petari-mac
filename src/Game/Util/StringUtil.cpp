@@ -5,7 +5,12 @@
 #include <cctype>
 #include <cstdarg>
 #include <cstdio>
+#ifdef PETARI_NATIVE
+#include <cstring>
+#include <cwchar>
+#else
 #include <wstring.h>
+#endif
 
 #define CENTISEC_PER_SEC 100
 #define SEC_PER_MIN 60
@@ -135,6 +140,15 @@ namespace MR {
     }
 
     wchar_t* addPictureFontTag(wchar_t* pDst, int tag) {
+#ifdef PETARI_NATIVE
+        // Text is host-order code units natively: the size and group bytes share one unit.
+        pDst[0] = 26;
+        pDst[1] = static_cast< wchar_t >(sizeof(Tag) << 8 | 3);
+        pDst[2] = tag - '0';
+        pDst[3] = '\0';
+
+        return &pDst[3];
+#else
         Tag* pTag = reinterpret_cast< Tag* >(pDst);
 
         pTag->_0 = 26;
@@ -144,6 +158,7 @@ namespace MR {
         pTag->mBuffer[1] = '\0';
 
         return &pTag->mBuffer[1];
+#endif
     }
 
     wchar_t* addPictureFontTagPlayerIcon(wchar_t* pDst) {
@@ -161,7 +176,12 @@ namespace MR {
 
     wchar_t* addNumberFontTag(wchar_t* pDst, const wchar_t* pFmt, ...) {
         *pDst++ = 0x1A;
+#ifdef PETARI_NATIVE
+        // Host-order code units: unit 0 is (size << 8 | group), unit 1 is the tag.
+        wchar_t* pTagHeader = pDst;
+#else
         TagHeader* pTag = reinterpret_cast< TagHeader* >(pDst);
+#endif
         pDst += sizeof(TagHeader) / sizeof(wchar_t);
 
         va_list args;
@@ -171,9 +191,15 @@ namespace MR {
         va_end(args);
 
         pDst += num;
+#ifdef PETARI_NATIVE
+        const u32 dataSize = num * sizeof(wchar_t) + sizeof(TagHeader) + sizeof(wchar_t);
+        pTagHeader[0] = static_cast< wchar_t >((dataSize & 0xFF) << 8 | 10);
+        pTagHeader[1] = 0;
+#else
         pTag->mGroup = 10;
         pTag->mTag = 0;
         pTag->mDataSize = num * sizeof(wchar_t) + sizeof(TagHeader) + sizeof(wchar_t);
+#endif
         *pDst = '\0';
 
         return pDst;

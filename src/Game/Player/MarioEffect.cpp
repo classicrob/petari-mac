@@ -24,13 +24,22 @@
 #include <cstring>
 
 struct MaterialEffectEntry {
+    // Tables initialize mWord with 0xB0B1B2B3 literals and read mByteN; natively the bytes
+    // are declared in reverse so mByte0 is still the most significant byte.
     union FlagWord {
         u32 mWord;
         struct {
+#ifdef PETARI_NATIVE
+            u8 mByte3;
+            u8 mByte2;
+            u8 mByte1;
+            u8 mByte0;
+#else
             u8 mByte0;
             u8 mByte1;
             u8 mByte2;
             u8 mByte3;
+#endif
         };
     };
 
@@ -42,13 +51,22 @@ struct MaterialEffectEntry {
 };
 
 struct SmokeEffectEntry {
+    // Tables initialize mWord with 0xB0B1B2B3 literals and read mByteN; natively the bytes
+    // are declared in reverse so mByte0 is still the most significant byte.
     union FlagWord {
         u32 mWord;
         struct {
+#ifdef PETARI_NATIVE
+            u8 mByte3;
+            u8 mByte2;
+            u8 mByte1;
+            u8 mByte0;
+#else
             u8 mByte0;
             u8 mByte1;
             u8 mByte2;
             u8 mByte3;
+#endif
         };
     };
 
@@ -202,7 +220,11 @@ void MarioActor::initMaterialEffect() {
     _BA4 = new HashSortTable(entryCount);
     entry = cMaterialEffectTable;
     for (int i = 0; i < entryCount; i++) {
+#ifdef PETARI_NATIVE
+        _BA4->addPtr(cMaterialEffectTable[i].mName, &cMaterialEffectTable[i], false);
+#else
         _BA4->add(cMaterialEffectTable[i].mName, reinterpret_cast< u32 >(&cMaterialEffectTable[i]), false);
+#endif
     }
 
     _BA4->sort();
@@ -308,7 +330,11 @@ s32 MarioActor::getFloorMaterialIndex(u32 flags) const {
 
 MultiEmitter* MarioActor::playMaterialEffect(const char* pName) {
     MaterialEffectEntry* entry = nullptr;
+#ifdef PETARI_NATIVE
+    _BA4->searchPtr(pName, &entry);
+#else
     _BA4->search(pName, reinterpret_cast< u32* >(&entry));
+#endif
 
     const s32 materialIndex = getFloorMaterialIndex(entry->mFlag.mByte0);
     if (materialIndex == -1) {
@@ -354,7 +380,11 @@ MultiEmitter* MarioActor::playMaterialEffect(const char* pName) {
 
 void MarioActor::stopMaterialEffect(const char* pName) {
     MaterialEffectEntry* entry = nullptr;
+#ifdef PETARI_NATIVE
+    _BA4->searchPtr(pName, &entry);
+#else
     _BA4->search(pName, reinterpret_cast< u32* >(&entry));
+#endif
 
     if (entry->mCurrent != nullptr) {
         MR::deleteEffect(this, entry->mCurrent);

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from encode_legacy_sources import prepare
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -17,19 +18,24 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "build/native-audit.json")
     parser.add_argument("paths", nargs="*", default=["src/Game"])
     args = parser.parse_args()
+    encoded_root = ROOT / "build/audit-sjis"
+    prepare(ROOT, encoded_root)
     sources = set()
     for path in args.paths:
         path = ROOT / path
         sources.update(path.rglob("*.cpp") if path.is_dir() else [path])
     command = [args.compiler, "-std=c++17", "-DPETARI_NATIVE=1", "-fsyntax-only",
                "-Wno-register", "-Wno-inconsistent-missing-override", "-Werror=return-type",
-               "-ferror-limit=5", "-fno-color-diagnostics"]
-    for path in ["native/include", "include", "libs/JSystem/include", "libs/RVL_SDK/include",
+               "-ferror-limit=5", "-fno-color-diagnostics", "-fno-rtti"]
+    for path in ["native/include", "native/home_menu/include", "include", "libs/JSystem/include", "libs/RVL_SDK/include",
                  "libs/nw4r/include", "libs/RVLFaceLib/include"]:
+        if not path.startswith("native/"):
+            command += ["-I", str(encoded_root / path)]
         command += ["-I", str(ROOT / path)]
 
     def compile_source(path):
-        result = subprocess.run(command + [str(path)], cwd=ROOT, text=True, capture_output=True)
+        encoded = encoded_root / path.relative_to(ROOT)
+        result = subprocess.run(command + [str(encoded if encoded.exists() else path)], cwd=ROOT, text=True, capture_output=True)
         return {"source": str(path.relative_to(ROOT)), "passed": result.returncode == 0,
                 "diagnostics": result.stderr}
 

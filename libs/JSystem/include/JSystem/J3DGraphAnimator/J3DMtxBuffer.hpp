@@ -103,6 +103,14 @@ public:
             psq_st u, 24(destination), 0, 0
             stfs v, 32(destination)
         }
+#else
+        // Copies the rotation/scale 3x3 part of a 3x4 matrix.
+        Mtx33& destination = mpNrmMtxArr[1][mCurrentViewNo][idx];
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 3; col++) {
+                destination[row][col] = mtx[row][col];
+            }
+        }
 #endif
     }
 

@@ -1,11 +1,17 @@
 #include "revolution.h"
 #include <ctype.h>
 #include <locale.h>
+#ifdef PETARI_NATIVE
+#include <petari/endian.hpp>
+#include <cstdio>
+#endif
 
 /* this is here because it won't be inlined otherwise */
+#ifndef PETARI_NATIVE
 inline int tolower(int c) {
     return ((c < 0) || (c >= 0x100)) ? c : (int) (_current_locale.ctype_cmpt_ptr->lower_map_ptr[c]);
 }
+#endif
 
 typedef struct FSTEntry FSTEntry;
 
@@ -15,6 +21,14 @@ struct FSTEntry {
     unsigned int nextEntryOrLength;
 };
 
+#ifdef PETARI_NATIVE
+#define entryIsDir(fstStart, i) (PetariNative::readU32BE(&(fstStart)[i].isDirAndStringOff) >> 24)
+#define stringOff(fstStart, i) (PetariNative::readU32BE(&(fstStart)[i].isDirAndStringOff) & 0x00FFFFFF)
+#define parentDir(fstStart, i) PetariNative::readU32BE(&(fstStart)[i].parentOrPosition)
+#define nextDir(fstStart, i) PetariNative::readU32BE(&(fstStart)[i].nextEntryOrLength)
+#define filePosition(fstStart, i) parentDir(fstStart, i)
+#define fileLength(fstStart, i) nextDir(fstStart, i)
+#else
 #define entryIsDir(fstStart, i)     \
     ( ( ( fstStart[i].isDirAndStringOff & 0xFF000000 ) == 0 )? FALSE : TRUE )
 #define stringOff(fstStart, i)      \
@@ -27,8 +41,29 @@ struct FSTEntry {
         ( fstStart[i].parentOrPosition )
 #define fileLength(fstStart, i)         \
         ( fstStart[i].nextEntryOrLength )
+#endif
 
 BOOL ARCInitHandle(void* arcStart, ARCHandle* handle) {
+#ifdef PETARI_NATIVE
+    if (!arcStart || !handle) return FALSE;
+    const auto* header = static_cast<const u8*>(arcStart);
+    if (PetariNative::readU32BE(header) != 0x55AA382D) return FALSE;
+    const u32 fstStart = PetariNative::readU32BE(header + 4);
+    const u32 fstSize = PetariNative::readU32BE(header + 8);
+    const u32 fileStart = PetariNative::readU32BE(header + 12);
+    if (fstStart < 32 || fstSize < 12 || fileStart < fstStart || fstSize > fileStart - fstStart) return FALSE;
+    auto* entries = reinterpret_cast<FSTEntry*>(static_cast<u8*>(arcStart) + fstStart);
+    const u32 count = nextDir(entries, 0);
+    if (!entryIsDir(entries, 0) || count == 0 || count > fstSize / 12) return FALSE;
+    handle->archiveStartAddr = arcStart;
+    handle->FSTStart = entries;
+    handle->fileStart = static_cast<u8*>(arcStart) + fileStart;
+    handle->entryNum = count;
+    handle->FSTStringStart = reinterpret_cast<char*>(entries + count);
+    handle->FSTLength = fstSize;
+    handle->currDir = 0;
+    return TRUE;
+#else
     FSTEntry* FSTEntries;
     ARCHeader* arcHeader = (ARCHeader*)arcStart;
 
@@ -44,6 +79,7 @@ BOOL ARCInitHandle(void* arcStart, ARCHandle* handle) {
     handle->FSTLength = (u32)arcHeader->fstSize;
     handle->currDir = 0;
     return TRUE;
+#endif
 }
 
 // These SDK entry points are retained in the retail binary for the product.sel export symbol table.
@@ -57,7 +93,11 @@ BOOL ARCOpen(ARCHandle* handle, const char* fileName, ARCFileInfo* af) {
 
     if (0 > entry) {
         ARCGetCurrentDir(handle, currentDir, 128);
+#ifdef PETARI_NATIVE
+        std::fprintf(stderr, "Warning: ARCOpen(): file '%s' was not found under %s in the archive.\n", fileName, currentDir);
+#else
         OSReport("Warning: ARCOpen(): file '%s' was not found under %s in the archive.\n", fileName, currentDir);
+#endif
         return FALSE;
     }
 
@@ -88,7 +128,11 @@ BOOL ARCFastOpen(ARCHandle* handle, s32 entrynum, ARCFileInfo* af) {
 
 static BOOL isSame(const char* path, const char* string) {
     while(*string != '\0') {
+#ifdef PETARI_NATIVE
+        if (tolower((unsigned char)*path++) != tolower((unsigned char)*string++)) {
+#else
         if (tolower(*path++) != tolower(*string++)) {
+#endif
             return FALSE;
         }
     }
@@ -238,13 +282,23 @@ static BOOL ARCConvertEntrynumToPath(ARCHandle* handle, s32 entrynum, char* path
     return TRUE;
 }
 
-static BOOL ARCGetCurrentDir(ARCHandle* handle, char* path, u32 maxlen) {
+#ifndef PETARI_NATIVE
+static
+#endif
+BOOL ARCGetCurrentDir(ARCHandle* handle, char* path, u32 maxlen) {
+#ifdef PETARI_NATIVE
+    if (!path || maxlen == 0) return FALSE;
+#endif
     return ARCConvertEntrynumToPath(handle, (s32)handle->currDir, path, maxlen);
 }
 
 void* ARCGetStartAddrInMem(ARCFileInfo* af) {
     ARCHandle* handle = af->handle;
+#ifdef PETARI_NATIVE
+    return static_cast<u8*>(handle->archiveStartAddr) + af->startOffset;
+#else
     return (void*)((u32)handle->archiveStartAddr + af->startOffset);
+#endif
 }
 
 u32 ARCGetLength(ARCFileInfo* af) {

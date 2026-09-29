@@ -9,6 +9,16 @@ extern "C" void __DSP_remove_task(DSPTaskInfo* pTask);
 
 void Dsp_Update_Request();
 
+#ifdef PETARI_NATIVE
+// Shared with the DSP interrupt handler, which natively runs on another host
+// thread: acquire/release accesses instead of plain volatile ones.
+#define DSP_SHARED_LOAD(v) __atomic_load_n(&(v), __ATOMIC_ACQUIRE)
+#define DSP_SHARED_STORE(v, x) __atomic_store_n(&(v), (x), __ATOMIC_RELEASE)
+#else
+#define DSP_SHARED_LOAD(v) (v)
+#define DSP_SHARED_STORE(v, x) ((v) = (x))
+#endif
+
 static vu8 DspRunningStatus;
 static u8 lbl_806B75B9;
 
@@ -19,12 +29,20 @@ void osdsp_task_FORCE_MATCH_RODATA(void* pTask) {
 }
 
 extern "C" void __DSPHandler(__OSInterrupt interrupt, OSContext* pContext) {
+#ifdef PETARI_NATIVE
+    // The native DSP device acknowledges its own interrupt and calls this on
+    // its interrupt thread; there is no DSP control register or exception
+    // context to switch.
+    (void)interrupt;
+    (void)pContext;
+#else
     OSContext funcContext;
     __DSPRegs[5] = ((u16)(__DSPRegs[5]) & ~0x28) | 0x80;
     OSClearContext(&funcContext);
     OSSetCurrentContext(&funcContext);
+#endif
 
-    if (DspRunningStatus == 1 || DspRunningStatus == 0) {
+    if (DSP_SHARED_LOAD(DspRunningStatus) == 1 || DSP_SHARED_LOAD(DspRunningStatus) == 0) {
         __DSP_curr_task = DSP_prior_task;
     }
 
@@ -41,7 +59,7 @@ extern "C" void __DSPHandler(__OSInterrupt interrupt, OSContext* pContext) {
     case 0xDCD10000:
         __DSP_curr_task->state = 1;
         if (__DSP_curr_task == DSP_prior_task) {
-            DspRunningStatus = 1;
+            DSP_SHARED_STORE(DspRunningStatus, 1);
         }
 
         if (__DSP_curr_task->init_cb != NULL) {
@@ -52,7 +70,7 @@ extern "C" void __DSPHandler(__OSInterrupt interrupt, OSContext* pContext) {
     case 0xDCD10001:
         __DSP_curr_task->state = 1;
         if (__DSP_curr_task == DSP_prior_task) {
-            DspRunningStatus = 1;
+            DSP_SHARED_STORE(DspRunningStatus, 1);
             Dsp_Update_Request();
         }
 
@@ -118,7 +136,7 @@ extern "C" void __DSPHandler(__OSInterrupt interrupt, OSContext* pContext) {
             Dsp_Update_Request();
         } else {
             OSReport("Audio Yield Start\n");
-            DspRunningStatus = 3;
+            DSP_SHARED_STORE(DspRunningStatus, 3);
             DSPSendMailToDSP(0xCDD10001);
             while (DSPCheckMailToDSP() != 0) {
             }
@@ -131,14 +149,16 @@ extern "C" void __DSPHandler(__OSInterrupt interrupt, OSContext* pContext) {
         break;
     }
 
+#ifndef PETARI_NATIVE
     OSClearContext(&funcContext);
     OSSetCurrentContext(pContext);
+#endif
 }
 
-static u32 sync_stack[5];
+static JASDspAddr sync_stack[5];
 
-void DsyncFrame2(u32 param_0, u32 param_1, u32 param_2) {
-    if (DspRunningStatus != 1) {
+void DsyncFrame2(u32 param_0, JASDspAddr param_1, JASDspAddr param_2) {
+    if (DSP_SHARED_LOAD(DspRunningStatus) != 1) {
         OSReport("Yield中です\n");
         sync_stack[0] = param_0;
         lbl_806B75B9 = 1;
@@ -151,8 +171,8 @@ void DsyncFrame2(u32 param_0, u32 param_1, u32 param_2) {
     lbl_806B75B9 = 0;
 }
 
-void DsyncFrame3(u32 param_0, u32 param_1, u32 param_2, u32 param_3, u32 param_4) {
-    if (DspRunningStatus != 1) {
+void DsyncFrame3(u32 param_0, JASDspAddr param_1, JASDspAddr param_2, JASDspAddr param_3, JASDspAddr param_4) {
+    if (DSP_SHARED_LOAD(DspRunningStatus) != 1) {
         sync_stack[0] = param_0;
         lbl_806B75B9 = 2;
         sync_stack[1] = param_1;
@@ -180,9 +200,9 @@ void Dsp_Update_Request() {
 }
 
 int Dsp_Running_Check() {
-    return DspRunningStatus == 1 ? TRUE : FALSE;
+    return DSP_SHARED_LOAD(DspRunningStatus) == 1 ? TRUE : FALSE;
 }
 
 void Dsp_Running_Start() {
-    DspRunningStatus = 1;
+    DSP_SHARED_STORE(DspRunningStatus, 1);
 }

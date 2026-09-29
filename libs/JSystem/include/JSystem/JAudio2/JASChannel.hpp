@@ -71,13 +71,24 @@ public:
         /* 0x8 */ f32 mChannel;
     };
 
+    // whole is set numerically (e.g. 0x150: upper 1, lower0 5, lower1 0). MWCC
+    // allocates bitfields from the most significant bit and Clang from the least,
+    // so native fields are declared in reverse to decode the same value.
     union MixConfig {
         u16 whole;
+#ifdef PETARI_NATIVE
+        struct {
+            u16 lower1 : 4;
+            u16 lower0 : 4;
+            u16 upper : 8;
+        };
+#else
         struct {
             u8 upper : 8;
             u8 lower0 : 4;
             u8 lower1 : 4;
         };
+#endif
     };
 
     JASChannel(Callback, void*);

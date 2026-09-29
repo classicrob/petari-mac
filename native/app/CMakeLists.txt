@@ -1,0 +1,65 @@
+# The native application: entry point, platform start-up, and the frame seam
+# (petari/app.hpp, INTEGRATION_PLAN.md).
+#
+# Root integration: add_subdirectory(native/app) after native/gx, native/input,
+# native/home_menu and native/audio. It defines:
+#   petari_app_platform  platform start-up and exit (SDK headers, no Aurora)
+#   petari_app_host      frame seam and window events (Aurora/SDL headers, no SDK)
+#   petari              the executable; root links the game libraries, the
+#                        renderer (petari_vi_bridge and its presentation hooks)
+#                        and the GX sync bridge into it.
+# Standalone (seam tests only, no Aurora library):
+#   cmake -S native/app -B build/app && cmake --build build/app && ctest --test-dir build/app
+cmake_minimum_required(VERSION 3.25)
+
+set(_petari_app_standalone OFF)
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    set(_petari_app_standalone ON)
+    project(PetariNativeApp LANGUAGES CXX)
+    if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
+        set(CMAKE_OSX_ARCHITECTURES arm64 CACHE STRING "Target architecture" FORCE)
+    endif()
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    option(PETARI_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
+    include(CTest)
+endif()
+
+get_filename_component(PETARI_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+
+if(NOT _petari_app_standalone)
+    add_library(petari_app_platform STATIC platform_host.cpp)
+    target_link_libraries(petari_app_platform PUBLIC petari_native_config petari_boot
+        petari_platform_os petari_platform_vi petari_platform_dvd petari_platform_nand petari_platform_sc
+        petari_audio_sdl petari_host_runtime)
+
+    add_library(petari_app_host STATIC frame_seam.cpp input_events.cpp)
+    target_include_directories(petari_app_host PUBLIC ${PETARI_REPO_ROOT}/native/include)
+    # Deliberately not petari_native_config: no SDK include paths next to Aurora's.
+    target_link_libraries(petari_app_host PUBLIC aurora::core petari_input_sdl3 petari_home_menu_imgui
+        petari_host_runtime)
+
+    add_executable(petari MACOSX_BUNDLE app_main.cpp)
+    target_link_libraries(petari PRIVATE petari_app_host petari_app_platform aurora::core aurora::main)
+    set_target_properties(petari PROPERTIES OUTPUT_NAME "Petari")
+else()
+    set(PETARI_AURORA_INCLUDE_DIR "${PETARI_REPO_ROOT}/../aurora-reference/include" CACHE PATH "Aurora headers")
+    set(PETARI_SDL3_INCLUDE_DIR "${PETARI_REPO_ROOT}/build/aurora/_deps/sdl-src/include" CACHE PATH "SDL3 headers")
+    if(PETARI_SANITIZERS)
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address,undefined)
+    endif()
+endif()
+
+if(BUILD_TESTING)
+    # The seam against recording fakes of Aurora, SDL and the app's other units.
+    add_executable(petari_app_seam_tests ${PETARI_REPO_ROOT}/native/tests/app_seam_tests.cpp frame_seam.cpp)
+    target_include_directories(petari_app_seam_tests PRIVATE ${PETARI_REPO_ROOT}/native/include)
+    if(_petari_app_standalone)
+        target_include_directories(petari_app_seam_tests PRIVATE ${PETARI_AURORA_INCLUDE_DIR} ${PETARI_SDL3_INCLUDE_DIR})
+    else()
+        target_include_directories(petari_app_seam_tests PRIVATE
+            $<TARGET_PROPERTY:aurora::core,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    add_test(NAME native_app_seam COMMAND petari_app_seam_tests)
+endif()

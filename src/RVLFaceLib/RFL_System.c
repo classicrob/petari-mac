@@ -1,11 +1,28 @@
 #include "RVLFaceLibInternal.h"
+#ifdef PETARI_NATIVE
+#include "rfl_native.h"
+#endif
+#if defined(PETARI_NATIVE)
+#include <stdio.h>
+#else
 #include <cstdio>
+#endif
 #include <revolution/mem.h>
 #include <revolution/types.h>
 
-#define RFL_SYSTEM_HEAP_SIZE 0x24800
-#define RFL_WORK_SIZE 0x4B000
-#define RFL_DELUXE_WORK_SIZE 0x64000
+#ifdef PETARI_NATIVE
+// The Wii's system heap fits its nine fixed allocations (the database,
+// controller buffers, the hidden middle database, two NAND safe buffers) with
+// 368 bytes to spare. Native MEM block headers hold host pointers and blocks
+// are 32-byte aligned here, so the heap gets room for that overhead. The work
+// buffer grows by the same amount, leaving the temporary heap its Wii size.
+#define RFL_NATIVE_HEAP_OVERHEAD 0x400
+#else
+#define RFL_NATIVE_HEAP_OVERHEAD 0
+#endif
+#define RFL_SYSTEM_HEAP_SIZE (0x24800 + RFL_NATIVE_HEAP_OVERHEAD)
+#define RFL_WORK_SIZE (0x4B000 + RFL_NATIVE_HEAP_OVERHEAD)
+#define RFL_DELUXE_WORK_SIZE (0x64000 + RFL_NATIVE_HEAP_OVERHEAD)
 
 /**
  * These functions are inlined, but with their conditions inverted(?) from the
@@ -40,6 +57,18 @@ RFLErrcode RFLInitResAsync(void* workBuffer, void* resBuffer, u32 resSize, BOOL 
     if (resBuffer == NULL) {
         return RFLErrcode_Fatal;
     }
+
+#ifdef PETARI_NATIVE
+    // The Wii trusts the disc image. Natively a damaged or mismatched
+    // RFL_Res.dat is refused here instead of being read out of bounds.
+    if (RFLiGetManager() == NULL) {
+        char error[128];
+        if (!RFLiNativeValidateResource(resBuffer, resSize, error, sizeof(error))) {
+            OSReport("RFL: RFL_Res.dat rejected: %s\n", error);
+            return RFLErrcode_Fatal;
+        }
+    }
+#endif
 
     if (RFLiGetManager() == NULL) {
         OSRegisterVersion(__RFLVersion);
@@ -103,7 +132,7 @@ RFLErrcode RFLInitResAsync(void* workBuffer, void* resBuffer, u32 resSize, BOOL 
     return errcode;
 }
 
-static RFLErrcode RFLInitRes(void* workBuffer, void* resBuffer, u32 resSize, BOOL deluxeTex) {
+RFL_HEADER_STATIC RFLErrcode RFLInitRes(void* workBuffer, void* resBuffer, u32 resSize, BOOL deluxeTex) {
     RFLInitResAsync(workBuffer, resBuffer, resSize, deluxeTex);
     return RFLWaitAsync();
 }
@@ -145,7 +174,7 @@ static void bootloadDB2Res_(void) {
     }
 }
 
-static RFLErrcode RFLiBootLoadAsync(void) {
+RFL_HEADER_STATIC RFLErrcode RFLiBootLoadAsync(void) {
     return RFLiBootLoadDatabaseAsync(bootloadDB2Res_);
 }
 
@@ -157,7 +186,7 @@ static void* allocal_(u32 size, s32 align) {
     return MEMAllocFromExpHeapEx(RFLiGetManager()->tmpHeap, size, align);
 }
 
-static void* RFLiAlloc(u32 size) {
+RFL_HEADER_STATIC void* RFLiAlloc(u32 size) {
     return allocal_(size, 8);
 }
 
@@ -193,7 +222,32 @@ RFLiManager* RFLiGetManager(void) {
     return sRFLManager;
 }
 
+#ifdef PETARI_NATIVE
+// On the Wii, NAND and alarm callbacks interrupt the one CPU, so a status
+// poll never overlaps a callback's writes. Natively the callbacks run on
+// platform host threads while holding the interrupt lock, in parallel with
+// the game thread. Polling under the same lock orders everything a callback
+// wrote before the game thread acts on the status it reports.
+static RFLErrcode getAsyncStatusCore_(void);
+
 RFLErrcode RFLGetAsyncStatus(void) {
+    const BOOL enabled = OSDisableInterrupts();
+    const RFLErrcode status = getAsyncStatusCore_();
+    OSRestoreInterrupts(enabled);
+    return status;
+}
+
+s32 RFLGetLastReason(void) {
+    const BOOL enabled = OSDisableInterrupts();
+    const s32 reason = !RFLAvailable() ? sRFLLastReason : RFLiGetLastReason_();
+    OSRestoreInterrupts(enabled);
+    return reason;
+}
+
+static RFLErrcode getAsyncStatusCore_(void) {
+#else
+RFLErrcode RFLGetAsyncStatus(void) {
+#endif
     if (!RFLAvailable()) {
         return sRFLLastErrCode;
     }
@@ -209,11 +263,13 @@ RFLErrcode RFLGetAsyncStatus(void) {
     return RFLiGetManager()->lastErrCode;
 }
 
+#ifndef PETARI_NATIVE
 s32 RFLGetLastReason(void) {
     return !RFLAvailable() ? sRFLLastReason : RFLiGetLastReason_();
 }
+#endif
 
-static RFLErrcode RFLWaitAsync(void) {
+RFL_HEADER_STATIC RFLErrcode RFLWaitAsync(void) {
     volatile RFLErrcode status;
 
     do {
@@ -265,7 +321,7 @@ BOOL RFLiNeedRepairError(void) {
     return *broken >> RFLiFileBrokenType_DBBroken & 1;
 }
 
-static BOOL RFLiCriticalError(void) {
+RFL_HEADER_STATIC BOOL RFLiCriticalError(void) {
     u8* broken = &sRFLiFileBrokenType;
 
     if (RFLAvailable()) {

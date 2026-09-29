@@ -1,8 +1,51 @@
 #include "JSystem/J3DGraphLoader/J3DAnmLoader.hpp"
 #include "JSystem/J3DGraphAnimator/J3DAnimation.hpp"
 #include "JSystem/JSupport/JSupport.hpp"
+#include <stdint.h>
+#ifdef PETARI_NATIVE
+#include "JSystem/JKernel/JKRHeap.hpp"
+#include <petari/j3d_animation.hpp>
+#include <revolution/os.h>
+
+namespace {
+    // Animation files are big-endian. Natively the loaders work on a host-layout image (see
+    // petari/j3d_animation.hpp) allocated on the current JKR heap, where the animation object
+    // is also allocated, so both live until that heap is freed. Host images are used as
+    // they are. Returns NULL for malformed or unsupported (vertex-color) files.
+    const void* getHostAnimImage(const void* pData) {
+        if (pData == NULL) {
+            return NULL;
+        }
+
+        switch (PetariNative::J3D::classifyAnimImage(pData)) {
+        case PetariNative::J3D::AnimImageKind::Host:
+        case PetariNative::J3D::AnimImageKind::NotJ3D:
+            return pData;
+        case PetariNative::J3D::AnimImageKind::BigEndian:
+            break;
+        }
+
+        const u32 size = PetariNative::J3D::animFileSize(pData);
+        u8* pImage = new (0x20) u8[size];
+        if (pImage == NULL) {
+            return NULL;
+        }
+
+        const char* pError = PetariNative::J3D::makeHostAnimImage(pData, size, pImage);
+        if (pError != NULL) {
+            OSReport("J3DAnmLoader: rejected animation file: %s\n", pError);
+            delete[] pImage;
+            return NULL;
+        }
+        return pImage;
+    }
+}  // namespace
+#endif
 
 J3DAnmBase* J3DAnmLoaderDataBase::load(const void* i_data, J3DAnmLoaderDataBaseFlag flag) {
+#ifdef PETARI_NATIVE
+    i_data = getHostAnimImage(i_data);
+#endif
     if (!i_data) {
         return NULL;
     }
@@ -227,9 +270,9 @@ void J3DAnmFullLoader_v15::setAnmVtxColor(J3DAnmVtxColorFull* dst, const J3DAnmV
     void* indexPtr1 = JSUConvertOffsetToPtr< u16 >(data, data->mVtxColorIndexPointerOffsets[1]);
 
     for (s32 i = 0; i < dst->mAnmTableNum[0]; i++)
-        dst->mAnmVtxColorIndexData[0][i].mpData = (void*)((s32)indexPtr0 + (s32)dst->mAnmVtxColorIndexData[0][i].mpData * 2);
+        dst->mAnmVtxColorIndexData[0][i].mpData = (void*)((uintptr_t)indexPtr0 + (uintptr_t)dst->mAnmVtxColorIndexData[0][i].mpData * 2);
     for (s32 i = 0; i < dst->mAnmTableNum[1]; i++)
-        dst->mAnmVtxColorIndexData[1][i].mpData = (void*)((s32)indexPtr1 + (s32)dst->mAnmVtxColorIndexData[1][i].mpData * 2);
+        dst->mAnmVtxColorIndexData[1][i].mpData = (void*)((uintptr_t)indexPtr1 + (uintptr_t)dst->mAnmVtxColorIndexData[1][i].mpData * 2);
 
     dst->mColorR = JSUConvertOffsetToPtr< u8 >(data, data->mRValuesOffset);
     dst->mColorG = JSUConvertOffsetToPtr< u8 >(data, data->mGValuesOffset);
@@ -425,9 +468,9 @@ void J3DAnmKeyLoader_v15::setAnmVtxColor(J3DAnmVtxColorKey* dst, const J3DAnmVtx
     void* indexPtr1 = JSUConvertOffsetToPtr< u16 >(data, data->mVtxColoIndexPointerOffset[1]);
 
     for (s32 i = 0; i < dst->mAnmTableNum[0]; i++)
-        dst->mAnmVtxColorIndexData[0][i].mpData = (void*)((s32)indexPtr0 + (s32)dst->mAnmVtxColorIndexData[0][i].mpData * 2);
+        dst->mAnmVtxColorIndexData[0][i].mpData = (void*)((uintptr_t)indexPtr0 + (uintptr_t)dst->mAnmVtxColorIndexData[0][i].mpData * 2);
     for (s32 i = 0; i < dst->mAnmTableNum[1]; i++)
-        dst->mAnmVtxColorIndexData[1][i].mpData = (void*)((s32)indexPtr1 + (s32)dst->mAnmVtxColorIndexData[1][i].mpData * 2);
+        dst->mAnmVtxColorIndexData[1][i].mpData = (void*)((uintptr_t)indexPtr1 + (uintptr_t)dst->mAnmVtxColorIndexData[1][i].mpData * 2);
 
     dst->mColorR = JSUConvertOffsetToPtr< s16 >(data, data->mRValOffset);
     dst->mColorG = JSUConvertOffsetToPtr< s16 >(data, data->mGValOffset);

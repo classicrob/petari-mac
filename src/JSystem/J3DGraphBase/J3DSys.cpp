@@ -3,6 +3,24 @@
 #include "JSystem/J3DGraphBase/J3DTevs.hpp"
 #include <revolution/gx/GXGeometry.h>
 #include <revolution/os/OSFastCast.h>
+#ifdef PETARI_NATIVE
+#include "JSystem/J3DGraphAnimator/J3DModel.hpp"
+
+void J3DSys::setModelDrawMtx(Mtx* matrices) {
+    mModelDrawMtx = matrices;
+    auto* data = mModel->getModelData();
+    auto* buffers = mModel->getMtxBuffer();
+    u32 count = data->getDrawMtxNum();
+    if (matrices == buffers->mpUserAnmMtx) count = data->getJointNum();
+    else if (matrices == buffers->mpWeightEvlpMtx) count = data->getWEvlpMtxNum();
+    GXSetArray(GX_POS_MTX_ARRAY, matrices, count * sizeof(Mtx), sizeof(Mtx), true);
+}
+
+void J3DSys::setModelNrmMtx(Mtx33* matrices) {
+    mModelNrmMtx = matrices;
+    GXSetArray(GX_NRM_MTX_ARRAY, matrices, mModel->getModelData()->getDrawMtxNum() * sizeof(Mtx33), sizeof(Mtx33), true);
+}
+#endif
 
 J3DSys j3dSys;
 

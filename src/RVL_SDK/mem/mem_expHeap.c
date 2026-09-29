@@ -1,6 +1,14 @@
 #include "revolution/mem/expHeap.h"
 
 #define FillFreeMemory(pHeapHd, address, size) ((void)0)
+
+// Block headers hold pointers, so native heaps keep 8-byte granularity for heap
+// bounds, block sizes and alignment. The Wii uses 4.
+#ifdef PETARI_NATIVE
+#define MEM_EXP_HEAP_MIN_ALIGN 8
+#else
+#define MEM_EXP_HEAP_MIN_ALIGN 4
+#endif
 #define FillNoUseMemory(pHeapHd, address, size) ((void)0)
 
 typedef struct MemRegion MemRegion;
@@ -155,13 +163,13 @@ static void* AllocUsedBlockFromFreeBlock_(MEMiExpHeapHead* pEHHead, MEMiExpHeapM
 
     pMBHeadFreePrev = RemoveMBlock_(&pEHHead->mbFreeList, pMBHeadFree);
 
-    if (GetOffsetFromPtr(freeRgnT.start, freeRgnT.end) < sizeof(MEMiExpHeapMBlockHead) + 4) {
+    if (GetOffsetFromPtr(freeRgnT.start, freeRgnT.end) < sizeof(MEMiExpHeapMBlockHead) + MEM_EXP_HEAP_MIN_ALIGN) {
         freeRgnT.end = freeRgnT.start;
     } else {
         pMBHeadFreePrev = InsertMBlock_(&pEHHead->mbFreeList, InitFreeMBlock_(&freeRgnT), pMBHeadFreePrev);
     }
 
-    if (GetOffsetFromPtr(freeRgnB.start, freeRgnB.end) < sizeof(MEMiExpHeapMBlockHead) + 4) {
+    if (GetOffsetFromPtr(freeRgnB.start, freeRgnB.end) < sizeof(MEMiExpHeapMBlockHead) + MEM_EXP_HEAP_MIN_ALIGN) {
         freeRgnB.start = freeRgnB.end;
     } else {
         (void)InsertMBlock_(&pEHHead->mbFreeList, InitFreeMBlock_(&freeRgnB), pMBHeadFreePrev);
@@ -291,11 +299,11 @@ static BOOL RecycleRegion_(MEMiExpHeapHead* pEHHead, const MemRegion* pRegion) {
 MEMHeapHandle MEMCreateExpHeapEx(void* startAddress, u32 size, u16 optFlag) {
     void* endAddress;
 
-    endAddress = RoundDownPtr(AddU32ToPtr(startAddress, size), 4);
-    startAddress = RoundUpPtr(startAddress, 4);
+    endAddress = RoundDownPtr(AddU32ToPtr(startAddress, size), MEM_EXP_HEAP_MIN_ALIGN);
+    startAddress = RoundUpPtr(startAddress, MEM_EXP_HEAP_MIN_ALIGN);
 
     if (GetUIntPtr(startAddress) > GetUIntPtr(endAddress) ||
-        GetOffsetFromPtr(startAddress, endAddress) < sizeof(MEMiHeapHead) + sizeof(MEMiExpHeapHead) + sizeof(MEMiExpHeapMBlockHead) + 4) {
+        GetOffsetFromPtr(startAddress, endAddress) < sizeof(MEMiHeapHead) + sizeof(MEMiExpHeapHead) + sizeof(MEMiExpHeapMBlockHead) + MEM_EXP_HEAP_MIN_ALIGN) {
         return 0;
     }
 
@@ -317,7 +325,15 @@ void* MEMAllocFromExpHeapEx(MEMHeapHandle heap, u32 size, int alignment) {
         size = 1;
     }
 
-    size = RoundUp(size, 4);
+    size = RoundUp(size, MEM_EXP_HEAP_MIN_ALIGN);
+
+#ifdef PETARI_NATIVE
+    if (alignment >= 0 && alignment < MEM_EXP_HEAP_MIN_ALIGN) {
+        alignment = MEM_EXP_HEAP_MIN_ALIGN;
+    } else if (alignment < 0 && alignment > -MEM_EXP_HEAP_MIN_ALIGN) {
+        alignment = -MEM_EXP_HEAP_MIN_ALIGN;
+    }
+#endif
 
     LockHeap(heap);
 
@@ -361,7 +377,11 @@ void MEMFreeToExpHeap(MEMHeapHandle heap, void* memBlock) {
 }
 
 u32 MEMGetAllocatableSizeForExpHeapEx(MEMHeapHandle heap, int alignment) {
+#ifdef PETARI_NATIVE
+    alignment = alignment < 0 ? -alignment : alignment;
+#else
     alignment = __abs(alignment);
+#endif
 
     LockHeap(heap);
 

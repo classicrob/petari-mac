@@ -1,14 +1,21 @@
 #include "JSystem/JParticle/JPAMath.hpp"
 #include "JSystem/JMath/JMATrigonometric.hpp"
 
+// The trig table pair lives in JMath on native builds; see JMATrigonometric.hpp.
+#ifdef PETARI_NATIVE
+#define JPA_SIN_COS_PAIR JMath::pair
+#else
+#define JPA_SIN_COS_PAIR std::pair
+#endif
+
 namespace {
     inline f32 JPASinShort(s16 v) {
-        const std::pair< f32, f32 >* p = &JMath::sSinCosTable.table[static_cast< u16 >(v) >> 2];
+        const JPA_SIN_COS_PAIR< f32, f32 >* p = &JMath::sSinCosTable.table[static_cast< u16 >(v) >> 2];
         return p->a1;
     }
 
     inline f32 JPACosShort(s16 v) {
-        const std::pair< f32, f32 >* p = &JMath::sSinCosTable.table[static_cast< u16 >(v) >> 2];
+        const JPA_SIN_COS_PAIR< f32, f32 >* p = &JMath::sSinCosTable.table[static_cast< u16 >(v) >> 2];
         return p->b1;
     }
 }

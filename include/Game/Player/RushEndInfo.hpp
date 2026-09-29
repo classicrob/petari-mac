@@ -17,9 +17,19 @@ public:
     /* 0x20 */ union {
         u32 _20;
         struct {
+#ifdef PETARI_NATIVE
+            // MWCC allocates bitfields from the most significant bit of each 32-bit unit; Clang
+            // allocates from the least significant bit. Natively the fields are declared in reverse
+            // within each unit so the layout, and every numeric view of these words, matches the Wii.
+            // unit 0
+            u32 _8 : 24;
+            u32 mDamageType : 4;
+            u32 _0 : 4;
+#else
             u32 _0 : 4;
             u32 mDamageType : 4;
             u32 _8 : 24;
+#endif
         } mFlags;
     };
 };

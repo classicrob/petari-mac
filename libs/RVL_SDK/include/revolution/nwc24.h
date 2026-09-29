@@ -7,7 +7,11 @@ extern "C" {
 #endif
 
 #include "revolution.h"
+#if defined(PETARI_NATIVE) && !defined(__cplusplus)
+#include <stdlib.h>
+#else
 #include <cstdlib>
+#endif
 #include "revolution/nwc24/NWC24Config.h"
 #include "revolution/nwc24/NWC24Download.h"
 #include "revolution/nwc24/NWC24FileApi.h"

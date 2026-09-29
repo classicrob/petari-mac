@@ -6,10 +6,11 @@
 #include "JSystem/JKernel/JKRHeap.hpp"
 #include "JSystem/JUtility/JUTException.hpp"
 #include <mem.h>
+#include <stdint.h>
 
 extern "C" int abs(int);
 
-JKRAramArchive::JKRAramArchive(long entryNum, EMountDirection mountDir) : JKRArchive(entryNum, MOUNT_MODE_ARAM) {
+JKRAramArchive::JKRAramArchive(s32 entryNum, EMountDirection mountDir) : JKRArchive(entryNum, MOUNT_MODE_ARAM) {
     mMountDir = mountDir;
 
     if (!open(entryNum)) {
@@ -79,6 +80,13 @@ bool JKRAramArchive::open(s32 entryNum) {
                         NULL);
         DCInvalidateRange(mem, 32);
         int alignment = mMountDir == MOUNT_DIRECTION_1 ? 32 : -32;
+#ifdef PETARI_NATIVE
+        // mem is a private copy, so decode it in place.
+        if (!readNativeHeader(mem, mem)) {
+            mMountMode = 0;
+            goto cleanup;
+        }
+#endif
         u32 alignedSize = ALIGN_NEXT(mem->mFileDataOffset, 32);
         mInfoBlock = static_cast< RarcInfoBlock* >(JKRAllocFromHeap(mHeap, alignedSize, alignment));
         if (mInfoBlock == NULL) {
@@ -87,6 +95,19 @@ bool JKRAramArchive::open(s32 entryNum) {
             JKRDvdToMainRam(entryNum, reinterpret_cast< u8* >(mInfoBlock), EXPAND_SWITCH_UNKNOWN1, alignedSize, NULL,
                             JKRDvdRipper::ALLOC_DIRECTION_FORWARD, 32, NULL, NULL);
             DCInvalidateRange(mInfoBlock, alignedSize);
+
+#ifdef PETARI_NATIVE
+            {
+                void* rawInfoBlock = mInfoBlock;
+                bool converted = setupNativeTables(rawInfoBlock, mem->mFileDataOffset, mem->mTotalDataSize, alignment);
+                JKRFreeToHeap(mHeap, rawInfoBlock);
+                if (!converted) {
+                    mInfoBlock = NULL;
+                    mMountMode = 0;
+                    goto cleanup;
+                }
+            }
+#endif
 
             mDirs = reinterpret_cast< SDIDirEntry* >(reinterpret_cast< u8* >(mInfoBlock) + mInfoBlock->mDirOffset);
             mFiles = reinterpret_cast< SDIFileEntry* >(reinterpret_cast< u8* >(mInfoBlock) + mInfoBlock->mFileOffset);
@@ -241,7 +262,7 @@ u32 JKRAramArchive::fetchResource_subroutine(u32 entryNum, u32 length, JKRHeap* 
     case COMPRESSION_YAY0:
     case COMPRESSION_YAZ0: {
         u8 headerBuf[0x40];
-        u8* alignHeader = reinterpret_cast< u8* >(ALIGN_NEXT(reinterpret_cast< s32 >(&headerBuf[0]), sizeof(RarcHeader)));
+        u8* alignHeader = reinterpret_cast< u8* >(ALIGN_NEXT(reinterpret_cast< uintptr_t >(&headerBuf[0]), sizeof(RarcHeader)));
         JKRAramToMainRam(entryNum, alignHeader, sizeof(RarcHeader), EXPAND_SWITCH_UNKNOWN0, 0, NULL, -1, NULL);
         u32 decompressedLen = ALIGN_NEXT(JKRDecompExpandSize(alignHeader), sizeof(RarcHeader));
         buffer = static_cast< u8* >(JKRAllocFromHeap(pHeap, decompressedLen, sizeof(RarcHeader)));
@@ -277,7 +298,7 @@ u32 JKRAramArchive::getExpandedResSize(const void* ptr) const {
     }
 
     u8 tmpBuf[0x40];
-    u8* buf = reinterpret_cast< u8* >(ALIGN_PREV(reinterpret_cast< s32 >(&tmpBuf[0x1F]), 0x20));
+    u8* buf = reinterpret_cast< u8* >(ALIGN_PREV(reinterpret_cast< uintptr_t >(&tmpBuf[0x1F]), 0x20));
     JKRAramToMainRam(entry->mDataOffset + mBlock->getAddress(), buf, 0x20, EXPAND_SWITCH_UNKNOWN0, 0, NULL, -1, NULL);
     u32 expandSize2 = JKRDecompExpandSize(buf);
     const_cast< JKRAramArchive* >(this)->setExpandSize(entry, expandSize2);

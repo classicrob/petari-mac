@@ -16,6 +16,9 @@
 #include "Game/Util/LiveActorUtil.hpp"
 #include "Game/Util/ObjUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 DemoExecutor::DemoExecutor(const char* pName)
     : DemoCastGroup(pName), mSheetName(), mTimeKeeper(), mSubPartKeeper(), mPlayerKeeper(), mCameraKeeper(), mActionKeeper(), mWipeKeeper(),

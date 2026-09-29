@@ -8,7 +8,7 @@ PlanetGravityManager::PlanetGravityManager(const char* pName) : NameObj(pName) {
 void PlanetGravityManager::init(const JMapInfoIter& rIter) {
 }
 
-bool PlanetGravityManager::calcTotalGravityVector(TVec3f* pGravity, GravityInfo* pInfo, const TVec3f& rPosition, u32 gravityType, u32 host) const {
+bool PlanetGravityManager::calcTotalGravityVector(TVec3f* pGravity, GravityInfo* pInfo, const TVec3f& rPosition, u32 gravityType, GravityHostID host) const {
     TVec3f totalGravity;
     totalGravity.z = 0.0f;
     totalGravity.y = 0.0f;
@@ -33,7 +33,7 @@ bool PlanetGravityManager::calcTotalGravityVector(TVec3f* pGravity, GravityInfo*
         }
 
         // Gravity is valid, matches specified gravity type(s) and does not have same host
-        if (validGravity && ((gravityType & (*pGravities)->mGravityType) != 0) && (host != (u32)(*pGravities)->mHost)) {
+        if (validGravity && ((gravityType & (*pGravities)->mGravityType) != 0) && (host != (GravityHostID)(*pGravities)->mHost)) {
             // Is priority lower -> end of list reached as it's sorted in descending order
             s32 priority = (*pGravities)->mPriority;
 

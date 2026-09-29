@@ -4,6 +4,9 @@
 #include <JSystem/J3DGraphAnimator/J3DJoint.hpp>
 
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 namespace {
     const char* sTextOutFileName = "IKJointCtrl";

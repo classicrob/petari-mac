@@ -1,6 +1,9 @@
 #pragma once
 
 #include <JSystem/JGeometry/TMatrix.hpp>
+#ifdef PETARI_NATIVE
+#include "Game/Util/NativeOverload.hpp"
+#endif
 
 class BckCtrlData;
 class CameraTargetArg;
@@ -54,6 +57,13 @@ namespace MR {
     void startBckPlayer(const char*, const char* pBrkName = nullptr);
     void startBckPlayer(const char*, const BckCtrlData&);
     void startBckPlayer(const char*, s32);
+#ifdef PETARI_NATIVE
+    // Wii s32 is long; `0L` must select the s32 overload rather than const char*.
+    template < typename T, PETARI_WII_LONG_ARGS(T) >
+    inline void startBckPlayer(const char* pBckName, T interpole) {
+        startBckPlayer(pBckName, static_cast< s32 >(interpole));
+    }
+#endif
     bool isBckStoppedPlayer();
     bool isBckOneTimeAndStoppedPlayer();
     f32 getBckFrameMaxPlayer();

@@ -7,6 +7,9 @@
 #include "Game/Util/ObjUtil.hpp"
 #include "Game/Util/SwitchEventFunctorListener.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 namespace {
     SleepControllerHolder* getSleepControllerHolder() {

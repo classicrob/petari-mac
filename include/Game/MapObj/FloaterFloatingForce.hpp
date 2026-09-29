@@ -18,7 +18,13 @@ public:
     }
 
     virtual const TVec3f& getCurrentVelocity() const {
+#ifdef PETARI_NATIVE
+        // The Wii build returns a reference to a temporary zero vector.
+        static const TVec3f sZero(0.0f, 0.0f, 0.0f);
+        return sZero;
+#else
         return TVec3f(0.0f, 0.0f, 0.0f);
+#endif
     }
 
     /* 0x18 */ const char* _18;

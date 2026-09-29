@@ -7,7 +7,11 @@
 #include "Game/Util/JMapUtil.hpp"
 #include "Game/Util/ObjUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#else
 #include <functional.hpp>
+#endif
 
 AreaObj::AreaObj(int formType, const char* pName)
     : NameObj(pName), mFormType(formType), mIsValid(true), _15(true), mIsAwake(true), mObjArg0(-1), mObjArg1(-1), mObjArg2(-1), mObjArg3(-1),

@@ -90,7 +90,11 @@ public:
 
     template < typename T >
     void addEventSequence(const char* pName) {
+#ifdef PETARI_NATIVE
+        mHashTable->addPtr(pName, new T(), false);
+#else
         mHashTable->add(pName, reinterpret_cast< u32 >(new T()), false);
+#endif
     }
 
 private:

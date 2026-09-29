@@ -6,6 +6,24 @@
 #include "JSystem/J3DGraphBase/J3DTransform.hpp"
 #include <cstdio>
 
+#ifdef PETARI_NATIVE
+// XF color registers take 0xRRGGBBAA; the Wii reads that straight from the byte order.
+inline u32 packColorRGBA(const J3DGXColor& color) {
+    return static_cast< u32 >(color.r) << 24 | static_cast< u32 >(color.g) << 16 | static_cast< u32 >(color.b) << 8 | color.a;
+}
+
+inline void loadMatColors(const J3DGXColor* color) {
+    J3DGDWriteXFCmdHdr(0x100C, 2);
+    J3DGDWrite_u32(packColorRGBA(color[0]));
+    J3DGDWrite_u32(packColorRGBA(color[1]));
+}
+
+inline void loadAmbColors(const J3DGXColor* color) {
+    J3DGDWriteXFCmdHdr(0x100A, 2);
+    J3DGDWrite_u32(packColorRGBA(color[0]));
+    J3DGDWrite_u32(packColorRGBA(color[1]));
+}
+#else
 inline void loadMatColors(const J3DGXColor* color) {
     J3DGDWriteXFCmdHdr(0x100C, 2);
     J3DGDWrite_u32(*(u32*)color);
@@ -17,6 +35,7 @@ inline void loadAmbColors(const J3DGXColor* color) {
     J3DGDWrite_u32(*(u32*)color);
     J3DGDWrite_u32(*(u32*)(color + 1));
 }
+#endif
 
 inline void loadTevColor(u32 reg, const J3DGXColorS10& color) {
     J3DGDSetTevColorS10(GXTevRegID(reg + 1), color);

@@ -1,5 +1,9 @@
 #include "RVLFaceLibInternal.h"
+#if defined(PETARI_NATIVE)
+#include <math.h>
+#else
 #include <cmath>
+#endif
 #include <revolution/gx/GXVert.h>
 
 void RFLiSetupCopyTex(GXTexFmt fmt, u16 width, u16 height, void* buffer, GXColor clearColor) {

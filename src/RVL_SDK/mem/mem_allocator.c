@@ -2,11 +2,11 @@
 #include "revolution/mem/expHeap.h"
 
 static void* AllocatorAllocForExpHeap_(MEMAllocator *pAllocator, u32 size) {
-    return MEMAllocFromExpHeapEx(pAllocator->pHeap, size, pAllocator->heapParam1);
+    return MEMAllocFromExpHeapEx((MEMHeapHandle)pAllocator->pHeap, size, pAllocator->heapParam1);
 }
 
 static void AllocatorFreeForExpHeap_(MEMAllocator *pAllocator, void *pBlock) {
-    MEMFreeToExpHeap(pAllocator->pHeap, pBlock);
+    MEMFreeToExpHeap((MEMHeapHandle)pAllocator->pHeap, pBlock);
 }
 
 void* MEMAllocFromAllocator(MEMAllocator *pAllocator, u32 size) {

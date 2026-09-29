@@ -84,8 +84,14 @@ public:
     /* 0xE1 */ u8 _E1;
     /* 0xE2 */ u8 _E2;
     /* 0xE3 */ u8 _E3;
+#ifdef PETARI_NATIVE
+    // Lowest and highest placement data addresses; host addresses are pointer-sized.
+    uintptr_t _E4;
+    uintptr_t _E8;
+#else
     /* 0xE4 */ u32 _E4;
     /* 0xE8 */ u32 _E8;
+#endif
     /* 0xEC */ MR::AssignableArray< JMapInfo > _EC;
     /* 0xF4 */ MR::AssignableArray< JMapInfo > _F4;
     /* 0xFC */ PlacementInfoOrdered* _FC;

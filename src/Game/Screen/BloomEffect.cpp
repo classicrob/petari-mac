@@ -281,7 +281,7 @@ void BloomEffect::initBlur(JUTTexture* pTexture, u32 param2, f32 intensity) cons
 }
 
 void BloomEffect::drawBlur(s32 divisions, s32 tile, Mtx* pMtx, u32 stageCount, u32 matrixCount) const {
-    GXSetArray(GX_TEX_MTX_ARRAY, pMtx, sizeof(Mtx));
+    GXSETARRAY(GX_TEX_MTX_ARRAY, pMtx, matrixCount * sizeof(Mtx), sizeof(Mtx), true);
 
     s32 row = tile / divisions;
     s32 column = tile % divisions;

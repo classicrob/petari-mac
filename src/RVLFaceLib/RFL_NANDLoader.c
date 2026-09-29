@@ -1,6 +1,14 @@
 #include "RVLFaceLibInternal.h"
 #include <revolution/NAND.h>
+#ifdef PETARI_NATIVE
+// RFL_Res.dat is big-endian; see native/resource/rfl/rfl_native.h.
+#include "rfl_native.h"
+#endif
+#if defined(PETARI_NATIVE)
+#include <stdio.h>
+#else
 #include <cstdio>
+#endif
 
 #define LOADER_HEADER_BUF_1_SIZE 0x100
 #define LOADER_HEADER_BUF_2_SIZE 0x20
@@ -27,6 +35,22 @@ void RFLiInitLoader(void) {
     loader->headerBuf2 = NULL;
 }
 
+#ifdef PETARI_NATIVE
+static void parseOnmemoryRes_(void) NO_INLINE {
+    RFLiLoader* loader;
+    int i;
+
+    loader = RFLiGetLoader();
+    loader->version = RFLiNativeLoadU16((u8*)loader->cache + 2);
+    for (i = 0; i < RFLiArcID_Max; i++) {
+        const u32 offset = RFLiNativeLoadU32((u8*)loader->cache + ((i + 1) * 4));
+        const u8* p_section = (u8*)loader->cache + offset;
+        loader->archives[i].numFiles = RFLiNativeLoadU16(p_section);
+        loader->archives[i].biggestSize = RFLiNativeLoadU16(p_section + 2);
+        loader->archives[i].offset = offset + 4;
+    }
+}
+#else
 static void parseOnmemoryRes_(void) NO_INLINE {
     RFLiLoader* loader;
     int i;
@@ -44,6 +68,7 @@ static void parseOnmemoryRes_(void) NO_INLINE {
         loader->archives[i].offset = *offset + 4;
     }
 }
+#endif
 
 static void loadResRead2ndcallback_(void) {
     RFLiLoader* loader;
@@ -207,8 +232,13 @@ RFLErrcode RFLiLoadResourceHeaderAsync(void) {
 static u32 getCachedLength_(RFLiLoader* loader, u32 arcIdx, u16 fileIdx) {
     RFLiArchive* arc = &loader->archives[arcIdx];
     const void* arcBuf = (u8*)loader->cache + arc->offset;
+#ifdef PETARI_NATIVE
+    const u32 next = RFLiNativeLoadU32((const u8*)arcBuf + (fileIdx + 1) * 4);
+    const u32 self = RFLiNativeLoadU32((const u8*)arcBuf + fileIdx * 4);
+#else
     const u32 next = ((u32*)arcBuf)[fileIdx + 1];
     const u32 self = ((u32*)arcBuf)[fileIdx];
+#endif
     return next - self;
 }
 
@@ -263,8 +293,13 @@ static void* getCachedFile_(void* dst, RFLiLoader* loader, u32 arcIdx,
     const u8* cache = (u8*)loader->cache;
     RFLiArchive* arc = &loader->archives[arcIdx];
     const void* arcBuf = cache + arc->offset;
+#ifdef PETARI_NATIVE
+    const u32 self = RFLiNativeLoadU32((const u8*)arcBuf + fileIdx * 4);
+    const u32 next = RFLiNativeLoadU32((const u8*)arcBuf + (fileIdx + 1) * 4);
+#else
     const u32 self = ((u32*)arcBuf)[fileIdx];
     const u32 next = ((u32*)arcBuf)[fileIdx + 1];
+#endif
     const u32 size = next - self;
     const u32 src = arc->offset + self + (arc->numFiles * 4);
 
@@ -369,7 +404,15 @@ RFLiTexture* RFLiLoadTexture(RFLiPartsTex part, u16 file, void* dst) {
     static const u32 scParts2Arc[] = {RFLiArcID_Eye, RFLiArcID_Eyebrow,
                                       RFLiArcID_Mouth, RFLiArcID_Mustache,
                                       RFLiArcID_Mole};
+#ifdef PETARI_NATIVE
+    RFLiTexture* tex = (RFLiTexture*)getFile_(dst, scParts2Arc[part], file);
+    if (tex != NULL) {
+        RFLiNativeTextureHeaderToHost(tex);
+    }
+    return tex;
+#else
     return (RFLiTexture*)getFile_(dst, scParts2Arc[part], file);
+#endif
 }
 
 u32 RFLiGetShpTexSize(RFLiPartsShpTex part, u16 file) {
@@ -381,7 +424,15 @@ u32 RFLiGetShpTexSize(RFLiPartsShpTex part, u16 file) {
 RFLiTexture* RFLiLoadShpTexture(RFLiPartsShpTex part, u16 file, void* dst) {
     static const u32 scParts2Arc[] = {RFLiArcID_FaceTex, RFLiArcID_CapTex,
                                       RFLiArcID_NlineTex, RFLiArcID_GlassTex};
+#ifdef PETARI_NATIVE
+    RFLiTexture* tex = (RFLiTexture*)getFile_(dst, scParts2Arc[part], file);
+    if (tex != NULL) {
+        RFLiNativeTextureHeaderToHost(tex);
+    }
+    return tex;
+#else
     return (RFLiTexture*)getFile_(dst, scParts2Arc[part], file);
+#endif
 }
 
 u32 RFLiGetShapeSize(RFLiPartsShp part, u16 file) {

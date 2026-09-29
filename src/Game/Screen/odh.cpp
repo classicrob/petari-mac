@@ -63,7 +63,7 @@ u32 CArGBAOdh::compressGbaOdh(u8* pSrc, u8* pDst, int width, int height, int qua
     }
 
     SArCDJ_OdhMaster master;
-    u16 size[2] = {width, height};
+    u16 size[2] = {static_cast< u16 >(width), static_cast< u16 >(height)};
 
     if (cdj_c_initializeCompressOdh(&master, size, quality, pWork, pDst, limitSize) != 0) {
         return 0;
@@ -569,7 +569,11 @@ u32 CArGBAOdh::huffmanCoder(u16* pCoefficients, SArCDJ_HuffmanRequest* pRequest)
             }
         }
 
+#ifdef PETARI_NATIVE
+        if ((reinterpret_cast< uintptr_t >(pCoefficients) & 2) == 0) {
+#else
         if ((reinterpret_cast< u32 >(pCoefficients) & 2) == 0) {
+#endif
             break;
         }
 

@@ -8,6 +8,9 @@
 #include <JSystem/J3DGraphBase/J3DMaterial.hpp>
 #include <JSystem/J3DGraphBase/J3DSys.hpp>
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 void DisplayListMaker_FORCE_MATCH_INLINE(J3DTexture* pTexture, const ResTIMG& rTexture) {
     pTexture->setResTIMG(0, rTexture);

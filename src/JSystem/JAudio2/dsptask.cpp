@@ -251,10 +251,19 @@ void DspBoot(void (*pCallback)(void*)) {
     DspInitWork();
     OSReport("Dsp をブートします\n");
     audiotask.priority = 0xf0;
+#ifdef PETARI_NATIVE
+    // Host pointers: no cached-to-physical address arithmetic.
+    audiotask.iram_mmem_addr = jdsp;
+#else
     audiotask.iram_mmem_addr = (u16*)((u8*)jdsp + 0x80000000);
+#endif
     audiotask.iram_length = sizeof(jdsp);
     audiotask.iram_addr = 0;
+#ifdef PETARI_NATIVE
+    audiotask.dram_mem_addr = AUDIO_YIELD_BUFFER;
+#else
     audiotask.dram_mem_addr = (u16*)((u8*)AUDIO_YIELD_BUFFER + 0x80000000);
+#endif
     audiotask.dram_len = sizeof(AUDIO_YIELD_BUFFER);
     audiotask.dram_addr = 0;
     audiotask.dsp_vector = 0;

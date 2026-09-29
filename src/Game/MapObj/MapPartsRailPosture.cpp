@@ -60,7 +60,12 @@ void MapPartsRailPosture::exeMove() {
         TVec3f v9(0.0f, 1.0f, 0.0f);
         TVec3f v8(0.0f, 0.0f, 1.0f);
 
+#ifdef PETARI_NATIVE
+        // Original bug kept: tests the member function pointer (always true) instead of calling it.
+        if (mMovePosture == 1 || &MapPartsRailPosture::isPostureTypeRailDirRailUseShadowGravity != nullptr) {
+#else
         if (mMovePosture == 1 || isPostureTypeRailDirRailUseShadowGravity) {
+#endif
             v9.set(-shadowVector);
             v10.cross(v9, v11);
             MR::normalize(&v10);

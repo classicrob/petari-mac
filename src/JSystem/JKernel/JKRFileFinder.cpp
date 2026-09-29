@@ -1,7 +1,7 @@
 #include "JSystem/JKernel/JKRFileFinder.hpp"
 #include "JSystem/JKernel/JKRArchive.hpp"
 
-JKRArcFinder::JKRArcFinder(JKRArchive* pArchive, long firstFileIndex, long nrFiles) {
+JKRArcFinder::JKRArcFinder(JKRArchive* pArchive, s32 firstFileIndex, s32 nrFiles) {
     mArchive = pArchive;
     mHasMoreFiles = nrFiles > 0;
     mFirstIndex = firstFileIndex;

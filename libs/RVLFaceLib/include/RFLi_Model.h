@@ -135,11 +135,11 @@ typedef struct RFLiCharModel {
 
 extern RFLiCoordinateData coordinateData;
 
-inline void RFLiSetCoordinateData(const RFLiCoordinateData* data) {
+RFL_HEADER_INLINE void RFLiSetCoordinateData(const RFLiCoordinateData* data) {
     coordinateData = *data;
 }
 
-inline RFLiCoordinateData* RFLiGetCoordinateData(void) {
+RFL_HEADER_INLINE RFLiCoordinateData* RFLiGetCoordinateData(void) {
     return &coordinateData;
 }
 

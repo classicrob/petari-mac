@@ -114,6 +114,10 @@ public:
     /* 0x50 */ GXCompType mVtxPosType;
     /* 0x54 */ u8 mVtxNrmFrac;
     /* 0x58 */ GXCompType mVtxNrmType;
+#ifdef PETARI_NATIVE
+    // Exact VTX1 spans: position, normal, NBT, two colors, eight texture arrays.
+    u32 mNativeArrayBytes[13]{};
+#endif
 };
 
 class J3DVertexBuffer {

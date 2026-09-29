@@ -1,11 +1,42 @@
 #pragma once
 
 #include <revolution/types.h>
+#ifdef PETARI_NATIVE
+#include "Game/Util/BigEndian.hpp"
+#endif
 
 class JMapInfo;
 class TalkMessageInfo;
 class TalkNode;
 
+#ifdef PETARI_NATIVE
+// BMG block headers as stored in the resource (big-endian).
+struct MessageInfoBlock {
+    BigEndianValue< u32 > mMagic;
+    BigEndianValue< u32 > mBlockSize;
+    BigEndianValue< u16 > mItemCount;
+    BigEndianValue< u16 > mItemSize;
+    BigEndianValue< u32 > _C;
+};
+
+struct MessageDataBlock {
+    BigEndianValue< u32 > mMagic;
+    BigEndianValue< u32 > mBlockSize;
+};
+
+struct MessageFlowBlock {
+    BigEndianValue< u32 > mMagic;
+    BigEndianValue< u32 > mBlockSize;
+    BigEndianValue< u16 > mNodeCount;
+    BigEndianValue< u16 > _A;
+    BigEndianValue< u32 > _C;
+};
+
+struct MessageFLI1Block {
+    BigEndianValue< u32 > mMagic;
+    BigEndianValue< u32 > mBlockSize;
+};
+#else
 struct MessageInfoBlock {
     u32 mMagic;
     u32 mBlockSize;
@@ -31,10 +62,16 @@ struct MessageFLI1Block {
     u32 mMagic;
     u32 mBlockSize;
 };
+#endif
 
 class MessageData {
 public:
     MessageData(const char*);
+#ifdef PETARI_NATIVE
+    /// @brief Builds the message tables from BMG and MessageId.tbl resources in memory.
+    MessageData(const void* pMessageData, const void* pIdTable);
+    void initFromResource(const void* pMessageData, const void* pIdTable);
+#endif
 
     bool getMessageDirect(TalkMessageInfo*, const char*) const;
     bool getMessage(TalkMessageInfo*, u16, u16) const;
@@ -53,6 +90,14 @@ public:
     u16* _14;
     u8* _18;
     MessageFLI1Block* mFLI1Block;  // 0x1C
+#ifdef PETARI_NATIVE
+    // Host-order copies built at load time; the resource stays untouched.
+    // mText holds the DAT1 payload as UTF-16 code units, so INF1 byte offsets index it.
+    u16* mText;
+    u32 mTextUnitCount;
+    TalkNode* mNodes;
+    u16* mBranchNodeIndices;
+#endif
 };
 
 class MessageHolder {

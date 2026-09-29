@@ -1,5 +1,9 @@
 #include "RVLFaceLibInternal.h"
+#if defined(PETARI_NATIVE)
+#include <stdio.h>
+#else
 #include <cstdio>
+#endif
 
 static void writeData_(RFLiHiddenCharData* data) NO_INLINE;
 

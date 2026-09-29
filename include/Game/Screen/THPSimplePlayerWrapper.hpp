@@ -2,6 +2,9 @@
 
 #include "Game/System/NerveExecutor.hpp"
 #include <revolution/thp.h>
+#ifdef PETARI_NATIVE
+#include <petari/movie_thp.hpp>
+#endif
 
 class THPSimplePlayerWrapper;
 
@@ -106,4 +109,23 @@ public:
     /* 0x30F */ u8 _30F;
     /* 0x310 */ u8 _310;
     /* 0x314 */ s32 _314;
+
+#ifdef PETARI_NATIVE
+    // Native-only state. THP fields are big-endian and the SDK-compatible
+    // decoders take no input length, so every record is decoded through
+    // petari_movie and every frame is validated before decoding. DVD
+    // completions for the open/preload nerves are handed to the game thread
+    // instead of changing the nerve from the drive thread.
+    [[noreturn]] void nativeFail(const char* pReason, s32 frame = -1) const;
+    void nativePollReadCompletion();
+    void nativeCheckFrameRead(u32 offset, s32 size) const;
+    void nativeValidateFrame(const u8* pFrame, s32 audio, u32* pCompSizes);
+
+    const char* mNativeName;
+    PetariNative::Movie::ThpComponents mNativeComponents;
+    s32 mNativeReadSize[20];
+    s32 mNativeCompletion;
+    bool mNativeCompletionPending;
+    bool mNativeReadIssued;
+#endif
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <revolution.h>
+#include <stdint.h>
 
 class JUTPalette;
 
@@ -28,6 +29,23 @@ struct ResTIMG {
     /* 0x1A */ s16 mLodBias;
     /* 0x1C */ u32 mImageDataOffset;
 };
+
+// ResTIMG data offsets are relative to the header. J3DTexture::setResTIMG rebases
+// them onto a copied header, so they can be negative; the Wii relies on 32-bit
+// wraparound. Native pointers are 64 bits, so the offset is sign-extended.
+#ifdef PETARI_NATIVE
+#define JUT_RESTIMG_OFFSET(offset) (static_cast< intptr_t >(static_cast< s32 >(offset)))
+#else
+#define JUT_RESTIMG_OFFSET(offset) (offset)
+#endif
+
+#ifdef PETARI_NATIVE
+// Native code reads ResTIMG header fields in host byte order; image and palette
+// bytes stay big-endian. Converts a serialized header in place once, when its
+// resource is loaded. Offsets are relative to the header and are checked against
+// resourceSize. Returns false, leaving the header unchanged, if they do not fit.
+bool JUTNativeNormalizeResTIMG(ResTIMG* pHeader, u32 resourceSize);
+#endif
 
 class JUTTexture {
 public:

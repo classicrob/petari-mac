@@ -898,12 +898,26 @@ public:
     union {
         /* 0xB98 */ u32 _B98;
         struct {
+#ifdef PETARI_NATIVE
+            // MWCC allocates bitfields from the most significant bit of each 32-bit unit; Clang
+            // allocates from the least significant bit. Natively the fields are declared in reverse
+            // within each unit so the layout, and every numeric view of these words, matches the Wii.
+            // unit 0
+            unsigned : 26;
+            unsigned mBeeWind : 1;
+            unsigned mIsStationary : 1;
+            unsigned mSlopeSlip : 1;
+            unsigned _2 : 1;
+            unsigned mSnow : 1;
+            unsigned mSmoke : 1;
+#else
             unsigned mSmoke : 1;
             unsigned mSnow : 1;
             unsigned _2 : 1;
             unsigned mSlopeSlip : 1;
             unsigned mIsStationary : 1;
             unsigned mBeeWind : 1;
+#endif
         } mEffectFlags;
     };
     /* 0xB9C */ u16 _B9C;

@@ -1,12 +1,14 @@
 #pragma once
 
 #include <revolution/os.h>
+#include <stdint.h>
 
 class JKRArchive;
 
 namespace JASResArcLoader {
 
-    typedef void (*LoadCallback)(u32, u32);
+    // The callback argument carries a caller pointer.
+    typedef void (*LoadCallback)(u32, uintptr_t);
 
     struct TLoadResInfo {
         TLoadResInfo(JKRArchive* archive, u16 id, void* buffer, u32 size);
@@ -16,13 +18,13 @@ namespace JASResArcLoader {
         /* 0x8 */ void* mBuffer;
         /* 0xC */ u32 mBufferSize;
         /* 0x10 */ LoadCallback mCallback;
-        /* 0x14 */ u32 mCallbackArg;
+        /* 0x14 */ uintptr_t mCallbackArg;
         /* 0x18 */ OSMessageQueue* mMsgQueue;
     };
 
     u32 getResSize(JKRArchive const*, u16);
     static void loadResourceCallback(void*);
-    int loadResourceAsync(JKRArchive*, u16, u8*, u32, void (*)(u32, u32), u32);
+    int loadResourceAsync(JKRArchive*, u16, u8*, u32, LoadCallback, uintptr_t);
 }  // namespace JASResArcLoader
 
 enum ResArcMessage {

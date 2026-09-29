@@ -20,9 +20,16 @@ public:
     };
 
     virtual TVec3f* getClippingCenterOffset() const {
+#ifdef PETARI_NATIVE
+        // The Wii build returns the address of a local; callers read it immediately.
+        static TVec3f vec;
+        vec.set(0.0f, 0.0f, 0.0f);
+        return &vec;
+#else
         TVec3f vec;
         vec.set(0.0f, 0.0f, 0.0f);
         return &vec;
+#endif
     };
 
     virtual bool isSyncClipping() const {

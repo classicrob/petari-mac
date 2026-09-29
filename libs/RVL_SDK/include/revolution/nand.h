@@ -136,6 +136,12 @@ s32 NANDWrite(NANDFileInfo*, const void*, u32);
 s32 NANDWriteAsync(NANDFileInfo*, const void*, u32, NANDCallback, NANDCommandBlock*);
 
 s32 NANDSeekAsync(NANDFileInfo*, s32, s32, NANDCallback, NANDCommandBlock*);
+s32 NANDSeek(NANDFileInfo*, s32, s32);
+s32 NANDGetLengthAsync(NANDFileInfo*, u32*, NANDCallback, NANDCommandBlock*);
+s32 NANDPrivateSafeOpenAsync(const char*, NANDFileInfo*, const u8, void*, const u32, NANDCallback, NANDCommandBlock*);
+s32 NANDSafeCloseAsync(NANDFileInfo*, NANDCallback, NANDCommandBlock*);
+void NANDSetUserData(NANDCommandBlock*, void*);
+void* NANDGetUserData(const NANDCommandBlock*);
 
 BOOL nandIsInitialized(void);
 s32 nandConvertErrorCode(const ISFSError);

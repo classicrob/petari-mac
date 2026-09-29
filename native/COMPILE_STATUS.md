@@ -1,188 +1,21 @@
-# Native compile audit
+# Native compilation status
 
-Checked 1605 game C++ files: 1443 passed, 162 failed.
+Audited on 2026-09-28 against the working native-port branch. These are Clang syntax checks, not link or gameplay results.
 
-This is a Clang syntax check, not a link or runtime test. Passing files may still contain platform-specific behavior.
+| Source group | Passing | Checked |
+| --- | ---: | ---: |
+| Game C++ | 1605 | 1605 |
+| JSystem / nw4r C++ | 200 | 200 |
 
-## Most frequent diagnostics
+The library worker's latest audit includes the native resource additions and the
+DSP-facing units. Native mailbox handles now carry host addresses without
+truncating them. These counts describe that audit snapshot; subsequent additions
+need their own build validation.
 
-- 48 occurrences: `call to 'getRandom' is ambiguous`
-- 39 occurrences: `cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information`
-- 34 occurrences: `no member named 'mem_func' in namespace 'std'`
-- 17 occurrences: `cannot jump from switch statement to this case label`
-- 16 occurrences: `constant expression evaluates to -1 which cannot be narrowed to type 'u32' (aka 'unsigned int') [-Wc++11-narrowing]`
-- 13 occurrences: `call to 'startBckPlayer' is ambiguous`
-- 12 occurrences: `invalid operands to binary expression ('bool' and 'std::nullptr_t')`
-- 10 occurrences: `cast from pointer to smaller type 's32' (aka 'int') loses information`
-- 9 occurrences: `no member named 'mem_fun' in namespace 'std'`
-- 9 occurrences: `templates must have C++ linkage`
-- 7 occurrences: `no member named 'binder2nd' in namespace 'std'`
-- 7 occurrences: `taking the address of a temporary object of type 'TVec3f' (aka 'TVec3<float>') [-Waddress-of-temporary]`
-- 6 occurrences: `cannot initialize a parameter of type 'bool' with an rvalue of type 'std::nullptr_t'`
-- 6 occurrences: `use of undeclared identifier 'DEG_TO_RAD'`
-- 5 occurrences: `call to member function 'startPadVib' is ambiguous`
+The complete arm64 `petari` application and `petari_link_check` now link. The
+application reaches original game initialization, where runtime debugging is
+ongoing; title-screen and gameplay behavior have not yet been verified. Resource,
+platform, and focused Metal tests provide separate evidence, summarized in
+[README.md](README.md) and the subsystem reports.
 
-## Failing translation units
-
-- `src/Game/Animation/XanimeResource.cpp` — src/Game/Animation/XanimeResource.cpp:236:5: error: cannot jump from switch statement to this case label
-- `src/Game/AreaObj/AreaObj.cpp` — src/Game/AreaObj/AreaObj.cpp:10:10: fatal error: 'functional.hpp' file not found
-- `src/Game/AreaObj/AreaObjContainer.cpp` — src/Game/AreaObj/AreaObjContainer.cpp:14:33: error: no template named 'binary_function' in namespace 'std'; did you mean '__binary_function'?
-- `src/Game/AreaObj/ChangeBgmCube.cpp` — src/Game/AreaObj/ChangeBgmCube.cpp:155:9: error: cannot jump from switch statement to this case label
-- `src/Game/AudioLib/AudAnmSoundObject.cpp` — src/Game/AudioLib/AudAnmSoundObject.cpp:237:70: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/AudioLib/AudBgmSetting.cpp` — src/Game/AudioLib/AudBgmSetting.cpp:215:10: error: constant expression evaluates to -1 which cannot be narrowed to type 'u16' (aka 'unsigned short') [-Wc++11-narrowing]
-- `src/Game/AudioLib/AudParams.cpp` — src/Game/AudioLib/AudParams.cpp:20:15: error: cannot initialize a variable of type 'const int' with an rvalue of type 'std::nullptr_t'
-- `src/Game/AudioLib/AudSystem.cpp` — libs/JSystem/include/JSystem/JAudio2/JAUStreamDataMgr.hpp:65:48: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/Boss/BossKameckStateBattle.cpp` — src/Game/Boss/BossKameckStateBattle.cpp:171:29: error: invalid operands to binary expression ('bool' and 'std::nullptr_t')
-- `src/Game/Boss/Dodoryu.cpp` — src/Game/Boss/Dodoryu.cpp:209:9: error: constant expression evaluates to -1 which cannot be narrowed to type 'u32' (aka 'unsigned int') [-Wc++11-narrowing]
-- `src/Game/Boss/TripodBossAccesser.cpp` — src/Game/Boss/TripodBossAccesser.cpp:164:16: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/Boss/TripodBossKillerGeneraterCircle.cpp` — src/Game/Boss/TripodBossKillerGeneraterCircle.cpp:30:138: error: constant expression evaluates to 16777216 which cannot be narrowed to type 'bool' [-Wc++11-narrowing]
-- `src/Game/Camera/CameraManGame.cpp` — src/Game/Camera/CameraManGame.cpp:496:39: error: cast from pointer to smaller type 's32' (aka 'int') loses information
-- `src/Game/Demo/DemoCameraFunction.cpp` — src/Game/Demo/DemoCameraFunction.cpp:10:20: error: cannot initialize return object of type 'bool' with an rvalue of type 'std::nullptr_t'
-- `src/Game/Demo/DemoDirector.cpp` — src/Game/Demo/DemoDirector.cpp:189:91: error: invalid operands to binary expression ('const CinemaFrameType' and 'std::nullptr_t')
-- `src/Game/Demo/DemoExecutor.cpp` — src/Game/Demo/DemoExecutor.cpp:68:74: error: no member named 'mem_func' in namespace 'std'
-- `src/Game/Demo/DemoStartRequestHolder.cpp` — src/Game/Demo/DemoStartRequestHolder.cpp:193:55: error: explicit specialization of 'push_back' after instantiation
-- `src/Game/Effect/EffectObjGravityDust.cpp` — src/Game/Effect/EffectObjGravityDust.cpp:31:12: error: taking the address of a temporary object of type 'TVec3f' (aka 'TVec3<float>') [-Waddress-of-temporary]
-- `src/Game/Effect/MultiEmitter.cpp` — src/Game/Effect/MultiEmitter.cpp:58:24: error: no member named 'binder2nd' in namespace 'std'
-- `src/Game/Effect/ParticleEmitterHolder.cpp` — src/Game/Effect/ParticleEmitterHolder.cpp:74:33: error: no member named 'find_if_array' in namespace 'std'
-- `src/Game/Enemy/BallBeamer.cpp` — src/Game/Enemy/BallBeamer.cpp:41:52: error: cannot initialize a parameter of type 'bool' with an rvalue of type 'std::nullptr_t'
-- `src/Game/Enemy/BegomanBase.cpp` — src/Game/Enemy/BegomanBase.cpp:942:47: error: invalid operands to binary expression ('bool' and 'std::nullptr_t')
-- `src/Game/Enemy/CannonShellBase.cpp` — src/Game/Enemy/CannonShellBase.cpp:14:87: error: no member named 'ptr_fun' in namespace 'std'
-- `src/Game/Enemy/HammerHeadPackun.cpp` — src/Game/Enemy/HammerHeadPackun.cpp:460:24: error: non-pointer operand type 's32' (aka 'int') incompatible with nullptr
-- `src/Game/Enemy/Jellyfish.cpp` — src/Game/Enemy/Jellyfish.cpp:405:25: error: call to 'getRandom' is ambiguous
-- `src/Game/Enemy/JellyfishElectric.cpp` — src/Game/Enemy/JellyfishElectric.cpp:339:20: error: call to 'getRandom' is ambiguous
-- `src/Game/Enemy/KirairaChain.cpp` — src/Game/Enemy/KirairaChain.cpp:196:27: error: call to 'getRandom' is ambiguous
-- `src/Game/Enemy/KoopaJrShip.cpp` — src/Game/Enemy/KoopaJrShip.cpp:391:64: error: no member named 'not1' in namespace 'std'
-- `src/Game/Enemy/Meramera.cpp` — src/Game/Enemy/Meramera.cpp:730:33: error: call to 'getRandom' is ambiguous
-- `src/Game/Enemy/Metbo.cpp` — src/Game/Enemy/Metbo.cpp:198:13: error: call to 'getRandom' is ambiguous
-- `src/Game/Enemy/Mogucchi.cpp` — src/Game/Enemy/Mogucchi.cpp:79:5: error: no matching function for call to 'calcGravityVector'
-- `src/Game/Enemy/OtaRock.cpp` — src/Game/Enemy/OtaRock.cpp:42:7: error: cannot initialize a member subobject of type 's32' (aka 'int') with an rvalue of type 'std::nullptr_t'
-- `src/Game/Enemy/Unizo.cpp` — src/Game/Enemy/Unizo.cpp:208:19: error: call to 'getRandom' is ambiguous
-- `src/Game/GameAudio/AudStageBgmTable.cpp` — src/Game/GameAudio/AudStageBgmTable.cpp:19:14: error: constant expression evaluates to -1 which cannot be narrowed to type 'u32' (aka 'unsigned int') [-Wc++11-narrowing]
-- `src/Game/GameAudio/AudStageBgmWrap.cpp` — src/Game/GameAudio/AudStageBgmWrap.cpp:62:24: error: constant expression evaluates to -1 which cannot be narrowed to type 'u32' (aka 'unsigned int') [-Wc++11-narrowing]
-- `src/Game/Gravity/PlanetGravityManager.cpp` — src/Game/Gravity/PlanetGravityManager.cpp:36:92: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/LiveActor/DisplayListMaker.cpp` — src/Game/LiveActor/DisplayListMaker.cpp:26:68: error: no member named 'mem_fun' in namespace 'std'
-- `src/Game/LiveActor/EffectKeeper.cpp` — src/Game/LiveActor/EffectKeeper.cpp:152:46: error: no member named 'mem_func' in namespace 'std'
-- `src/Game/LiveActor/IKJointCtrl.cpp` — src/Game/LiveActor/IKJointCtrl.cpp:117:51: error: no member named 'mem_fun' in namespace 'std'
-- `src/Game/LiveActor/LiveActorGroupArray.cpp` — src/Game/LiveActor/LiveActorGroupArray.cpp:14:28: error: no template named 'binary_function' in namespace 'std'; did you mean '__binary_function'?
-- `src/Game/Map/Butterfly.cpp` — src/Game/Map/Butterfly.cpp:127:24: error: use of undeclared identifier 'DEG_TO_RAD'
-- `src/Game/Map/FileSelectItem.cpp` — src/Game/Map/FileSelectItem.cpp:663:13: error: call to 'getRandom' is ambiguous
-- `src/Game/Map/FileSelector.cpp` — src/Game/Map/FileSelector.cpp:872:13: error: call to 'getRandom' is ambiguous
-- `src/Game/Map/KCollision.cpp` — src/Game/Map/KCollision.cpp:1127:9: error: cannot jump from this goto statement to its label
-- `src/Game/Map/RaceManager.cpp` — src/Game/Map/RaceManager.cpp:207:56: error: no member named 'mem_func' in namespace 'std'
-- `src/Game/Map/RaceRail.cpp` — src/Game/Map/RaceRail.cpp:166:9: error: call to 'startBckPlayer' is ambiguous
-- `src/Game/Map/SeaGull.cpp` — src/Game/Map/SeaGull.cpp:24:102: error: call to 'getRandom' is ambiguous
-- `src/Game/Map/SleepControllerHolder.cpp` — src/Game/Map/SleepControllerHolder.cpp:22:68: error: no member named 'mem_func' in namespace 'std'
-- `src/Game/Map/SphereSelector.cpp` — src/Game/Map/SphereSelector.cpp:122:13: error: call to 'getRandom' is ambiguous
-- `src/Game/Map/SwitchWatcherHolder.cpp` — src/Game/Map/SwitchWatcherHolder.cpp:17:70: error: no member named 'mem_func' in namespace 'std'
-- `src/Game/Map/WaterPlant.cpp` — src/Game/Map/WaterPlant.cpp:273:22: error: no matching constructor for initialization of 'JUTTexture'
-- `src/Game/MapObj/AssemblyBlock.cpp` — src/Game/MapObj/AssemblyBlock.cpp:113:9: error: call to 'getRandom' is ambiguous
-- `src/Game/MapObj/CrystalCage.cpp` — src/Game/MapObj/CrystalCage.cpp:48:45: error: cannot initialize a parameter of type 'bool' with an rvalue of type 'std::nullptr_t'
-- `src/Game/MapObj/DriftWood.cpp` — src/Game/MapObj/DriftWood.cpp:57:23: error: call to 'getRandom' is ambiguous
-- `src/Game/MapObj/EarthenPipe.cpp` — src/Game/MapObj/EarthenPipe.cpp:316:9: error: call to 'startBckPlayer' is ambiguous
-- `src/Game/MapObj/ElectricBall.cpp` — src/Game/MapObj/ElectricBall.cpp:93:24: error: no member named 'binder2nd' in namespace 'std'
-- `src/Game/MapObj/GeneralMapParts.cpp` — src/Game/MapObj/GeneralMapParts.cpp:82:70: error: no member named 'mem_fun' in namespace 'std'
-- `src/Game/MapObj/LavaFloater.cpp` — src/Game/MapObj/LavaFloater.cpp:54:22: error: cannot initialize a parameter of type 'int' with an rvalue of type 'std::nullptr_t'
-- `src/Game/MapObj/MapPartsBreaker.cpp` — src/Game/MapObj/MapPartsBreaker.cpp:58:13: error: template specialization requires 'template<>'
-- `src/Game/MapObj/MapPartsRailGuideDrawer.cpp` — src/Game/MapObj/MapPartsRailGuideDrawer.cpp:64:66: error: no member named 'mem_fun' in namespace 'std'
-- `src/Game/MapObj/MapPartsRailPosture.cpp` — src/Game/MapObj/MapPartsRailPosture.cpp:63:34: error: reference to non-static member function must be called; did you mean to call it with no arguments?
-- `src/Game/MapObj/MarioLauncherAttractor.cpp` — src/Game/MapObj/MarioLauncherAttractor.cpp:15:64: error: cannot initialize a parameter of type 'bool' with an rvalue of type 'std::nullptr_t'
-- `src/Game/MapObj/MiniatureGalaxy.cpp` — src/Game/MapObj/MiniatureGalaxy.cpp:581:13: error: call to 'getRandom' is ambiguous
-- `src/Game/MapObj/MorphItemObjNeo.cpp` — include/Game/MapObj/MorphItemObjNeo.hpp:161:16: error: taking the address of a temporary object of type 'TVec3f' (aka 'TVec3<float>') [-Waddress-of-temporary]
-- `src/Game/MapObj/PhantomShipBoxFloater.cpp` — src/Game/MapObj/PhantomShipBoxFloater.cpp:33:24: error: call to 'getRandom' is ambiguous
-- `src/Game/MapObj/PlantGroup.cpp` — src/Game/MapObj/PlantGroup.cpp:113:18: error: call to 'getRandom' is ambiguous
-- `src/Game/MapObj/PowerStar.cpp` — src/Game/MapObj/PowerStar.cpp:714:9: error: call to 'startBckPlayer' is ambiguous
-- `src/Game/MapObj/PunchBox.cpp` — src/Game/MapObj/PunchBox.cpp:63:11: error: call to 'getRandom' is ambiguous
-- `src/Game/MapObj/Sandstorm.cpp` — src/Game/MapObj/Sandstorm.cpp:232:13: error: reference to non-static member function must be called; did you mean to call it with no arguments?
-- `src/Game/MapObj/SpringWaterFloaterSpot.cpp` — src/Game/MapObj/SpringWaterFloaterSpot.cpp:198:23: error: call to 'getRandom' is ambiguous
-- `src/Game/MapObj/WaterPressureBullet.cpp` — src/Game/MapObj/WaterPressureBullet.cpp:50:9: error: call to 'startBckPlayer' is ambiguous
-- `src/Game/NPC/NPCActor.cpp` — src/Game/NPC/NPCActor.cpp:435:70: error: must explicitly qualify name of member function when taking its address
-- `src/Game/NPC/Rosetta.cpp` — src/Game/NPC/Rosetta.cpp:150:17: error: call to 'getRandom' is ambiguous
-- `src/Game/NPC/Syati.cpp` — src/Game/NPC/Syati.cpp:91:34: error: cannot initialize a parameter of type 'bool' with an rvalue of type 'std::nullptr_t'
-- `src/Game/NPC/TalkBalloon.cpp` — src/Game/NPC/TalkBalloon.cpp:85:12: error: declaration conflicts with target of using declaration already in scope
-- `src/Game/NPC/TalkMessageCtrl.cpp` — src/Game/NPC/TalkMessageCtrl.cpp:109:57: error: invalid operands to binary expression ('bool' and 'std::nullptr_t')
-- `src/Game/NPC/TalkState.cpp` — src/Game/NPC/TalkState.cpp:82:11: error: assigning to 's32' (aka 'int') from incompatible type 'std::nullptr_t'
-- `src/Game/NPC/Tico.cpp` — src/Game/NPC/Tico.cpp:310:39: error: call to 'getRandom' is ambiguous
-- `src/Game/NPC/TicoRail.cpp` — src/Game/NPC/TicoRail.cpp:68:16: error: call to 'getRandom' is ambiguous
-- `src/Game/NWC24/NWC24Function.cpp` — include/Game/NWC24/UTF16Util.hpp:4:10: fatal error: 'size_t.h' file not found
-- `src/Game/NWC24/NWC24Messenger.cpp` — src/Game/NWC24/NWC24Messenger.cpp:277:26: error: invalid operands to binary expression ('bool' and 'std::nullptr_t')
-- `src/Game/NWC24/NWC24SendThread.cpp` — include/Game/NWC24/UTF16Util.hpp:4:10: fatal error: 'size_t.h' file not found
-- `src/Game/NWC24/UTF16Util.cpp` — include/Game/NWC24/UTF16Util.hpp:4:10: fatal error: 'size_t.h' file not found
-- `src/Game/NameObj/NameObjFactory.cpp` — include/Game/MapObj/MorphItemObjNeo.hpp:161:16: error: taking the address of a temporary object of type 'TVec3f' (aka 'TVec3<float>') [-Waddress-of-temporary]
-- `src/Game/NameObj/NameObjHolder.cpp` — src/Game/NameObj/NameObjHolder.cpp:47:62: error: no member named 'mem_fun' in namespace 'std'
-- `src/Game/Player/MarineSnow.cpp` — src/Game/Player/MarineSnow.cpp:131:43: error: non-constant-expression cannot be narrowed from type 'u32' (aka 'unsigned int') to 'u8' (aka 'unsigned char') in initializer list [-Wc++11-narrowing]
-- `src/Game/Player/MarioActor.cpp` — src/Game/Player/MarioActor.cpp:1419:5: error: cannot jump from switch statement to this case label
-- `src/Game/Player/MarioActorEye.cpp` — src/Game/Player/MarioActorEye.cpp:92:16: error: call to 'getRandom' is ambiguous
-- `src/Game/Player/MarioActorGravity.cpp` — src/Game/Player/MarioActorGravity.cpp:87:17: error: call to member function 'setFrontVecKeepUp' is ambiguous
-- `src/Game/Player/MarioActorParts.cpp` — src/Game/Player/MarioActorParts.cpp:241:14: error: invalid operands to binary expression ('const u32' (aka 'const unsigned int') and 'std::nullptr_t')
-- `src/Game/Player/MarioActorRushMsg.cpp` — src/Game/Player/MarioActorRushMsg.cpp:356:17: error: invalid operands to binary expression ('bool' and 'std::nullptr_t')
-- `src/Game/Player/MarioActorSensor.cpp` — src/Game/Player/MarioActorSensor.cpp:323:13: error: call to member function 'startPadVib' is ambiguous
-- `src/Game/Player/MarioActorSpecialDraw.cpp` — src/Game/Player/MarioActorSpecialDraw.cpp:824:12: error: call to 'getRandom' is ambiguous
-- `src/Game/Player/MarioBee.cpp` — src/Game/Player/MarioBee.cpp:35:17: error: call to member function 'setFrontVecKeepUp' is ambiguous
-- `src/Game/Player/MarioCollision.cpp` — src/Game/Player/MarioCollision.cpp:1705:17: error: call to member function 'startPadVib' is ambiguous
-- `src/Game/Player/MarioDamage.cpp` — src/Game/Player/MarioDamage.cpp:1127:13: error: call to member function 'startPadVib' is ambiguous
-- `src/Game/Player/MarioEffect.cpp` — src/Game/Player/MarioEffect.cpp:205:50: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/Player/MarioJump.cpp` — src/Game/Player/MarioJump.cpp:624:12: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/Player/MarioMove.cpp` — src/Game/Player/MarioMove.cpp:1092:17: error: call to member function 'setFrontVecKeepUp' is ambiguous
-- `src/Game/Player/MarioSideStep.cpp` — src/Game/Player/MarioSideStep.cpp:97:5: error: call to member function 'changeAnimation' is ambiguous
-- `src/Game/Player/MarioStick.cpp` — src/Game/Player/MarioStick.cpp:95:5: error: call to member function 'startPadVib' is ambiguous
-- `src/Game/Player/MarioSwim.cpp` — src/Game/Player/MarioSwim.cpp:403:22: error: use of undeclared identifier 'DEG_TO_RAD'
-- `src/Game/Player/MarioTeresa.cpp` — src/Game/Player/MarioTeresa.cpp:571:16: error: call to 'getRandom' is ambiguous
-- `src/Game/Player/MarioWall.cpp` — src/Game/Player/MarioWall.cpp:394:5: error: call to member function 'startPadVib' is ambiguous
-- `src/Game/Player/MarioWarp.cpp` — src/Game/Player/MarioWarp.cpp:12:32: error: out-of-line declaration of a member must be a definition [-Wout-of-line-declaration]
-- `src/Game/Player/PlayerEvent.cpp` — include/Game/Player/PlayerEvent.hpp:93:32: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/RhythmLib/AudChordInfo.cpp` — src/Game/RhythmLib/AudChordInfo.cpp:52:44: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/RhythmLib/AudMePlayer.cpp` — src/Game/RhythmLib/AudMePlayer.cpp:388:43: error: cast from pointer to smaller type 's32' (aka 'int') loses information
-- `src/Game/Ride/SurfRay.cpp` — src/Game/Ride/SurfRay.cpp:408:5: error: cannot jump from switch statement to this case label
-- `src/Game/Ride/SwingRope.cpp` — src/Game/Ride/SwingRope.cpp:208:9: error: call to 'startBckPlayer' is ambiguous
-- `src/Game/Scene/IntermissionScene.cpp` — src/Game/Scene/IntermissionScene.cpp:8:10: fatal error: 'va_list.h' file not found
-- `src/Game/Scene/MultiSceneEffectKeeper.cpp` — src/Game/Scene/MultiSceneEffectKeeper.cpp:48:58: error: no member named 'mem_func' in namespace 'std'
-- `src/Game/Scene/ScenarioSelectScene.cpp` — libs/JSystem/include/JSystem/J3DGraphBase/J3DDrawBuffer.hpp:34:1: error: non-void function does not return a value [-Werror,-Wreturn-type]
-- `src/Game/Scene/SceneNameObjListExecutor.cpp` — src/Game/Scene/SceneNameObjListExecutor.cpp:191:13: error: constant expression evaluates to -1 which cannot be narrowed to type 'u32' (aka 'unsigned int') [-Wc++11-narrowing]
-- `src/Game/Scene/StageDataHolder.cpp` — src/Game/Scene/StageDataHolder.cpp:333:16: error: cast from pointer to smaller type 's32' (aka 'int') loses information
-- `src/Game/Screen/GalaxyMap.cpp` — src/Game/Screen/GalaxyMap.cpp:88:60: error: no member named 'mem_func' in namespace 'std'
-- `src/Game/Screen/GalaxyMapController.cpp` — src/Game/Screen/GalaxyMapController.cpp:107:90: error: reference to non-static member function must be called; did you mean to call it with no arguments?
-- `src/Game/Screen/GalaxyMapSelectButton.cpp` — src/Game/Screen/GalaxyMapSelectButton.cpp:50:35: error: invalid operands to binary expression ('bool' and 'std::nullptr_t')
-- `src/Game/Screen/GalaxyNamePlate.cpp` — src/Game/Screen/GalaxyNamePlate.cpp:11:10: fatal error: 'runtime.h' file not found
-- `src/Game/Screen/IsbnManager.cpp` — src/Game/Screen/IsbnManager.cpp:6:10: fatal error: 'wstring.h' file not found
-- `src/Game/Screen/LogoFader.cpp` — src/Game/Screen/LogoFader.cpp:31:39: error: type 'float' cannot be narrowed to 'u8' (aka 'unsigned char') in initializer list [-Wc++11-narrowing]
-- `src/Game/Screen/OdhConverter.cpp` — src/Game/Screen/OdhConverter.cpp:108:20: error: cannot initialize return object of type 'u32' (aka 'unsigned int') with an rvalue of type 'std::nullptr_t'
-- `src/Game/Screen/PaneEffectKeeper.cpp` — src/Game/Screen/PaneEffectKeeper.cpp:39:62: error: invalid operands to binary expression ('bool' and 'std::nullptr_t')
-- `src/Game/Screen/SubMeterLayout.cpp` — src/Game/Screen/SubMeterLayout.cpp:37:35: error: cannot initialize a parameter of type 'u32' (aka 'unsigned int') with an rvalue of type 'std::nullptr_t'
-- `src/Game/Screen/odh.cpp` — src/Game/Screen/odh.cpp:66:20: error: non-constant-expression cannot be narrowed from type 'int' to 'u16' (aka 'unsigned short') in initializer list [-Wc++11-narrowing]
-- `src/Game/Speaker/SpkTable.cpp` — src/Game/Speaker/SpkTable.cpp:23:51: error: cast from pointer to smaller type 's32' (aka 'int') loses information
-- `src/Game/Speaker/SpkWave.cpp` — src/Game/Speaker/SpkWave.cpp:46:24: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/System/ArchiveHolder.cpp` — src/Game/System/ArchiveHolder.cpp:7:45: error: allocating an object of abstract class type 'JKRMemArchive'
-- `src/Game/System/DrawBufferExecuter.cpp` — src/Game/System/DrawBufferExecuter.cpp:47:59: error: no member named 'mem_func' in namespace 'std'
-- `src/Game/System/DrawBufferGroup.cpp` — src/Game/System/DrawBufferGroup.cpp:39:62: error: no member named 'mem_func' in namespace 'std'
-- `src/Game/System/DrawBufferHolder.cpp` — src/Game/System/DrawBufferHolder.cpp:54:10: error: no member named 'for_each_array' in namespace 'std'
-- `src/Game/System/DrawSyncManager.cpp` — src/Game/System/DrawSyncManager.cpp:81:13: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/System/FileLoader.cpp` — src/Game/System/FileLoader.cpp:100:27: error: assigning to 's32' (aka 'int') from incompatible type 'std::nullptr_t'
-- `src/Game/System/FileRipper.cpp` — src/Game/System/FileRipper.cpp:56:25: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/System/GameDataHolder.cpp` — src/Game/System/GameDataHolder.cpp:157:20: error: call to 'clamp' is ambiguous
-- `src/Game/System/GameEventFlagChecker.cpp` — src/Game/System/GameEventFlagChecker.cpp:59:5: error: cannot jump from switch statement to this case label
-- `src/Game/System/GameSystem.cpp` — src/Game/System/GameSystem.cpp:48:1: error: 'main' must return 'int'
-- `src/Game/System/GameSystemException.cpp` — libs/JSystem/include/JSystem/JUtility/JUTAssert.hpp:17:83: error: unknown type name '__va_list'; did you mean 'va_list'?
-- `src/Game/System/GameSystemFontHolder.cpp` — src/Game/System/GameSystemFontHolder.cpp:32:25: error: allocating an object of abstract class type 'JKRMemArchive'
-- `src/Game/System/GameSystemObjHolder.cpp` — src/Game/System/GameSystemObjHolder.cpp:115:19: error: variable type 'JKRMemArchive' is an abstract class
-- `src/Game/System/GameSystemStationedArchiveLoader.cpp` — src/Game/System/GameSystemStationedArchiveLoader.cpp:72:15: error: no matching member function for call to 'alloc'
-- `src/Game/System/HeapMemoryWatcher.cpp` — src/Game/System/HeapMemoryWatcher.cpp:125:15: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/System/HomeButtonMenuWrapper.cpp` — /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1/__type_traits/enable_if.h:20:1: error: templates must have C++ linkage
-- `src/Game/System/MainLoopFramework.cpp` — libs/JSystem/include/JSystem/JUtility/JUTAssert.hpp:17:83: error: unknown type name '__va_list'; did you mean 'va_list'?
-- `src/Game/System/Overwrite.cpp` — src/Game/System/Overwrite.cpp:169:19: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/System/ResourceHolderManager.cpp` — src/Game/System/ResourceHolderManager.cpp:89:108: error: call to non-static member function without an object argument
-- `src/Game/System/ResourceInfo.cpp` — src/Game/System/ResourceInfo.cpp:5:10: fatal error: 'size_t.h' file not found
-- `src/Game/System/StorySequenceExecutor.cpp` — src/Game/System/StorySequenceExecutor.cpp:720:31: error: invalid operands to binary expression ('bool' and 'std::nullptr_t')
-- `src/Game/System/WPadHolder.cpp` — /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1/__type_traits/enable_if.h:20:1: error: templates must have C++ linkage
-- `src/Game/Util/CameraUtil.cpp` — src/Game/Util/CameraUtil.cpp:145:60: error: C-style cast from 'std::nullptr_t' to 'GXProjectionType' (aka '_GXProjectionType') is not allowed
-- `src/Game/Util/DemoUtil.cpp` — src/Game/Util/DemoUtil.cpp:602:20: error: cannot initialize return object of type 'LiveActor *' with an rvalue of type 'bool'
-- `src/Game/Util/GamePadUtil.cpp` — /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1/__cstddef/byte.h:57:1: error: templates must have C++ linkage
-- `src/Game/Util/GravityUtil.cpp` — src/Game/Util/GravityUtil.cpp:46:20: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/Util/HashUtil.cpp` — src/Game/Util/HashUtil.cpp:7:50: error: use of undeclared identifier '_current_locale'
-- `src/Game/Util/JMapInfo.cpp` — src/Game/Util/JMapInfo.cpp:64:5: error: cannot jump from switch statement to this case label
-- `src/Game/Util/LayoutUtil.cpp` — src/Game/Util/LayoutUtil.cpp:31:92: error: explicit instantiation of 'operator++' does not refer to a function template, variable template, member function, member class, or static data member
-- `src/Game/Util/LiveActorUtil.cpp` — src/Game/Util/LiveActorUtil.cpp:88:88: error: call to member function 'getResName' is ambiguous
-- `src/Game/Util/MathUtil.cpp` — src/Game/Util/MathUtil.cpp:1178:1: error: non-void function does not return a value [-Werror,-Wreturn-type]
-- `src/Game/Util/MemoryUtil.cpp` — src/Game/Util/MemoryUtil.cpp:103:28: error: cast from pointer to smaller type 'u32' (aka 'unsigned int') loses information
-- `src/Game/Util/NPCUtil.cpp` — src/Game/Util/NPCUtil.cpp:573:17: error: call to 'getRandom' is ambiguous
-- `src/Game/Util/ObjUtil.cpp` — src/Game/Util/ObjUtil.cpp:48:10: fatal error: 'va_list.h' file not found
-- `src/Game/Util/StringUtil.cpp` — src/Game/Util/StringUtil.cpp:8:10: fatal error: 'wstring.h' file not found
+Detailed local reports: `build/library-worker-game-audit.json` and `build/library-worker-audit.json`.

@@ -1,0 +1,262 @@
+// Audio boot smoke test: the game's own audio start-up on the extracted disc,
+// before the full game reaches it.
+//
+// Runs the game code GameSystem runs for audio, in its order:
+// HeapMemoryWatcher::createRootHeap and its heaps (the native 3 MiB audio solid
+// heap), FileRipper::setup, JKRAram::create, the FileLoader thread,
+// AudSystemWrapper::requestResourceForInitialize, and
+// AudSystemWrapper::createAudioSystem on an OS thread of priority 14 (the
+// game runs it through FunctionAsyncExecutor). The main thread then plays the
+// role of GameSystem's frame loop: AudSystemWrapper::movement once per VI
+// retrace, until the system-init waves are loaded, then loadStaticWaveData,
+// then one system SE through AudSystem::startSound.
+//
+// Output: the real JASAudioThread, JAudio2 DSP host code, native DSP device and
+// AI run unmodified; this test is the audio device. It pulls
+// Audio::pull() output in fixed amounts per frame (32000/60 frames), so the
+// consumption is deterministic, and writes it to a WAV file under $TMPDIR.
+//
+// Usage: audio_boot_tests --disc <extracted disc root> [--seconds N]
+
+#include "Game/AudioLib/AudSoundNameConverter.hpp"
+#include "Game/AudioLib/AudSystem.hpp"
+#include "Game/System/AudSystemWrapper.hpp"
+#include "Game/System/FileLoader.hpp"
+#include "Game/System/FileRipper.hpp"
+#include "Game/System/GameSystem.hpp"
+#include "Game/System/GameSystemObjHolder.hpp"
+#include "Game/System/Language.hpp"
+#include "Game/System/HeapMemoryWatcher.hpp"
+#include "Game/Util/MemoryUtil.hpp"
+#include "Game/Util/SingletonHolder.hpp"
+#include <JSystem/JAudio2/JAISoundHandles.hpp>
+#include <JSystem/JAudio2/JASAiCtrl.hpp>
+#include <JSystem/JKernel/JKRAram.hpp>
+#include <JSystem/JKernel/JKRExpHeap.hpp>
+#include <JSystem/JKernel/JKRSolidHeap.hpp>
+#include <revolution/os.h>
+#include <revolution/vi.h>
+
+#include <petari/host_allocation.hpp>
+#include <petari/platform/audio.hpp>
+#include <petari/platform/crash.hpp>
+#include <petari/platform/dvd.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+
+extern "C" void OSInit();
+
+namespace PAudio = PetariNative::Platform::Audio;
+namespace PDVD = PetariNative::Platform::DVD;
+
+namespace {
+
+u32 heapSize(JKRHeap* heap) {
+    return static_cast<u32>(static_cast<u8*>(heap->getEndAddr()) - static_cast<u8*>(heap->getStartAddr()));
+}
+
+int sChecks = 0;
+int sFailures = 0;
+void check(bool condition, const char* label) {
+    ++sChecks;
+    if (!condition) {
+        std::fprintf(stderr, "FAIL: %s\n", label);
+        ++sFailures;
+    }
+}
+
+AudSystemWrapper* gWrapper = nullptr;
+volatile bool gCreated = false;
+
+void* createAudioSystemThread(void*) {
+    gWrapper->createAudioSystem();
+    gCreated = true;
+    return nullptr;
+}
+
+std::vector<std::int16_t> gCapture;
+double gFrameRemainder = 0;
+
+// One game frame: the audio device consumes 1/60 s of output, the game runs
+// AudSystemWrapper::movement, and the frame ends at the next retrace.
+void frame() {
+    const double exact = PAudio::outputRate() / 60.0 + gFrameRemainder;
+    const std::size_t frames = static_cast<std::size_t>(exact);
+    gFrameRemainder = exact - frames;
+    const std::size_t at = gCapture.size();
+    gCapture.resize(at + frames * 2);
+    PAudio::pull(gCapture.data() + at, frames);
+    gWrapper->movement();
+    VIWaitForRetrace();
+}
+
+template <class Done>
+int runFramesUntil(Done done, int maxFrames) {
+    for (int i = 0; i < maxFrames; ++i) {
+        if (done()) {
+            return i;
+        }
+        frame();
+    }
+    return done() ? maxFrames : -1;
+}
+
+double rms(std::size_t fromFrame, std::size_t toFrame, int channel) {
+    double sum = 0;
+    std::size_t n = 0;
+    for (std::size_t i = fromFrame; i < toFrame && i * 2 + 1 < gCapture.size(); ++i) {
+        const double v = gCapture[i * 2 + channel];
+        sum += v * v;
+        ++n;
+    }
+    return n ? std::sqrt(sum / n) : 0;
+}
+
+void writeWav(const std::filesystem::path& path, std::uint32_t rate) {
+    std::ofstream out(path, std::ios::binary);
+    const std::uint32_t dataBytes = static_cast<std::uint32_t>(gCapture.size() * 2);
+    auto u32 = [&](std::uint32_t v) { out.write(reinterpret_cast<const char*>(&v), 4); };
+    auto u16 = [&](std::uint16_t v) { out.write(reinterpret_cast<const char*>(&v), 2); };
+    out.write("RIFF", 4);
+    u32(36 + dataBytes);
+    out.write("WAVEfmt ", 8);
+    u32(16);
+    u16(1);
+    u16(2);
+    u32(rate);
+    u32(rate * 4);
+    u16(4);
+    u16(16);
+    out.write("data", 4);
+    u32(dataBytes);
+    out.write(reinterpret_cast<const char*>(gCapture.data()), dataBytes);  // little-endian host, L,R
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    const char* disc = nullptr;
+    int seconds = 3;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::strcmp(argv[i], "--disc") == 0) {
+            disc = argv[i + 1];
+        } else if (std::strcmp(argv[i], "--seconds") == 0) {
+            seconds = std::max(1, std::atoi(argv[i + 1]));
+        }
+    }
+    if (disc == nullptr || !std::filesystem::exists(std::filesystem::path(disc) / "files")) {
+        std::puts("audio boot tests skipped (no --disc with files/)");
+        return 0;
+    }
+
+    const std::filesystem::path tmp = std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp";
+    std::filesystem::create_directories(tmp / "petari_audio_boot_crash");
+    PetariNative::Platform::Crash::install(tmp / "petari_audio_boot_crash");
+
+    std::string error;
+    if (!PDVD::mount({disc}, &error)) {
+        std::fprintf(stderr, "cannot mount %s: %s\n", disc, error.c_str());
+        return 1;
+    }
+
+    // petari_game_main's order (GameSystem.cpp), audio-relevant steps only.
+    OSInit();
+    PetariNative::setGameAllocationThread(true);
+    DVDInit();
+    VIInit();
+    // SCAFFOLD, not game code: SMG's language-aware loads (MR::loadAsync...,
+    // JASWaveArc::setFileName in OverwriteJAudio.cpp) read
+    // SingletonHolder<GameSystem>::get()->mObjHolder->mLanguage. The real
+    // GameSystem and GameSystemObjHolder bring the scene graph with them, so
+    // this test provides zeroed storage for both carrying only mLanguage,
+    // set to what GameSystemObjHolder's constructor stores. Nothing else in
+    // them is read on the audio path; a stray read would fault on a null.
+    alignas(16) static unsigned char gameSystemStorage[sizeof(GameSystem)] = {};
+    alignas(16) static unsigned char objHolderStorage[sizeof(GameSystemObjHolder)] = {};
+    GameSystem* gameSystem = reinterpret_cast<GameSystem*>(gameSystemStorage);
+    gameSystem->mObjHolder = reinterpret_cast<GameSystemObjHolder*>(objHolderStorage);
+    gameSystem->mObjHolder->mLanguage = MR::getDecidedLanguageFromIPL();
+    SingletonHolder< GameSystem >::sInstance = gameSystem;
+
+    HeapMemoryWatcher::createRootHeap();
+    SingletonHolder< HeapMemoryWatcher >::init();
+    HeapMemoryWatcher* heaps = SingletonHolder< HeapMemoryWatcher >::get();
+    heaps->setCurrentHeapToStationedHeap();
+    FileRipper::setup(0x20000, MR::getStationedHeapNapa());
+    // GameSystem::init and GameSystemObjHolder.
+    JKRAram::create(0xE00000, 0xFFFFFFFF, 8, 7, 3);
+    SingletonHolder< FileLoader >::init();
+    JKRSolidHeap* audioHeap = heaps->getAudSystemHeap();
+    check(audioHeap != nullptr, "HeapMemoryWatcher created the audio solid heap");
+    if (audioHeap == nullptr) {
+        return 1;
+    }
+    std::printf("audio solid heap: %u bytes usable (created with 0x300000)\n", static_cast<unsigned>(heapSize(audioHeap)));
+    check(heapSize(audioHeap) > 0x2F0000, "the native 3 MiB audio solid heap");
+    gWrapper = new AudSystemWrapper(audioHeap, MR::getStationedHeapNapa());
+    gWrapper->requestResourceForInitialize();
+
+    // GameSystem::exeInitializeAudio: createAudioSystem asynchronously at
+    // priority 14 while the frame loop runs.
+    static OSThread thread;
+    static u8 stack[0x10000] __attribute__((aligned(32)));
+    OSCreateThread(&thread, createAudioSystemThread, nullptr, stack + sizeof(stack), sizeof(stack), 14, 0);
+    OSResumeThread(&thread);
+    const u32 subFramesBefore = JASDriver::getSubFrameCounter();
+    const int initFrames = runFramesUntil([] { return gCreated && gWrapper->isLoadDoneWaveDataAtSystemInit(); }, 60 * 20);
+    check(initFrames >= 0, "createAudioSystem finishes and the system-init waves load (GameSystemInitializeAudio)");
+    if (initFrames < 0) {
+        std::fprintf(stderr, "created=%d\n", gCreated ? 1 : 0);
+        return 1;
+    }
+    OSJoinThread(&thread, nullptr);
+    std::printf("audio system initialised after %d frames; audio heap free %u of %u bytes\n", initFrames,
+                static_cast<unsigned>(audioHeap->getFreeSize()), static_cast<unsigned>(heapSize(audioHeap)));
+    check(audioHeap->getFreeSize() > 0, "the audio solid heap was large enough");
+
+    gWrapper->loadStaticWaveData();
+    const int staticFrames = runFramesUntil([] { return gWrapper->isLoadDoneStaticWaveData(); }, 60 * 30);
+    check(staticFrames >= 0, "static wave data loads");
+    std::printf("static wave data loaded after %d more frames\n", staticFrames);
+
+    const u32 subFrames = JASDriver::getSubFrameCounter() - subFramesBefore;
+    check(subFrames > 0, "JASAudioThread runs DSP subframes from AI DMA interrupts");
+    check(PAudio::outputRate() == 32000, "JAudio2 selects 32 kHz output");
+
+    // One real system SE, as MR::startSystemSE resolves it.
+    const JAISoundID id = AudSingletonHolder< AudSoundNameConverter >::get()->getSoundID("SE_SY_COIN");
+    const std::size_t seStart = gCapture.size() / 2;
+    const double silenceL = rms(seStart > 32000 ? seStart - 32000 : 0, seStart, 0);
+    const double silenceR = rms(seStart > 32000 ? seStart - 32000 : 0, seStart, 1);
+    JAISoundHandle handle;
+    const bool started = gWrapper->mAudSystem->startSound(id, &handle, nullptr);
+    check(started, "AudSystem::startSound(SE_SY_COIN)");
+    runFramesUntil([] { return false; }, 60 * seconds);
+    const std::size_t seEnd = gCapture.size() / 2;
+    const double seL = rms(seStart, seEnd, 0);
+    const double seR = rms(seStart, seEnd, 1);
+    std::printf("RMS before SE L=%.1f R=%.1f; with SE L=%.1f R=%.1f; %u DSP subframes\n", silenceL, silenceR, seL, seR,
+                JASDriver::getSubFrameCounter() - subFramesBefore);
+    check(seL > 50.0 || seR > 50.0, "the SE is audible in the captured output");
+    check(seL > silenceL * 4 || seR > silenceR * 4, "output rises when the SE plays");
+
+    const std::filesystem::path wav = tmp / "petari_audio_boot.wav";
+    writeWav(wav, PAudio::outputRate());
+    std::printf("captured %zu frames to %s\n", gCapture.size() / 2, wav.c_str());
+
+    if (sFailures != 0) {
+        std::fprintf(stderr, "%d of %d audio boot check(s) failed\n", sFailures, sChecks);
+        return 1;
+    }
+    std::printf("audio boot tests passed (%d checks)\n", sChecks);
+    std::fflush(stdout);
+    std::_Exit(0);  // the game never tears audio down; threads keep running
+}

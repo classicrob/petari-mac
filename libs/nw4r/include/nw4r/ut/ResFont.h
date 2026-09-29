@@ -15,6 +15,12 @@ namespace nw4r {
             void RemoveResource();
 
             static FontInformation* Rebuild(BinaryFileHeader* pHeader);
+
+#ifdef PETARI_NATIVE
+        private:
+            // Host-layout copy of the font tables; the caller's buffer is not modified.
+            void* mNativeFontData;
+#endif
         };
     };  // namespace ut
 };  // namespace nw4r

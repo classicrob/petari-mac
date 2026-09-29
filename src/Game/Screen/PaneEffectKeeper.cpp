@@ -7,6 +7,9 @@
 #include "Game/Util/HashUtil.hpp"
 #include "Game/Util/SystemUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 PaneEffectKeeper::PaneEffectKeeper(LayoutActor* pActor, const LayoutManager* pManager, int myInt, const char* pName)
     : mHost(pActor), mName(pName), mEmitters() {
@@ -36,7 +39,7 @@ void PaneEffectKeeper::init(const LayoutActor* pActor, const EffectSystem* pSyst
 }
 
 void PaneEffectKeeper::add(const char* pName1, const char* pName2, const char* pName3) {
-    if (mHost->getLayoutManager()->isExistPaneMtxRef(pName1) == nullptr) {
+    if (mHost->getLayoutManager()->isExistPaneMtxRef(pName1) == false) {
         mHost->createPaneMtxRef(pName1);
     }
 

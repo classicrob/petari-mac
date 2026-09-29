@@ -11,6 +11,19 @@
 
 JASDsp::TChannel* JASDsp::CH_BUF;
 
+#ifdef PETARI_NATIVE
+#include <cstddef>
+// The native DSP renderer reads these blocks by their native layout
+// (native/platform/audio/dsp_renderer.hpp asserts the same offsets).
+static_assert(sizeof(JASDsp::TChannel) == 0x180, "voice parameter block size");
+static_assert(offsetof(JASDsp::TChannel, _68) == 0x68 && offsetof(JASDsp::TChannel, _118) == 0x118 &&
+                  offsetof(JASDsp::TChannel, iir_filter_params) == 0x148,
+              "voice parameter block layout");
+static_assert(offsetof(JASDsp::FxBuf, _4) == 0x08 && offsetof(JASDsp::FxBuf, _8) == 0x10 && offsetof(JASDsp::FxBuf, _E) == 0x16 &&
+                  offsetof(JASDsp::FxBuf, _10) == 0x18 && sizeof(JASDsp::FxBuf) == 0x28,
+              "native reverb parameter block layout");
+#endif
+
 JASDsp::FxBuf* JASDsp::FX_BUF;
 
 f32 JASDsp::sDSPVolume;
@@ -38,7 +51,7 @@ void JASDsp::finishWork(u16 param_0) {
     DspFinishWork(param_0);
 }
 
-void JASDsp::syncFrame(u32 param_0, u32 param_1, u32 param_2) {
+void JASDsp::syncFrame(u32 param_0, JASDspAddr param_1, JASDspAddr param_2) {
     DsyncFrame2(param_0, param_1, param_2);
 }
 
@@ -115,7 +128,7 @@ void JASDsp::initBuffer() {
     for (u8 i = 0; i < 4; i++) {
         setFXLine(i, NULL, NULL);
     }
-    DsetupTable(0x40, u32(CH_BUF), u32(&DSPRES_FILTER), u32(&DSPADPCM_FILTER), u32(FX_BUF));
+    DsetupTable(0x40, JASDspAddr(CH_BUF), JASDspAddr(&DSPRES_FILTER), JASDspAddr(&DSPADPCM_FILTER), JASDspAddr(FX_BUF));
     flushBuffer();
 }
 

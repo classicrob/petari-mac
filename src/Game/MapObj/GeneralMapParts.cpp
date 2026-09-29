@@ -9,6 +9,9 @@
 #include "Game/MapObj/MapPartsRotator.hpp"
 #include "Game/Util.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 namespace NrvGeneralMapParts {
     NEW_NERVE(HostTypeWait, GeneralMapParts, Wait);

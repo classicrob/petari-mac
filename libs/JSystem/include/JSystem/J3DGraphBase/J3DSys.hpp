@@ -116,6 +116,10 @@ public:
         mVtxCol = pVtxCol;
     }
 
+#ifdef PETARI_NATIVE
+    void setModelDrawMtx(Mtx* pMtxArr);
+    void setModelNrmMtx(Mtx33* pMtxArr);
+#else
     void setModelDrawMtx(Mtx* pMtxArr) {
         mModelDrawMtx = pMtxArr;
         GXSetArray(GX_POS_MTX_ARRAY, mModelDrawMtx, sizeof(*mModelDrawMtx));
@@ -125,6 +129,7 @@ public:
         mModelNrmMtx = pMtxArr;
         GXSetArray(GX_NRM_MTX_ARRAY, mModelNrmMtx, sizeof(*mModelNrmMtx));
     }
+#endif
 
     void setNBTScale(Vec* scale) {
         mNBTScale = scale;

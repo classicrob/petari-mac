@@ -403,10 +403,10 @@ void OceanBowl::loadMaterial() const {
     GXSetVtxDesc(GX_VA_TEX1, GX_INDEX16);
     GXSetVtxDesc(GX_VA_TEX2, GX_INDEX16);
     GXSetVtxDesc(GX_VA_TEX3, GX_INDEX16);
-    GXSetArray(GX_VA_TEX0, mVtxTex0Array, 8);
-    GXSetArray(GX_VA_TEX1, mVtxTex1Array, 8);
-    GXSetArray(GX_VA_TEX2, mVtxTex2Array, 8);
-    GXSetArray(GX_VA_TEX3, mVtxTex3Array, 8);
+    GXSETARRAY(GX_VA_TEX0, mVtxTex0Array, 24 * 25 * 4 * sizeof(f32), 8, true);
+    GXSETARRAY(GX_VA_TEX1, mVtxTex1Array, 24 * 25 * 4 * sizeof(f32), 8, true);
+    GXSETARRAY(GX_VA_TEX2, mVtxTex2Array, 24 * 25 * 4 * sizeof(f32), 8, true);
+    GXSETARRAY(GX_VA_TEX3, mVtxTex3Array, 24 * 25 * 4 * sizeof(f32), 8, true);
     GXLoadPosMtxImm(MR::getCameraViewMtx(), 0);
     GXSetCurrentMtx(0);
     GXSetNumChans(1);
@@ -519,8 +519,8 @@ void OceanBowl::loadMaterialBloom() const {
     GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_INDEX16);
     GXSetVtxDesc(GX_VA_TEX1, GX_INDEX16);
-    GXSetArray(GX_VA_TEX0, mVtxTex0Array, 8);
-    GXSetArray(GX_VA_TEX1, mVtxTex1Array, 8);
+    GXSETARRAY(GX_VA_TEX0, mVtxTex0Array, 24 * 25 * 4 * sizeof(f32), 8, true);
+    GXSETARRAY(GX_VA_TEX1, mVtxTex1Array, 24 * 25 * 4 * sizeof(f32), 8, true);
     GXLoadPosMtxImm(MR::getCameraViewMtx(), 0);
     GXSetCurrentMtx(0);
     GXSetNumChans(1);

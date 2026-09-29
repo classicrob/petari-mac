@@ -27,8 +27,8 @@ namespace {
     static f32 sUnderHorizonAngleTable[] = {78.0f, 120.0f, 160.0f, -160.0f, -120.0f, -78.0f};
     static f32 sBottomHorizonAngleTable[] = {0.0f, 120.0f, 240.0f};
     static const SetUpData sSetUpDataTable[] = {
-        {"TripodBossUpperKillerCannon", sUpperHorizonAngleTable, ARRAY_SIZE(sUpperHorizonAngleTable), 2150.0f, 49.0f, -29.0f, 975.0f, 1, 0x1000000},
-        {"TripodBossUnderKillerCannon", sUnderHorizonAngleTable, ARRAY_SIZE(sUnderHorizonAngleTable), 2150.0f, 5.8f, 39.2f, 975.0f, 0, 0x1000000},
+        {"TripodBossUpperKillerCannon", sUpperHorizonAngleTable, ARRAY_SIZE(sUpperHorizonAngleTable), 2150.0f, 49.0f, -29.0f, 975.0f, 1, true},
+        {"TripodBossUnderKillerCannon", sUnderHorizonAngleTable, ARRAY_SIZE(sUnderHorizonAngleTable), 2150.0f, 5.8f, 39.2f, 975.0f, 0, true},
         {"TripodBossBottomKillerCannon", sBottomHorizonAngleTable, ARRAY_SIZE(sBottomHorizonAngleTable), 500.0f, -50.0f, -30.0f, -1300.0f, 0, 0}};
 
     const SetUpData* getSetUpData(const char* pName) {

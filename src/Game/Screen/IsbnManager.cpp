@@ -3,7 +3,11 @@
 #include <nw4r/lyt/arcResourceAccessor.h>
 #include <nw4r/lyt/layout.h>
 #include <nw4r/lyt/textBox.h>
+#ifdef PETARI_NATIVE
+#include <cwchar>
+#else
 #include <wstring.h>
+#endif
 
 const char* IsbnManager::cIsbnNumberPaneName[] = {
     "T_number_00", "T_number_01", "T_number_02", "T_number_03", "T_number_04",

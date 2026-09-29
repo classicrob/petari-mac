@@ -86,12 +86,12 @@ void ResourceHolderManager::removeIfIsEqualHeap(JKRHeap* pHeap) {
 }
 
 void ResourceHolderManager::startCreateResourceHolderOnMainThread(const char* pParam1, CreateResourceHolderArgs* pArgs) {
-    MR::startFunctionAsyncExecuteOnMainThread(MR::Functor(SingletonHolder< ResourceHolderManager >::get(), createResourceHolder, pParam1, pArgs),
+    MR::startFunctionAsyncExecuteOnMainThread(MR::Functor(SingletonHolder< ResourceHolderManager >::get(), &ResourceHolderManager::createResourceHolder, pParam1, pArgs),
                                               pParam1);
 }
 
 void ResourceHolderManager::startCreateLayoutHolderOnMainThread(const char* pParam1, CreateResourceHolderArgs* pArgs) {
-    MR::startFunctionAsyncExecuteOnMainThread(MR::Functor(SingletonHolder< ResourceHolderManager >::get(), createLayoutHolder, pParam1, pArgs),
+    MR::startFunctionAsyncExecuteOnMainThread(MR::Functor(SingletonHolder< ResourceHolderManager >::get(), &ResourceHolderManager::createLayoutHolder, pParam1, pArgs),
                                               pParam1);
 }
 

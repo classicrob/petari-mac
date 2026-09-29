@@ -27,7 +27,7 @@ const char* JAUStreamFileTable::getFilePath(int index) const {
     }
 
     char* data = (char*)mData;
-    return (char*)(data + *(int*)(data + 8 + (index * sizeof(s32))));
+    return (char*)(data + *(JSU_BE(int)*)(data + 8 + (index * sizeof(s32))));
 }
 
 s32 JAUStreamDataMgr_StreamFileTable::getStreamFileEntry(JAISoundID soundID) {

@@ -493,7 +493,12 @@ void CameraManGame::createStartAnimCamera() {
         CameraDirector* director = CameraLocalUtil::getCameraDirector();
         chunk->setCameraType("CAM_TYPE_ANIM", director->mHolder);
 
+#ifdef PETARI_NATIVE
+        chunk->mGeneralParam->mNum1 = 0;
+        chunk->mGeneralParam->mAnimData = data;
+#else
         chunk->mGeneralParam->mNum1 = reinterpret_cast< s32 >(data);
+#endif
         chunk->_64 = true;
     }
 }

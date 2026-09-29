@@ -77,7 +77,7 @@ void ChangeBgmCube::movement() {
         s32 objArg2 = mObjArg2;
 
         switch (objArg0) {
-        case 0:
+        case 0: {
             if (objArg1 < 0) {
                 MR::startCurrentStageBGM();
                 break;
@@ -119,7 +119,8 @@ void ChangeBgmCube::movement() {
                 }
             }
             break;
-        case 1:
+        }
+        case 1: {
             if (mObjArg3 != 1) {
                 if (MR::isGalaxyRedCometAppearInCurrentStage()) {
                     break;
@@ -152,6 +153,7 @@ void ChangeBgmCube::movement() {
 
             MR::stopStageBGM(arg1);
             break;
+        }
         case 2:
             if (objArg1 < 0) {
                 AudBgm* stageBgm = AudWrap::getStageBgm();

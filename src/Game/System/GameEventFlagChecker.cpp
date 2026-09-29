@@ -19,20 +19,22 @@ bool GameEventFlagChecker::canOn(const char* pFlagName) const {
         return true;
     case GameEventFlag::Type_StarNum:
         return mDataHolder->calcCurrentPowerStarNum() >= pFlag->mStarNum;
-    case GameEventFlag::Type_GalaxyOpenStar:
+    case GameEventFlag::Type_GalaxyOpenStar: {
         s32 currentPowerStarNum = mDataHolder->calcCurrentPowerStarNum();
         s32 powerStarOpenNum = GameDataConst::getPowerStarNumToOpenGalaxy(pFlag->mGalaxyName);
 
         return powerStarOpenNum <= currentPowerStarNum;
+    }
     case GameEventFlag::Type_SpecialStar:
         return mDataHolder->hasPowerStar(pFlag->mGalaxyName, pFlag->mStarID);
-    case GameEventFlag::Type_EventFlag:
+    case GameEventFlag::Type_EventFlag: {
         const char* pRequirement1 = pFlag->mRequirement1;
         const char* pRequirement2 = pFlag->mRequirement2;
         bool isOnRequirement1 = pRequirement1 != nullptr ? isOn(pRequirement1) : true;
         bool isOnRequirement2 = pRequirement2 != nullptr ? isOn(pRequirement2) : true;
 
         return isOnRequirement1 && isOnRequirement2;
+    }
     case GameEventFlag::Type_StoryEvent:
         return mDataHolder->isPassedStoryEvent(pFlag->mStoryEventName);
     case GameEventFlag::Type_Galaxy:
@@ -41,12 +43,13 @@ bool GameEventFlagChecker::canOn(const char* pFlagName) const {
         return isOnComet(pFlag);
     case GameEventFlag::Type_StoryEventSync:
         return isOn(pFlag->mEventFlagName);
-    case GameEventFlag::Type_StarPiece:
+    case GameEventFlag::Type_StarPiece: {
         GameEventFlagAccessor accessor1 = GameEventFlagAccessor(pFlag);
         s32 needStarPieceNum = accessor1.getNeedStarPieceNum();
 
         return mDataHolder->getStarPieceNumGivingToTicoSeed(pFlag->mStarPieceIndex + 8) >= needStarPieceNum;
-    case GameEventFlag::Type_EventValueIsZero:
+    }
+    case GameEventFlag::Type_EventValueIsZero: {
         GameEventFlagAccessor accessor2 = GameEventFlagAccessor(pFlag);
 
         if (isOn(accessor2.getRequirement()) == false) {
@@ -54,6 +57,7 @@ bool GameEventFlagChecker::canOn(const char* pFlagName) const {
         }
 
         return static_cast< u16 >(mDataHolder->getGameEventValue(accessor2.getEventValueName())) == 0;
+    }
     case GameEventFlag::Type_CompleteMarioAndLuigi:
         return mDataHolder->isCompleteMarioAndLuigi();
     default:

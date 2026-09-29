@@ -8,7 +8,9 @@
 #include "Game/Util/SoundUtil.hpp"
 #include <JSystem/JGeometry/TVec.hpp>
 #include <revolution/types.h>
+#ifndef PETARI_NATIVE
 #include <runtime.h>
+#endif
 
 namespace {
     const s32 cAppearReadyFrame = 40;

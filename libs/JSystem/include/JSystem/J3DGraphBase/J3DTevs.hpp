@@ -182,8 +182,15 @@ struct J3DTevStage {
     }
 
     void load(u32 param_1) const {
+#ifdef PETARI_NATIVE
+        // Each 4-byte group is a BP command in big-endian byte order.
+        const u8* pBytes = &field_0x0;
+        J3DGDWriteBPCmd(static_cast< u32 >(pBytes[0]) << 24 | static_cast< u32 >(pBytes[1]) << 16 | static_cast< u32 >(pBytes[2]) << 8 | pBytes[3]);
+        J3DGDWriteBPCmd(static_cast< u32 >(pBytes[4]) << 24 | static_cast< u32 >(pBytes[5]) << 16 | static_cast< u32 >(pBytes[6]) << 8 | pBytes[7]);
+#else
         J3DGDWriteBPCmd(*(u32*)&field_0x0);
         J3DGDWriteBPCmd(*(u32*)&field_0x4);
+#endif
     }
 
     J3DTevStage& operator=(const J3DTevStage& other) {

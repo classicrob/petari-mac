@@ -6,11 +6,28 @@
 #include <JSystem/JKernel/JKRMemArchive.hpp>
 #include <JSystem/JParticle/JPAResourceManager.hpp>
 #include <cstring>
+#ifdef PETARI_NATIVE
+#include <petari/jpa_resource.hpp>
+#include <revolution/os.h>
+#endif
 
 ParticleResourceHolder::ParticleResourceHolder(const char* pArchiveName)
     : mResourceMgr(), mAutoEffectList(new JMapInfo), mParticleNames(new JMapInfo), mNumEffectNums() {
     JKRMemArchive* pArchive = MR::mountArchive(pArchiveName, nullptr);
+#ifdef PETARI_NATIVE
+    // The particle container is big-endian; JPA reads it through structs, so natively the
+    // resource manager gets a host-layout image (petari/jpa_resource.hpp) allocated on the
+    // same heap as the manager.
+    void* pParticles = pArchive->getResource("Particles.jpc");
+    const u32 particlesSize = pArchive->getResSize(pParticles);
+    u8* pParticleImage = new (MR::getCurrentHeap(), 0x20) u8[particlesSize];
+    if (const char* pError = PetariNative::JPA::makeHostImage(pParticles, particlesSize, pParticleImage)) {
+        OSPanic(__FILE__, __LINE__, "Particles.jpc in %s: %s", pArchiveName, pError);
+    }
+    mResourceMgr = new JPAResourceManager(pParticleImage, MR::getCurrentHeap());
+#else
     mResourceMgr = new JPAResourceManager(pArchive->getResource("Particles.jpc"), MR::getCurrentHeap());
+#endif
     mParticleNames->attach(pArchive->getResource("ParticleNames.bcsv"));
     mAutoEffectList->attach(pArchive->getResource("AutoEffectList.bcsv"));
     countAutoEffectNum();

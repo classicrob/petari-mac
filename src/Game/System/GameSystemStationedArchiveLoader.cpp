@@ -57,7 +57,15 @@ JKRHeap* ConditionUsePlayerHeap::getProperHeap(const MR::StationedFileInfo* pInf
 
 PlayerHeapHolder::PlayerHeapHolder() : mCondition(), mNapaHeap(), mGDDRHeap(), mIsDataMario(true) {
     ConditionUsePlayerHeap* condition = new ConditionUsePlayerHeap();
+#ifdef PETARI_NATIVE
+    // The player archives stay mounted and every model and animation in them is loaded
+    // at once. Natively each J3D file also gets a same-size host image: measured on the
+    // disc, the Luigi set needs 3.16 MiB of archives plus 3.23 MiB of native J3D loading
+    // (3.10 MiB of it host images), over the Wii's 0x500000. adjust() trims the unused tail.
+    mNapaHeap = PlayerHeapHolder::createHeap(0x500000 + 0x340000, MR::getStationedHeapNapa());
+#else
     mNapaHeap = PlayerHeapHolder::createHeap(0x500000, MR::getStationedHeapNapa());
+#endif
     JKRExpHeap* gddr = PlayerHeapHolder::createHeap(0x500000, MR::getStationedHeapGDDR3());
     mGDDRHeap = gddr;
     condition->mNapaHeap = mNapaHeap;
@@ -69,12 +77,12 @@ PlayerHeapHolder::PlayerHeapHolder() : mCondition(), mNapaHeap(), mGDDRHeap(), m
 void PlayerHeapHolder::adjust() {
     JKRExpHeap* napa = mNapaHeap;
     if (!napa->isEmpty()) {
-        napa->alloc(0x10000, nullptr);
+        napa->alloc(0x10000, 0);
     }
 
     JKRExpHeap* gddr = mGDDRHeap;
     if (!gddr->isEmpty()) {
-        gddr->alloc(0x10000, nullptr);
+        gddr->alloc(0x10000, 0);
     }
 
     MR::adjustHeapSize(mNapaHeap, nullptr);

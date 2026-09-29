@@ -11,6 +11,9 @@
 #include "Game/Util/MathUtil.hpp"
 #include "Game/Util/StringUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 #include <cstdio>
 
 void EffectKeeper_FORCE_MATCH_SDATA2() {
@@ -171,11 +174,19 @@ MultiEmitter* EffectKeeper::getEmitter(const char* pParam1) const {
     }
 
     if (_18 != nullptr && _18->mHasBeenSorted) {
+#ifdef PETARI_NATIVE
+        MultiEmitter* result;
+
+        if (_18->searchPtr(pParam1, &result)) {
+            return result;
+        }
+#else
         u32 result = 0;
 
         if (_18->search(pParam1, &result)) {
             return reinterpret_cast< MultiEmitter* >(result);
         }
+#endif
     }
 
     u16 name = MR::getHashCode(pParam1);
@@ -346,11 +357,19 @@ void EffectKeeper::registMultiEmitter(MultiEmitter* pEmitter, const char* pParam
         pEmitter->setName(pParam3);
 
         if (_18 != nullptr) {
+#ifdef PETARI_NATIVE
+            _18->addPtr(pParam3, pEmitter, false);
+#else
             _18->add(pParam3, reinterpret_cast< u32 >(pEmitter), 0);
+#endif
         }
     } else {
         if (_18 != nullptr) {
+#ifdef PETARI_NATIVE
+            _18->addPtr(pParam2, pEmitter, false);
+#else
             _18->add(pParam2, reinterpret_cast< u32 >(pEmitter), 0);
+#endif
         }
     }
 

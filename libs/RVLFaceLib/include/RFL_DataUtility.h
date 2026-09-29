@@ -3,7 +3,11 @@
 #include "RFL_Types.h"
 #include <revolution/gx.h>
 #include <revolution/types.h>
+#if defined(PETARI_NATIVE) && !defined(__cplusplus)
+#include <stdio.h>
+#else
 #include <cstdio>
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -2,6 +2,9 @@
 #include "Game/System/DrawBufferGroup.hpp"
 #include "Game/Util/MemoryUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 namespace {
     // static const char* sDrawTypeCameraName = ;

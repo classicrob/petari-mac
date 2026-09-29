@@ -6,6 +6,9 @@
 #include "Game/Util/StringUtil.hpp"
 #include <JSystem/J3DGraphBase/J3DSys.hpp>
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 DrawBufferGroup::DrawBufferGroup() : mExecutors(), mActiveExecutors(), mDrawCameraType(0), mLightType(-1), mLightLoadType(-1) {
 }

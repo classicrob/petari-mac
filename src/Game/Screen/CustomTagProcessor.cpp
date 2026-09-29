@@ -375,7 +375,11 @@ void CustomTagProcessor::setArgNumber(s32 number, s32 index) {
             break;
         }
 
+#ifdef PETARI_NATIVE
+        tag.setParam32(0, number);
+#else
         *reinterpret_cast< s32* >(tag.getParamPtr(0)) = number;
+#endif
     }
 }
 
@@ -386,7 +390,11 @@ void CustomTagProcessor::setArgString(const wchar_t* string, s32 index) {
             break;
         }
 
+#ifdef PETARI_NATIVE
+        tag.setArgString(string);
+#else
         *reinterpret_cast< const wchar_t** >(tag.getParamPtr(0)) = string;
+#endif
     }
 }
 
@@ -573,7 +581,11 @@ CustomTagProcessor::Operation CustomTagProcessor::exeLocalizeGroup(nw4r::ut::Rec
 
 CustomTagProcessor::Operation CustomTagProcessor::exeNumberGroup(nw4r::ut::Rect* rect, const MessageEditorMessageTag& tag, ContextType* context) {
     wchar_t string[16];
+#ifdef PETARI_NATIVE
+    s32 number = tag.getParam32(0);
+#else
     s32 number = *reinterpret_cast< s32* >(tag.getParamPtr(0));
+#endif
     switch (tag.getTag()) {
     case 5:
         swprintf(string, 256, L"%02d", number);
@@ -594,11 +606,20 @@ CustomTagProcessor::Operation CustomTagProcessor::exeNumberGroup(nw4r::ut::Rect*
 }
 
 CustomTagProcessor::Operation CustomTagProcessor::exeStringGroup(nw4r::ut::Rect* rect, const MessageEditorMessageTag& tag, ContextType* context) {
+#ifdef PETARI_NATIVE
+    const wchar_t* pString = tag.getArgString();
+    if (pString == nullptr) {
+        return OPERATION_DEFAULT;
+    }
+
+    writeString(rect, pString, context);
+#else
     if (!*reinterpret_cast< const u8* >(tag.getParamPtr(0))) {
         return OPERATION_DEFAULT;
     }
 
     writeString(rect, *reinterpret_cast< const wchar_t** >(tag.getParamPtr(0)), context);
+#endif
     return OPERATION_DEFAULT;
 }
 

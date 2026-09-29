@@ -1664,7 +1664,11 @@ namespace MR {
 
     void setJointTransformLocalMtx(const LiveActor* pActor, const char* pName, MtxPtr pMtx) {
         XjointTransform* pTransform = pActor->mModelManager->getJointTransform(pName);
+#ifdef PETARI_NATIVE
+        pTransform->_68 = reinterpret_cast< uintptr_t >(pMtx);
+#else
         pTransform->_68 = (u32)pMtx;
+#endif
     }
 
     f32 getBckFrame(const LiveActor* pActor) {

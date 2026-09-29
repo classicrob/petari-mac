@@ -1,6 +1,7 @@
 #include "JSystem/JAudio2/JAISoundHandles.hpp"
 #include "JSystem/JAudio2/JAISeqDataMgr.hpp"
 #include "JSystem/JAudio2/JAISound.hpp"
+#include <stdint.h>
 
 JAISoundHandle* JAISoundHandles::getHandleSoundID(JAISoundID id) {
     for (int i = 0; i < mNumHandles; i++) {
@@ -24,10 +25,10 @@ JAISoundHandle* JAISoundHandles::getFreeHandle() {
     return nullptr;
 }
 
-JAISoundHandle* JAISoundHandles::getHandleUserData(u32 addr) {
+JAISoundHandle* JAISoundHandles::getHandleUserData(uintptr_t addr) {
     for (int i = 0; i < mNumHandles; i++) {
         if (mHandles[i].isSoundAttached()) {
-            if ((u32)mHandles[i]->getUserData() == addr) {
+            if (mHandles[i]->getUserData() == addr) {
                 return &mHandles[i];
             }
         }

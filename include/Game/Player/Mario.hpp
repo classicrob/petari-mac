@@ -3,6 +3,9 @@
 #include "Game/Player/MarioModule.hpp"
 #include "Game/Util/TriangleFilter.hpp"
 #include <JSystem/JGeometry/TMatrix.hpp>
+#ifdef PETARI_NATIVE
+#include "Game/Util/NativeOverload.hpp"
+#endif
 
 class AreaObj;
 class CubeCameraArea;
@@ -92,6 +95,11 @@ public:
     void setFrontVec(const TVec3f&);
     void setFrontVecKeepUp(const TVec3f&, f32);
     void setFrontVecKeepUp(const TVec3f&, u32);
+#ifdef PETARI_NATIVE
+    // Wii u32 is unsigned long; `1UL` must select the u32 overload rather than f32.
+    template < typename T, PETARI_WII_LONG_ARGS(T) >
+    void setFrontVecKeepUp(const TVec3f& rVec, T step) { setFrontVecKeepUp(rVec, static_cast< u32 >(step)); }
+#endif
     void setFrontVecKeepUp(const TVec3f&);
     void setFrontVecKeepUpAngle(const TVec3f&, f32);
     void setFrontVecKeepSide(const TVec3f&);
@@ -478,6 +486,76 @@ public:
 
     // instruction comments to make it easier to identify each bit
     struct MovementStates {
+#ifdef PETARI_NATIVE
+        // MWCC allocates bitfields from the most significant bit of each 32-bit unit; Clang
+        // allocates from the least significant bit. Natively the fields are declared in reverse
+        // within each unit so the layout, and every numeric view of these words, matches the Wii.
+        // unit 0
+        unsigned _1F : 1;
+        unsigned digitalJump : 1;
+        unsigned _1D : 1;
+        unsigned _1C : 1;
+        unsigned _1B : 1;
+        unsigned _1A : 1;
+        unsigned _19 : 1;
+        unsigned _18 : 1;
+        unsigned _17 : 1;
+        unsigned debugMode : 1;
+        unsigned _15 : 1;
+        unsigned _14 : 1;
+        unsigned _13 : 1;
+        unsigned _12 : 1;
+        unsigned _11 : 1;
+        unsigned _10 : 1;
+        unsigned _F : 1;
+        unsigned _E : 1;
+        unsigned _D : 1;
+        unsigned _C : 1;
+        unsigned _B : 1;
+        unsigned _A : 1;
+        unsigned _9 : 1;
+        unsigned _8 : 1;
+        unsigned _7 : 1;
+        unsigned _6 : 1;
+        unsigned _5 : 1;
+        unsigned _4 : 1;
+        unsigned turning : 1;
+        unsigned _2 : 1;
+        unsigned _1 : 1;
+        unsigned jumping : 1;
+        // unit 1
+        unsigned _3E : 2;
+        unsigned _3D : 1;
+        unsigned _3C : 1;
+        unsigned _3B : 1;
+        unsigned _3A : 1;
+        unsigned _39 : 1;
+        unsigned _38 : 1;
+        unsigned _37 : 1;
+        unsigned _36 : 1;
+        unsigned _35 : 1;
+        unsigned _34 : 1;
+        unsigned _33 : 1;
+        unsigned _32 : 1;
+        unsigned _31 : 1;
+        unsigned _30 : 1;
+        unsigned _2F : 1;
+        unsigned _2E : 1;
+        unsigned _2D : 1;
+        unsigned _2C : 1;
+        unsigned _2B : 1;
+        unsigned _2A : 1;
+        unsigned _29 : 1;
+        unsigned _28 : 1;
+        unsigned _27 : 1;
+        unsigned _26 : 1;
+        unsigned _25 : 1;
+        unsigned _24 : 1;
+        unsigned _23 : 1;
+        unsigned _22 : 1;
+        unsigned _21 : 1;
+        unsigned _20 : 1;
+#else
         /* 0x00 */
         unsigned jumping : 1;  // _0 (srwi rX, rX, 31)
         unsigned _1 : 1;       // extrwi rX, rX, 1, 1
@@ -543,8 +621,47 @@ public:
         unsigned _3C : 1;
         unsigned _3D : 1;
         unsigned _3E : 2;  // clrrwi rX, rX, 2
+#endif
     };
     struct DrawStates {
+#ifdef PETARI_NATIVE
+        // MWCC allocates bitfields from the most significant bit of each 32-bit unit; Clang
+        // allocates from the least significant bit. Natively the fields are declared in reverse
+        // within each unit so the layout, and every numeric view of these words, matches the Wii.
+        // unit 0
+        unsigned _1F : 1;
+        unsigned _1E : 1;
+        unsigned _1D : 1;
+        unsigned _1C : 1;
+        unsigned _1B : 1;
+        unsigned _1A : 1;
+        unsigned _19 : 1;
+        unsigned _18 : 1;
+        unsigned _17 : 1;
+        unsigned _16 : 1;
+        unsigned _15 : 1;
+        unsigned _14 : 1;
+        unsigned _13 : 1;
+        unsigned mIsUnderwater : 1;
+        unsigned _11 : 1;
+        unsigned _10 : 1;
+        unsigned _F : 1;
+        unsigned _E : 1;
+        unsigned _D : 1;
+        unsigned _C : 1;
+        unsigned _B : 1;
+        unsigned _A : 1;
+        unsigned _9 : 1;
+        unsigned _8 : 1;
+        unsigned _7 : 1;
+        unsigned _6 : 1;
+        unsigned _5 : 1;
+        unsigned _4 : 1;
+        unsigned _3 : 1;
+        unsigned _2 : 1;
+        unsigned _1 : 1;
+        unsigned _0 : 1;
+#else
         unsigned _0 : 1;
         unsigned _1 : 1;
         unsigned _2 : 1;
@@ -577,6 +694,7 @@ public:
         unsigned _1D : 1;
         unsigned _1E : 1;
         unsigned _1F : 1;
+#endif
     };
 
     inline const MovementStates& getMovementStates() const {
@@ -1004,7 +1122,11 @@ public:
     /* 0x984 */ Task _984[0xb];
     /* 0xA08 */ u32 _A08[11];
     /* 0xA34 */ u16 _A34;
+#ifdef PETARI_NATIVE
+    /* 0xA38 */ uintptr_t _A38;  // HitSensor* for tornado centering
+#else
     /* 0xA38 */ u32 _A38;
+#endif
     /* 0xA3C */ u16 _A3C;
     /* 0xA40 */ TVec3f _A40;
     /* 0xA4C */ TVec3f _A4C;

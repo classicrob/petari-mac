@@ -12,6 +12,11 @@ public:
     MainLoopFrameworkAlarm() : mLink(this) {
     }
 
+#ifdef PETARI_NATIVE
+    u32 mNativeLastProcessed = 0;
+    u64 mNativeCaptureTicket = 0;
+    OSTime mNativeCaptureSince = 0;
+#endif
     /* 0x30 */ u32 _30;
     /* 0x34 */ MR::BothDirLink< MainLoopFrameworkAlarm > mLink;
 

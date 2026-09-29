@@ -432,7 +432,7 @@ void NPCActor::initialize(const JMapInfoIter& rIter, const NPCActorCaps& rCaps) 
 
     if (rCaps._70 != nullptr) {
         mScaleController = new AnimScaleController(&::sParam);
-        mDelegator = MR::createJointDelegatorWithNullChildFunc(this, &calcJointScale, rCaps._70);
+        mDelegator = MR::createJointDelegatorWithNullChildFunc(this, &NPCActor::calcJointScale, rCaps._70);
     }
 
     if (rCaps._67) {

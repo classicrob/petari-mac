@@ -48,7 +48,13 @@ struct JASTrack : public JASPoolAllocObject_MultiThreaded< JASTrack > {
     };
 
     struct TList {
+        // -offsetof(JASTrack, mNode). JASTrack is incomplete here, so the native
+        // value is spelled out and checked after the class.
+#ifdef PETARI_NATIVE
+        typedef JGadget::TLinkList< JASTrack, -792 > TrackList;
+#else
         typedef JGadget::TLinkList< JASTrack, -0x248 > TrackList;
+#endif
         typedef TrackList::iterator iterator;
         TList() : mCallbackRegistered() {
         }
@@ -401,3 +407,8 @@ struct JASTrack : public JASPoolAllocObject_MultiThreaded< JASTrack > {
     };
     /* 0x248 */ JGadget::TLinkListNode mNode;
 };
+
+#ifdef PETARI_NATIVE
+#include <cstddef>
+static_assert(offsetof(JASTrack, mNode) == 792, "JASTrack::TList::TrackList node offset");
+#endif

@@ -263,6 +263,18 @@ void FurDrawer::setupLayerMaterial(s32 layer) const {
     }
 }
 
+#ifdef PETARI_NATIVE
+namespace {
+    // IA8 texels are two bytes in GX order (high byte first); natively the texture data must
+    // keep the Wii byte order, so the 16-bit value is stored big-endian.
+    inline void storeFurTexel(u16* pTexel, u16 value) {
+        u8* pBytes = reinterpret_cast< u8* >(pTexel);
+        pBytes[0] = static_cast< u8 >(value >> 8);
+        pBytes[1] = static_cast< u8 >(value);
+    }
+}  // namespace
+#endif
+
 void FurDrawer::createFurMap() {
     u32 count;
     u16* pPixels;
@@ -272,7 +284,11 @@ void FurDrawer::createFurMap() {
     count = height * width;
 
     for (u32 i = 0; i < count; i++) {
+#ifdef PETARI_NATIVE
+        storeFurTexel(&pPixels[i], 255);
+#else
         pPixels[i] = 255;
+#endif
     }
 
     for (u32 type = 0; type < 4; type++) {
@@ -290,7 +306,11 @@ void FurDrawer::createFurMap() {
                 x = s32(width) - 1;
             }
 
+#ifdef PETARI_NATIVE
+            storeFurTexel(&pPixels[x + width * y], (u16(255.0f * mThickness[type]) << 8) | u16(255 - mLengthMap[type]));
+#else
             pPixels[x + width * y] = (u16(255.0f * mThickness[type]) << 8) | u16(255 - mLengthMap[type]);
+#endif
         }
     }
 

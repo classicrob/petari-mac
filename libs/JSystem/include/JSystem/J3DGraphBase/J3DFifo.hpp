@@ -27,9 +27,15 @@ inline void J3DFifoWriteXFCmdHdr(u16 addr, u8 len) {
 }
 
 inline void J3DFifoLoadIndx(u8 cmd, u16 indx, u16 addr) {
+#ifdef PETARI_NATIVE
+    GXCmd1u8(cmd);
+    GXCmd1u16(indx);
+    GXCmd1u16(addr);
+#else
     GXWGFifo.u8 = cmd;
     GXWGFifo.u16 = indx;
     GXWGFifo.u16 = addr;
+#endif
 }
 
 inline void J3DFifoLoadNrmMtxIndx3x3(u16 index, u32 addr) {

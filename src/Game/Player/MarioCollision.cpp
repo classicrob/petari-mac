@@ -954,12 +954,22 @@ const TVec3f& Mario::getWallNorm() const {
     return mFrontVec;
 }
 
+#ifdef PETARI_NATIVE
+namespace {
+    const TVec3f sNativeZeroVec(0.0f, 0.0f, 0.0f);
+}  // namespace
+#endif
+
 const TVec3f& Mario::getSideWallNorm() const {
     if (mMovementStates._1A) {
         return *mSideWallTriangle->getNormal(0);
     }
 
+#ifdef PETARI_NATIVE
+    return sNativeZeroVec;  // the Wii build returns a reference to a temporary copy of gZeroVec
+#else
     return TVec3f(gZeroVec);
+#endif
 }
 
 const TVec3f& Mario::getFrontWallNorm() const {
@@ -967,7 +977,11 @@ const TVec3f& Mario::getFrontWallNorm() const {
         return *mFrontWallTriangle->getNormal(0);
     }
 
+#ifdef PETARI_NATIVE
+    return sNativeZeroVec;  // the Wii build returns a reference to a temporary copy of gZeroVec
+#else
     return TVec3f(gZeroVec);
+#endif
 }
 
 const TVec3f& Mario::getBackWallNorm() const {
@@ -975,7 +989,11 @@ const TVec3f& Mario::getBackWallNorm() const {
         return *mBackWallTriangle->getNormal(0);
     }
 
+#ifdef PETARI_NATIVE
+    return sNativeZeroVec;  // the Wii build returns a reference to a temporary copy of gZeroVec
+#else
     return TVec3f(gZeroVec);
+#endif
 }
 
 const TVec3f& Mario::getWallPos() const {

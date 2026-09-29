@@ -106,7 +106,7 @@ bool TalkMessageCtrl::rootNodeEve() {
             return true;
         }
 
-        if (mEventFunc->operator()(nodeEvent->mUnknown) == nullptr) {
+        if (mEventFunc->operator()(nodeEvent->mUnknown) == false) {
             return false;
         }
     } else if (groupID == 4) {
@@ -114,7 +114,7 @@ bool TalkMessageCtrl::rootNodeEve() {
             return true;
         }
 
-        if (mAnimeFunc->operator()(nodeEvent->mUnknown) == nullptr) {
+        if (mAnimeFunc->operator()(nodeEvent->mUnknown) == false) {
             return false;
         }
     } else if (groupID == 3) {
@@ -125,7 +125,7 @@ bool TalkMessageCtrl::rootNodeEve() {
     } else if (groupID == 6) {
         MR::onSwitchB(mHostActor);
     } else if (groupID == 7) {
-        if (mKillFunc->operator()(nodeEvent->mUnknown) == nullptr) {
+        if (mKillFunc->operator()(nodeEvent->mUnknown) == false) {
             return false;
         }
     }

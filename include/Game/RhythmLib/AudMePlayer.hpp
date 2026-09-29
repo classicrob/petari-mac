@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef PETARI_NATIVE
+#include "Game/Util/BigEndian.hpp"
+#endif
+
 #include <JSystem/JAudio2/JASGlobal.hpp>
 #include <JSystem/JAudio2/JASHeapCtrl.hpp>
 #include <JSystem/JGeometry/TVec.hpp>
@@ -13,7 +17,12 @@ struct AudMePlayingParams {
     /* 0x1 */ u8 mChordVolume;
     /* 0x2 */ u8 _2;
     /* 0x3 */ u8 _3;
+#ifdef PETARI_NATIVE
+    // Read in place from the big-endian ME table resource.
+    /* 0x4 */ BigEndianValue< u16 > _4;
+#else
     /* 0x4 */ u16 _4;
+#endif
     /* 0x6 */ u8 _6;
     /* 0x7 */ u8 _7;
 };
@@ -96,9 +105,15 @@ public:
     /* 0x94 */ s32 _94;
 };
 
+// Read in place from the big-endian ME sequence resource.
 struct AudMeTable {
+#ifdef PETARI_NATIVE
+    /* 0x0 */ BigEndianValue< s32 > mNumEntries;
+    /* 0x4 */ BigEndianValue< s32 > mSeqStartPos[1];
+#else
     /* 0x0 */ s32 mNumEntries;
     /* 0x4 */ s32 mSeqStartPos[1];
+#endif
 };
 
 class AudMeMgr : public JASGlobalInstance< AudMeMgr > {

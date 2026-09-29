@@ -5,6 +5,9 @@
 #include "Game/MapObj/MapPartsRailMover.hpp"
 #include "Game/Util.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 namespace {
     const f32 sMoveRadiusDefault = 750.0f;

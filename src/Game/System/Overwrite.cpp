@@ -39,6 +39,22 @@
 #include <cstdarg>
 #include <revolution/sc.h>
 
+// The JParticle overrides below (the JPA section) are compiled separately in native builds by
+// native/gx/particle_overrides.cpp, which includes this file with PETARI_OVERWRITE_PARTICLES,
+// so JParticle links without the rest of the game. The Wii build compiles everything here.
+#if !defined(PETARI_NATIVE)
+#define OVERWRITE_EMIT_GAME 1
+#define OVERWRITE_EMIT_PARTICLES 1
+#elif defined(PETARI_OVERWRITE_PARTICLES)
+#define OVERWRITE_EMIT_GAME 0
+#define OVERWRITE_EMIT_PARTICLES 1
+#else
+#define OVERWRITE_EMIT_GAME 1
+#define OVERWRITE_EMIT_PARTICLES 0
+#endif
+
+#if OVERWRITE_EMIT_GAME
+
 void Overwrite_FORCE_MATCH_SDATA2() {
     (void)1.0f;
     (void)0.0f;
@@ -57,6 +73,7 @@ namespace {
     const u8 sUnitMask[] = {0x80, 0x40, 0x20, 0x10, 8, 4, 2, 1};
 }
 
+#ifndef PETARI_NATIVE
 void* JKRUnitHeap::do_alloc(u32 size, int alignment) {
     u32 bit;
     u8* pBat;
@@ -93,7 +110,9 @@ void* JKRUnitHeap::do_alloc(u32 size, int alignment) {
     unlock();
     return pResult;
 }
+#endif
 
+#ifndef PETARI_NATIVE
 void JKRUnitHeap::do_free(void* pMemory) {
     lock();
     s32 index = addressToIndex(pMemory);
@@ -108,10 +127,14 @@ void JKRUnitHeap::do_free(void* pMemory) {
 
     unlock();
 }
+#endif
 
+#ifndef PETARI_NATIVE
 void JKRSolidHeap::do_free(void* pMemory) {
 }
+#endif
 
+#ifndef PETARI_NATIVE
 s32 JKRExpHeap::adjustSize() {
     CMemBlock* pNext;
     JKRHeap* pParent = mChildTree.getParent()->getObject();
@@ -166,9 +189,15 @@ s32 JKRExpHeap::adjustSize() {
 }
 
 u32 JKRHeap::getMaxAllocatableSize(int alignment) {
+#ifdef PETARI_NATIVE
+    u32 address = reinterpret_cast< uintptr_t >(getMaxFreeBlock()) & 0xF;
+#else
     u32 address = reinterpret_cast< u32 >(getMaxFreeBlock());
+#endif
     return ~(alignment - 1) & (getFreeSize() - ((alignment - 1) & (alignment - (address & 0xF))));
 }
+
+#endif
 
 extern "C" void JUTWarningConsole_f(const char* pFormat, ...) {
     va_list args;
@@ -193,11 +222,15 @@ void JUTTexture::captureDolTexture(void* pBuffer, int width, int height, int x, 
     GXPixModeSync();
 }
 
+#ifndef PETARI_NATIVE
 JSUOutputStream::~JSUOutputStream() {
 }
+#endif
 
+#ifndef PETARI_NATIVE
 JSUInputStream::~JSUInputStream() {
 }
+#endif
 
 extern "C" void PSMTXRotRad(Mtx pMtx, char axis, f32 radians) {
     f32 sin = JMASinRadian(radians);
@@ -229,6 +262,9 @@ bool JUTException::queryMapAddress_single(char* pMap, u32 address, s32 section, 
     return false;
 }
 
+#ifndef PETARI_NATIVE
+// Native: native/gx/model_overrides.cpp, with the ShapePacketUserData step registered by
+// ShapePacketUserData.cpp.
 void J3DShapeMtx::loadMtxIndx_PNGP(int slot, u16 index) const {
     J3DFifoLoadIndx(0x20, index, 0xB000 | static_cast< u16 >(slot * 12));
     J3DFifoLoadNrmMtxIndx3x3(index, slot * 3);
@@ -237,7 +273,11 @@ void J3DShapeMtx::loadMtxIndx_PNGP(int slot, u16 index) const {
         pData->loadTexMtx(j3dSys.getShapePacket()->getShape()->getMaterial(), slot, index);
     }
 }
+#endif
 
+#endif  // OVERWRITE_EMIT_GAME
+
+#if OVERWRITE_EMIT_PARTICLES
 namespace {
     static void noLoadPrj(JPAEmitterWorkData const* pWork, const Mtx pSrt) {
     }
@@ -1052,26 +1092,40 @@ void JPADrawRotYBillboard(JPAEmitterWorkData* pWork, JPABaseParticle* pParticle)
     p_prj[pWork->mPrjType](pWork, matrix);
     GXCallDisplayList(jpa_dl, 32);
 }
+#endif  // OVERWRITE_EMIT_PARTICLES
 
+#if OVERWRITE_EMIT_GAME
+
+#ifndef PETARI_NATIVE
 void JKRAramPiece::startDMA(JKRAMCommand* pCommand) {
+#ifdef PETARI_NATIVE
+    // The Wii screening below tests Wii address ranges and completes every
+    // ARAM-to-main (direction 1) request without copying. Natively main memory is
+    // host pointers; ARStartDMA validates direction, pointers, and ARAM bounds, and
+    // aborts on invalid transfers instead of reporting them done.
+    ARStartDMA(pCommand->mTransferDirection, pCommand->mSrc, pCommand->mDst, pCommand->mDataLength);
+    doneDMA(reinterpret_cast< uintptr_t >(pCommand));
+    return;
+#endif
     if (pCommand->mSrc < 0x80000000) {
-        doneDMA(reinterpret_cast< u32 >(pCommand));
+        doneDMA(reinterpret_cast< uintptr_t >(pCommand));
         return;
     }
 
     if (pCommand->mDst >= 0x04000000) {
-        doneDMA(reinterpret_cast< u32 >(pCommand));
+        doneDMA(reinterpret_cast< uintptr_t >(pCommand));
         return;
     }
 
     if (pCommand->mDataLength > 0x00E00000) {
-        doneDMA(reinterpret_cast< u32 >(pCommand));
+        doneDMA(reinterpret_cast< uintptr_t >(pCommand));
         return;
     }
 
     ARStartDMA(pCommand->mTransferDirection, pCommand->mSrc, pCommand->mDst, pCommand->mDataLength);
-    doneDMA(reinterpret_cast< u32 >(pCommand));
+    doneDMA(reinterpret_cast< uintptr_t >(pCommand));
 }
+#endif
 
 void JAU_JASInitializer::initJASystem(JKRSolidHeap* pHeap) {
     if (JASAudioThread::getThreadPointer() == nullptr && JASDvd::getThreadPointer() == nullptr) {
@@ -1136,6 +1190,7 @@ JASAudioThread::JASAudioThread(int priority, int, u32)
     OSInitThreadQueue(&sThreadQueue);
 }
 
+#ifndef PETARI_NATIVE
 JKRAram::JKRAram(u32 audioSize, u32 graphSize, s32 priority) : JKRThread(::sAramThreadStackSize, ::sAramThreadMsgSize, priority) {
     u32 reserved = ARInit(mStackArray, 3);
     ARQInit();
@@ -1159,3 +1214,5 @@ JKRAram::JKRAram(u32 audioSize, u32 graphSize, s32 priority) : JKRThread(::sAram
 
     mAramHeap = new (JKRGetSystemHeap(), 0) JKRAramHeap(mGraphMemoryPtr, mGraphMemorySize);
 }
+#endif
+#endif  // OVERWRITE_EMIT_GAME

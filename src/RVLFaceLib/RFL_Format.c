@@ -12,7 +12,7 @@ void RFLiAllocateDB(RFLiDatabase* db) {
     memset((u8*)db + sizeof(db->identifier), 0, sizeof(RFLiDatabase));
 }
 
-static void RFLiClearTableData(RFLiTableData* data) {
+RFL_HEADER_STATIC void RFLiClearTableData(RFLiTableData* data) {
     memset(data, 0, sizeof(RFLiTableData));
     data->next = -1;
     data->prev = -1;

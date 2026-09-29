@@ -11,6 +11,9 @@
 #include "JSystem/JKernel/JKRHeap.hpp"
 #include <revolution/gd.h>
 #include <revolution/gd/GDTransform.h>
+#ifdef PETARI_NATIVE
+#include <petari/j3d_overrides.hpp>
+#endif
 
 ShapePacketUserData::ShapePacketUserData() : mTexGenNum(), mDisplayListSize(), mDisplayList() {
 }
@@ -82,6 +85,25 @@ void ShapePacketUserData::loadTexMtx(J3DMaterial* pMaterial, int slot, u16 index
         }
     }
 }
+
+#ifdef PETARI_NATIVE
+namespace {
+    // The ShapePacketUserData step of the J3DShapeMtx::loadMtxIndx_PNGP override (the Wii
+    // override in Overwrite.cpp does this inline).
+    void loadShapePacketTexMtx(const J3DShapePacket* pPacket, int slot, u16 index) {
+        ShapePacketUserData* pData = MR::getJ3DShapePacketUserData(pPacket);
+        if (pData != nullptr) {
+            pData->loadTexMtx(pPacket->getShape()->getMaterial(), slot, index);
+        }
+    }
+
+    struct ShapePacketTexMtxLoaderRegistration {
+        ShapePacketTexMtxLoaderRegistration() {
+            PetariNative::J3D::setShapePacketTexMtxLoader(&loadShapePacketTexMtx);
+        }
+    } sShapePacketTexMtxLoaderRegistration;
+}  // namespace
+#endif
 
 namespace MR {
     ShapePacketUserData* getJ3DShapePacketUserData(const J3DShapePacket* pShapePacket) {

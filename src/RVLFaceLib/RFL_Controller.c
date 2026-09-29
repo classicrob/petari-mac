@@ -53,7 +53,7 @@ void RFLiInitCtrlBuf(MEMiHeapHead* heap) {
                     RFL_CTRL_CHAR_MAX);
 }
 
-static BOOL RFLiCheckCtrlBufferCore(const RFLiCtrlBuf* buf, u8 index,
+RFL_HEADER_STATIC BOOL RFLiCheckCtrlBufferCore(const RFLiCtrlBuf* buf, u8 index,
                              RFLiHiddenType type) {
     u16 mask;
 
@@ -237,7 +237,7 @@ static void readbuffer_(s32 chan, RFLiCtrlBuf* dst, BOOL ch) {
     }
 }
 
-static RFLErrcode RFLiLoadControllerAsync(s32 chan, BOOL ch) {
+RFL_HEADER_STATIC RFLErrcode RFLiLoadControllerAsync(s32 chan, BOOL ch) {
     RFLiCtrlBufManager* mgr;
 
     if (chan < 0 || chan >= 4) {
@@ -265,7 +265,7 @@ static RFLErrcode RFLiLoadControllerAsync(s32 chan, BOOL ch) {
     return RFLGetAsyncStatus();
 }
 
-static RFLErrcode RFLLoadControllerAsync(s32 chan) {
+RFL_HEADER_STATIC RFLErrcode RFLLoadControllerAsync(s32 chan) {
     return RFLiLoadControllerAsync(chan, FALSE);
 }
 
@@ -307,7 +307,7 @@ BOOL RFLiGetControllerData(RFLiCharInfo* info, s32 chan, u16 index,
     return TRUE;
 }
 
-static BOOL RFLIsAvailableControllerData(s32 chan, u16 index) {
+RFL_HEADER_STATIC BOOL RFLIsAvailableControllerData(s32 chan, u16 index) {
     RFLiCtrlBufManager* mgr;
     RFLiCtrlBuf* buf;
     u16 mask;

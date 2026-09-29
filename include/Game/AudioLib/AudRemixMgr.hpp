@@ -2,15 +2,28 @@
 
 #include "Game/AudioLib/AudRemixSequencer.hpp"
 #include "Game/AudioLib/AudSoundObject.hpp"
+#ifdef PETARI_NATIVE
+#include "Game/Util/BigEndian.hpp"
+#endif
 
 class JKRHeap;
 
+#ifdef PETARI_NATIVE
+// Note records stay in the big-endian remix resource and decode on read.
+struct RemixNoteData {
+    BigEndianValue< s32 > _0;
+    BigEndianValue< s32 > _4;
+    BigEndianValue< s32 > _8;
+    BigEndianValue< s32 > _C;
+};
+#else
 struct RemixNoteData {
     s32 _0;
     s32 _4;
     s32 _8;
     s32 _C;
 };
+#endif
 
 struct RemixNoteTrackData {
     s32 _0;

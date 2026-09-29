@@ -212,7 +212,7 @@ namespace AudBgmSetting {
     };
 
     static const u16 cExtraChordNum[][8] = {
-        {-1, -1, -1, -1, 0, 0, 0, 0},
+        {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0, 0, 0, 0},
     };
 
     const MultiBgmSet cMultiBgmSet[] = {

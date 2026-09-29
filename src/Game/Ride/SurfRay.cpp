@@ -390,7 +390,7 @@ void SurfRay::exeTutorial() {
         }
         break;
     case 7:
-    case 11:
+    case 11: {
         if (MR::isFirstStep(this)) {
             MR::startBckPlayerJ("サーフィン傾き開始");
         }
@@ -403,6 +403,7 @@ void SurfRay::exeTutorial() {
             MR::setBckBlendWeight(1.0f - rot, 0.0f, rot);
         }
         break;
+    }
     case 13:
         break;
     default:

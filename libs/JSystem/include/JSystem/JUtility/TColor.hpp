@@ -28,17 +28,34 @@ namespace JUtility {
             a = cA;
         }
 
+#ifdef PETARI_NATIVE
+        // A packed color is 0xRRGGBBAA, the byte order of the Wii's big-endian
+        // u32 view of the r, g, b, a bytes.
+        void set(u32 u32Color) {
+            r = static_cast< u8 >(u32Color >> 24);
+            g = static_cast< u8 >(u32Color >> 16);
+            b = static_cast< u8 >(u32Color >> 8);
+            a = static_cast< u8 >(u32Color);
+        }
+#else
         void set(u32 u32Color) {
             *reinterpret_cast< u32* >(&r) = u32Color;
         }
+#endif
 
         operator u32() const {
             return toUInt32();
         }
 
+#ifdef PETARI_NATIVE
+        u32 toUInt32() const {
+            return static_cast< u32 >(r) << 24 | static_cast< u32 >(g) << 16 | static_cast< u32 >(b) << 8 | a;
+        }
+#else
         u32 toUInt32() const {
             return *reinterpret_cast< const u32* >(&r);
         }
+#endif
 
         void set(GXColor gxColor) {
             GXColor* temp = this;

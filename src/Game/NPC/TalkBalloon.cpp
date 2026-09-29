@@ -82,6 +82,12 @@ void TalkBalloon::close() {
     MR::startAnim(this, "End", 0);
 }
 
+#ifdef PETARI_NATIVE
+// Keep these local helpers distinct from the C library's fmin/fmax (different NaN handling).
+#define fmin talkBalloonFmin
+#define fmax talkBalloonFmax
+#endif
+
 inline f32 fmin(f32 a, f32 b) {
     return b >= a ? a : b;
 }

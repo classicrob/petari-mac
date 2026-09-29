@@ -80,9 +80,25 @@ namespace nw4r {
                 return (ut::BitExtract(fileHeader.version, 8, 8) == 0 && ut::BitExtract(fileHeader.version, 0, 8) >= 9);
             }
 
+#ifdef PETARI_NATIVE
+            // Signatures are stored as characters and compared with multi-character
+            // constants, whose value is the big-endian reading of those characters.
+            inline s32 GetSignatureInt(const char sig[4]) {
+                const u8* bytes = reinterpret_cast< const u8* >(sig);
+                return static_cast< s32 >(static_cast< u32 >(bytes[0]) << 24 | static_cast< u32 >(bytes[1]) << 16 | static_cast< u32 >(bytes[2]) << 8 |
+                                          bytes[3]);
+            }
+
+            // Converts a serialized BRLYT ('RLYT') or BRLAN ('RLAN') file to host byte
+            // order in place, after validating every offset against its fileSize. The
+            // byte-order mark reads 0xFEFF once converted, so later calls do nothing.
+            // Returns false, leaving the file unchanged, for a malformed file.
+            bool NativeNormalizeResource(void* pFile, u32 signature);
+#else
             inline s32 GetSignatureInt(const char sig[4]) {
                 return *reinterpret_cast< const s32* >(sig);
             }
+#endif
 
             inline u8 GetVtxColorElement(const ut::Color* pColors, u32 idx) {
                 return reinterpret_cast< const u8* >(&pColors[idx / 4])[idx % 4];

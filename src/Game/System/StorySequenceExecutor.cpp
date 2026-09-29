@@ -717,7 +717,7 @@ void StorySequenceExecutor::exePlayDemoSequence() {
         exePlayDemoSequence();
         break;
     case 12:
-        if (tryNextDemoInfo() != nullptr) {
+        if (tryNextDemoInfo() != false) {
             exePlayDemoSequence();
         } else {
             _48.clear();
@@ -729,7 +729,7 @@ void StorySequenceExecutor::exePlayDemoSequence() {
 
         break;
     case 13:
-        if (tryNextDemoInfo() != nullptr) {
+        if (tryNextDemoInfo() != false) {
             exePlayDemoSequence();
         } else {
             const Nerve* pNerve;

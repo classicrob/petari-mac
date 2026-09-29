@@ -1,4 +1,5 @@
 #include "Game/Util/MathUtil.hpp"
+#include <cstring>
 #include "Game/System/GameSystem.hpp"
 #include "Game/System/GameSystemObjHolder.hpp"
 #include "Game/Util/MtxUtil.hpp"
@@ -1174,6 +1175,14 @@ f32 PSVECKillElement(__REGISTER const Vec* pSrc, __REGISTER const Vec* pKill, __
         psq_st     f2, 4(pDst),  0, 0
     }  // clang-format on
     return dot;
+#else
+    // Removes the pKill component from pSrc: pDst = pSrc - dot(pSrc, pKill) * pKill.
+    f32 dot = pSrc->x * pKill->x + pSrc->y * pKill->y + pSrc->z * pKill->z;
+    Vec* pOut = const_cast< Vec* >(pDst);
+    pOut->x = pSrc->x - dot * pKill->x;
+    pOut->y = pSrc->y - dot * pKill->y;
+    pOut->z = pSrc->z - dot * pKill->z;
+    return dot;
 #endif
 }
 
@@ -1556,10 +1565,18 @@ namespace MR {
     }
 
     void setNan(TVec3f& rDst) {
+#ifdef PETARI_NATIVE
+        // All-ones bit pattern (a quiet NaN) in each component, without type punning.
+        const s32 nanBits = -1;
+        memcpy(&rDst.x, &nanBits, sizeof(nanBits));
+        memcpy(&rDst.y, &nanBits, sizeof(nanBits));
+        memcpy(&rDst.z, &nanBits, sizeof(nanBits));
+#else
         JGeometry::TVec3< int >* tmp = (JGeometry::TVec3< int >*)&rDst;
         tmp->x = -1;
         tmp->y = -1;
         tmp->z = -1;
+#endif
     }
 
     bool isNan(const TVec3f& rVec) {
@@ -1629,7 +1646,11 @@ f32 JMASqrt(__REGISTER f32 value) {
     }
 
     __REGISTER f32 inverse;
+#ifdef PETARI_NATIVE
+    inverse = __frsqrte(value);
+#else
     __asm { frsqrte inverse, value }
+#endif
     f32 estimate = inverse * value;
     inverse = -(estimate * inverse - 3.0f);
     inverse *= estimate;

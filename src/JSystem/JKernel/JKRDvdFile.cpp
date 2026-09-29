@@ -98,7 +98,12 @@ s32 JKRDvdFile::sync(void) {
 }
 
 void JKRDvdFile::doneProcess(s32 id, DVDFileInfo* fileInfo) {
+#ifdef PETARI_NATIVE
+    // mDvdFile follows mFileInfo; 0x3c is the Wii sizeof(DVDFileInfo).
+    JKRDvdFile* dvdFile = *(JKRDvdFile**)((u8*)fileInfo + (offsetof(JKRDvdFile, mDvdFile) - offsetof(JKRDvdFile, mFileInfo)));
+#else
     JKRDvdFile* dvdFile = *(JKRDvdFile**)((u8*)fileInfo + 0x3c);
+#endif
     OSSendMessage(&dvdFile->mMessageQueue2, (OSMessage)(intptr_t)id, OS_MESSAGE_NOBLOCK);
 }
 

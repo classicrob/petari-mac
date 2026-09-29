@@ -31,7 +31,7 @@ typedef struct RFLiTexture {
     u32 imageOfs;       // at 0x1C
 } RFLiTexture;
 
-inline void* RFLiGetTexImage(const RFLiTexture* tex) {
+RFL_HEADER_INLINE void* RFLiGetTexImage(const RFLiTexture* tex) {
     return (u8*)tex + tex->imageOfs;
 }
 

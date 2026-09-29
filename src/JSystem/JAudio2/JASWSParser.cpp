@@ -4,6 +4,14 @@
 #include "JSystem/JKernel/JKRHeap.hpp"
 #include "JSystem/JKernel/JKRSolidHeap.hpp"
 
+#ifdef PETARI_NATIVE
+// These structures overlay disc data and must keep the Wii layout.
+static_assert(sizeof(JASWSParser::TWave) == 0x24, "TWave layout");
+static_assert(sizeof(JASWSParser::THeader) == 0x18, "THeader layout");
+static_assert(sizeof(JASWSParser::TWaveArchive) == 0x74, "TWaveArchive layout");
+static_assert(sizeof(JASWSParser::TCtrlScene) == 0x10, "TCtrlScene layout");
+#endif
+
 u32 JASWSParser::getGroupCount(void const* stream) {
     THeader* header = (THeader*)stream;
     TCtrlGroup* group = header->mCtrlGroupOffset.ptr(header);

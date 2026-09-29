@@ -57,10 +57,15 @@ bool JMapInfo::getValueFast(int entryIndex, int itemIndex, const char** pValueOu
     const char* valuePtr = getEntryAddress(mData, mData->mDataOffset, entryIndex) + item->mOffsData;
 
     switch (item->mType) {
-    case JMAP_VALUE_TYPE_STRING_PTR:
+    case JMAP_VALUE_TYPE_STRING_PTR: {
         const char* pStringTable = getEntryAddress(mData, mData->mDataOffset, getNumEntries());
+#ifdef PETARI_NATIVE
+        *pValueOut = pStringTable + readJMapU32(valuePtr);
+#else
         *pValueOut = pStringTable + *reinterpret_cast< const u32* >(valuePtr);
+#endif
         break;
+    }
     default:
         *pValueOut = valuePtr;
         break;
@@ -77,10 +82,18 @@ bool JMapInfo::getValueFast(int entryIndex, int itemIndex, u32* pValueOut) const
     switch (item->mType) {
     case JMAP_VALUE_TYPE_LONG:
     case JMAP_VALUE_TYPE_LONG_2:
+#ifdef PETARI_NATIVE
+        rawValue = readJMapU32(valuePtr);
+#else
         rawValue = *reinterpret_cast< const u32* >(valuePtr);
+#endif
         break;
     case JMAP_VALUE_TYPE_SHORT:
+#ifdef PETARI_NATIVE
+        rawValue = readJMapU16(valuePtr);
+#else
         rawValue = *reinterpret_cast< const u16* >(valuePtr);
+#endif
         break;
     case JMAP_VALUE_TYPE_BYTE:
         rawValue = *reinterpret_cast< const u8* >(valuePtr);
@@ -98,18 +111,27 @@ bool JMapInfo::getValueFast(int entryIndex, int itemIndex, s32* pValueOut) const
     if (item->mShift != 0) {
         goto FAIL;
     }
-    const char* valuePtr = getEntryAddress(mData, mData->mDataOffset, entryIndex) + item->mOffsData;
+    const char* valuePtr;
+    valuePtr = getEntryAddress(mData, mData->mDataOffset, entryIndex) + item->mOffsData;
 
     switch (item->mType) {
     case JMAP_VALUE_TYPE_LONG:
         if (item->mMask == 0xffffffff) {
+#ifdef PETARI_NATIVE
+            *pValueOut = static_cast< s32 >(readJMapU32(valuePtr));
+#else
             *pValueOut = *reinterpret_cast< const s32* >(valuePtr);
+#endif
             break;
         }
         goto FAIL;
     case JMAP_VALUE_TYPE_SHORT:
         if (item->mMask == 0xffff) {
+#ifdef PETARI_NATIVE
+            *pValueOut = static_cast< s16 >(readJMapU16(valuePtr));
+#else
             *pValueOut = *reinterpret_cast< const s16* >(valuePtr);
+#endif
             break;
         }
         goto FAIL;

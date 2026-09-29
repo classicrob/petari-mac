@@ -16,7 +16,7 @@ void* JKRHeap::mUserRamEnd;
 u32 JKRHeap::mMemorySize;
 
 static bool byte_806B26D8 = true;
-u32 ARALT_AramStartAdr = 0x90000000;
+uintptr_t ARALT_AramStartAdr = 0x90000000;
 
 JKRHeap::JKRHeap(void* data, u32 size, JKRHeap* parent, bool error) : JKRDisposer(), mChildTree(this), mDisposerList() {
     OSInitMutex(&mMutex);
@@ -75,8 +75,8 @@ bool JKRHeap::initArena(char** memory, u32* size, int maxHeaps) {
 
     arenaStart = OSInitAlloc(arenaLo, arenaHi, maxHeaps);
     OSBootInfo* code = (OSBootInfo*)OSPhysicalToCached(0);
-    ramStart = (void*)(((u32)arenaStart + 31) & 0xFFFFFFE0);
-    ramEnd = (void*)((u32)arenaHi & 0xFFFFFFE0);
+    ramStart = (void*)(((uintptr_t)arenaStart + 31) & ~(uintptr_t)0x1F);
+    ramEnd = (void*)((uintptr_t)arenaHi & ~(uintptr_t)0x1F);
 
     JKRHeap::mCodeStart = code;
     JKRHeap::mCodeEnd = ramStart;
@@ -88,7 +88,7 @@ bool JKRHeap::initArena(char** memory, u32* size, int maxHeaps) {
     OSSetArenaHi(ramEnd);
 
     *memory = (char*)ramStart;
-    *size = (u32)ramEnd - (u32)ramStart;
+    *size = (uintptr_t)ramEnd - (uintptr_t)ramStart;
     return true;
 }
 
@@ -121,6 +121,15 @@ void* JKRHeap::alloc(u32 size, int align, JKRHeap* pHeap) {
 }
 
 void* JKRHeap::alloc(u32 size, int align) {
+#ifdef PETARI_NATIVE
+    // Wii callers commonly request 4-byte alignment. Host objects contain 8-byte
+    // pointers and mutexes, so keep the sign that selects head or tail allocation.
+    if (align >= 0 && align < 8) {
+        align = 8;
+    } else if (align < 0 && align > -8) {
+        align = -8;
+    }
+#endif
     return do_alloc(size, align);
 }
 
@@ -222,7 +231,7 @@ JKRHeap* JKRHeap::findAllHeap(void* ptr) const {
     return nullptr;
 }
 
-void JKRHeap::dispose_subroutine(u32 start, u32 end) {
+void JKRHeap::dispose_subroutine(uintptr_t start, uintptr_t end) {
     JSUListIterator< JKRDisposer > it(mDisposerList.getFirst());
     JSUListIterator< JKRDisposer > last_it;
 
@@ -247,14 +256,14 @@ void JKRHeap::dispose_subroutine(u32 start, u32 end) {
 }
 
 bool JKRHeap::dispose(void* ptr, u32 size) {
-    u32 begin = (u32)ptr;
-    u32 end = (u32)ptr + size;
+    uintptr_t begin = (uintptr_t)ptr;
+    uintptr_t end = (uintptr_t)ptr + size;
     dispose_subroutine(begin, end);
     return false;
 }
 
 void JKRHeap::dispose(void* begin, void* end) {
-    dispose_subroutine((u32)begin, (u32)end);
+    dispose_subroutine((uintptr_t)begin, (uintptr_t)end);
 }
 
 void JKRHeap::dispose() {
@@ -295,6 +304,111 @@ JKRErrorHandler JKRHeap::setErrorHandler(JKRErrorHandler errorHandler) {
     return prev;
 }
 
+#ifdef PETARI_NATIVE
+// Host runtime libraries share the replaceable global allocation functions,
+// so memory is returned to the allocator that owns it. On registered game
+// threads, allocations follow the current JKR heap as on Wii. Host threads,
+// HostAllocationScope regions, and allocations made before a current heap
+// exists use the host allocator (see petari/host_allocation.hpp).
+#include <cstdlib>
+
+static void JKRNativeAllocFailed() {
+#if defined(__cpp_exceptions)
+    throw std::bad_alloc();
+#else
+    std::abort();
+#endif
+}
+
+static void* JKRNativeAlloc(std::size_t size, std::size_t align) {
+    if (size > 0xFFFFFFFF || align > 0x7FFFFFFF) {
+        JKRNativeAllocFailed();
+    }
+
+    void* ptr;
+    if (JKRHeap::sCurrentHeap != nullptr && !PetariNative::isHostAllocationActive()) {
+        ptr = JKRHeap::alloc(size, align, nullptr);
+    } else if (align <= __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
+        ptr = std::malloc(size == 0 ? 1 : size);
+    } else {
+        ptr = std::aligned_alloc(align, size == 0 ? align : (size + align - 1) & ~(align - 1));
+    }
+
+    if (ptr == nullptr) {
+        JKRNativeAllocFailed();
+    }
+
+    return ptr;
+}
+
+static void JKRNativeFree(void* pData) {
+    if (pData == nullptr) {
+        return;
+    }
+
+    // JKR heaps live in the MEM1/MEM2 game arenas. Host memory is freed without
+    // walking the heap tree, which game threads may be modifying.
+    if (JKRHeap::sRootHeap == nullptr || (!OSIsMEM1Region(pData) && !OSIsMEM2Region(pData))) {
+        std::free(pData);
+        return;
+    }
+
+    JKRHeap* heap = JKRHeap::findFromRoot(pData);
+    if (heap != nullptr) {
+        heap->free(pData);
+    } else {
+        std::free(pData);
+    }
+}
+
+void* operator new(std::size_t size) {
+    return JKRNativeAlloc(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
+}
+
+void* operator new(std::size_t size, std::align_val_t align) {
+    return JKRNativeAlloc(size, static_cast< std::size_t >(align));
+}
+
+void* operator new(std::size_t size, int align) {
+    return JKRHeap::alloc(size, align, nullptr);
+}
+
+void* operator new(std::size_t size, JKRHeap* pHeap, int align) {
+    return JKRHeap::alloc(size, align, pHeap);
+}
+
+void* operator new[](std::size_t size) {
+    return JKRNativeAlloc(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
+}
+
+void* operator new[](std::size_t size, std::align_val_t align) {
+    return JKRNativeAlloc(size, static_cast< std::size_t >(align));
+}
+
+void* operator new[](std::size_t size, int align) {
+    return JKRHeap::alloc(size, align, nullptr);
+}
+
+void* operator new[](std::size_t size, JKRHeap* pHeap, int align) {
+    return JKRHeap::alloc(size, align, pHeap);
+}
+
+void operator delete(void* pData) noexcept {
+    JKRNativeFree(pData);
+}
+
+void operator delete(void* pData, std::align_val_t) noexcept {
+    JKRNativeFree(pData);
+}
+
+void operator delete[](void* pData) noexcept {
+    JKRNativeFree(pData);
+}
+
+void operator delete[](void* pData, std::align_val_t) noexcept {
+    JKRNativeFree(pData);
+}
+#else
 void* operator new(u32 size) {
     return JKRHeap::alloc(size, 4, nullptr);
 }
@@ -326,6 +440,7 @@ void operator delete(void* pData) {
 void operator delete[](void* pData) {
     JKRHeap::free(pData, nullptr);
 }
+#endif
 
 void JKRHeap::state_register(TState*, u32) const {
     return;
@@ -339,11 +454,11 @@ void JKRHeap::state_dump(const TState&) const {
     return;
 }
 
-void JKRHeap::setAltAramStartAdr(u32 addr) {
+void JKRHeap::setAltAramStartAdr(uintptr_t addr) {
     ARALT_AramStartAdr = addr;
 }
 
-u32 JKRHeap::getAltAramStartAdr() {
+uintptr_t JKRHeap::getAltAramStartAdr() {
     return ARALT_AramStartAdr;
 }
 

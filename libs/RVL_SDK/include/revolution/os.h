@@ -1,7 +1,11 @@
 #ifndef OS_H
 #define OS_H
 
+#if defined(PETARI_NATIVE) && !defined(__cplusplus)
+#include <stdarg.h>
+#else
 #include <cstdarg>
+#endif
 #include "revolution/types.h"
 
 #ifdef __cplusplus
@@ -13,6 +17,10 @@ extern "C" {
 #ifdef __MWERKS__
 u32 __OSBusClock : (0x8000 << 16 | 0x00F8);
 u32 __MEM2End : (0x8000 << 16 | 0x3128);
+#elif defined(PETARI_NATIVE)
+// Values of the Wii low-memory globals, defined once by the native OS platform.
+extern u32 __OSBusClock;
+extern uintptr_t __MEM2End;
 #else
 u32 __OSBusClock = 0x800000F8;
 u32 __MEM2End = 0x80003128;
@@ -46,6 +54,17 @@ void* OSPhysicalToUncached(u32);
 #define OS_BASE_CACHED (OS_CACHED_REGION_PREFIX << 16)
 #define OS_BASE_UNCACHED (OS_UNCACHED_REGION_PREFIX << 16)
 
+#ifdef PETARI_NATIVE
+void* PetariNativePhysicalToHost(uintptr_t);
+uintptr_t PetariNativeHostToPhysical(const void*);
+BOOL PetariNativeIsMemoryRegion(const void*, int);
+#define OSPhysicalToCached(paddr) PetariNativePhysicalToHost((uintptr_t)(paddr))
+#define OSCachedToPhysical(caddr) PetariNativeHostToPhysical((const void*)(caddr))
+#define OSUncachedToPhysical(ucaddr) PetariNativeHostToPhysical((const void*)(ucaddr))
+#define OSPhysicalToUncached(paddr) PetariNativePhysicalToHost((uintptr_t)(paddr))
+#define OSIsMEM1Region(addr) PetariNativeIsMemoryRegion((const void*)(addr), 1)
+#define OSIsMEM2Region(addr) PetariNativeIsMemoryRegion((const void*)(addr), 2)
+#else
 #define OSPhysicalToCached(paddr) ((void*)((u32)(paddr) + OS_BASE_CACHED))
 #define OSCachedToPhysical(caddr) ((u32)((u8*)(caddr)-OS_BASE_CACHED))
 #define OSUncachedToPhysical(ucaddr) ((u32)((u32)(ucaddr) & (~OS_BASE_UNCACHED)))
@@ -53,9 +72,16 @@ void* OSPhysicalToUncached(u32);
 
 #define OSIsMEM1Region(addr) (((u32)(addr)&0x30000000) == 0x00000000)
 #define OSIsMEM2Region(addr) (((u32)(addr)&0x30000000) == 0x10000000)
+#endif
 
+#ifdef PETARI_NATIVE
+// Accepts pointers or sizes; pointer inputs keep their full host width.
+#define OSRoundUp32B(x) (((uintptr_t)(x) + 32 - 1) & ~(uintptr_t)(32 - 1))
+#define OSRoundDown32B(x) (((uintptr_t)(x)) & ~(uintptr_t)(32 - 1))
+#else
 #define OSRoundUp32B(x) (((u32)(x) + 32 - 1) & ~(32 - 1))
 #define OSRoundDown32B(x) (((u32)(x)) & ~(32 - 1))
+#endif
 #define OSDiffTick(tick1, tick0) ((s32)(tick1) - (s32)(tick0))
 
 #define OS_TICKS_DELTA(x, y) ((s32)x - (s32)y)

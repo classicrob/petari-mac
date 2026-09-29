@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-namespace Petari {
+namespace PetariNative {
 inline std::uint16_t readU16BE(const void* data) {
     const auto* p = static_cast<const std::uint8_t*>(data);
     return (std::uint16_t(p[0]) << 8) | p[1];

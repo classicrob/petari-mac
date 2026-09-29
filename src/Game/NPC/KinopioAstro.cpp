@@ -21,9 +21,12 @@ namespace {
     const char* sSenderID = "WiiMessageTitle";
 };  // namespace
 
+#ifndef PETARI_NATIVE
+// Wii link-placement artifact; the native build defines this in JKRArchivePri.cpp.
 u32 JKRArchive::getExpandedResSize(const void* pResource) const {
     return getResSize(pResource);
 }
+#endif
 
 void KinopioAstro::makeArchiveList(NameObjArchiveListCollector* pCollector, const JMapInfoIter& rIter) {
     NPCActorItem item("Kinopio");

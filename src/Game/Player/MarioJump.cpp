@@ -621,7 +621,11 @@ void Mario::tryTornadoJump() {
 
 void Mario::startTornadoCentering(HitSensor* pSensor) {
     pushTask(reinterpret_cast< Task >(&Mario::taskOnTornadoCentering), 0x400);
+#ifdef PETARI_NATIVE
+    _A38 = reinterpret_cast< uintptr_t >(pSensor);
+#else
     _A38 = reinterpret_cast< u32 >(pSensor);
+#endif
     _A34 = 0x1E;
 }
 

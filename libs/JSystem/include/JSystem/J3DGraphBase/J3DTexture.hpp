@@ -29,6 +29,15 @@ public:
     }
 
     void setResTIMG(u16 index, const ResTIMG& timg) {
+#ifdef PETARI_NATIVE
+        // Rebased offsets must stay within the signed 32-bit range read back
+        // through JUT_RESTIMG_OFFSET.
+        intptr_t delta = reinterpret_cast< intptr_t >(&timg) - reinterpret_cast< intptr_t >(mpRes + index);
+        if (delta + static_cast< intptr_t >(timg.mImageDataOffset) != static_cast< s32 >(delta + timg.mImageDataOffset) ||
+            delta + static_cast< intptr_t >(timg.mPaletteDataOffset) != static_cast< s32 >(delta + timg.mPaletteDataOffset)) {
+            OSPanic(__FILE__, __LINE__, "J3DTexture::setResTIMG: texture data is more than 2 GiB from its header");
+        }
+#endif
         mpRes[index] = timg;
         mpRes[index].mImageDataOffset = ((mpRes[index].mImageDataOffset + (uintptr_t)&timg - (uintptr_t)(mpRes + index)));
         mpRes[index].mPaletteDataOffset = ((mpRes[index].mPaletteDataOffset + (uintptr_t)&timg - (uintptr_t)(mpRes + index)));

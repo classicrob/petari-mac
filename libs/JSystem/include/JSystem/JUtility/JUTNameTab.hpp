@@ -12,6 +12,13 @@ struct ResNTAB {
     } mEntries[1];
 };
 
+#ifdef PETARI_NATIVE
+// Native code reads ResNTAB in host byte order. Converts a serialized table in
+// place once, when its resource is loaded. Entry and string offsets are checked
+// against resourceSize. Returns false, leaving the table unchanged, if they do not fit.
+bool JUTNativeNormalizeResNTAB(ResNTAB* pTable, u32 resourceSize);
+#endif
+
 class JUTNameTab {
 public:
     JUTNameTab();

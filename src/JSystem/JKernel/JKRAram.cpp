@@ -301,7 +301,7 @@ static inline int decompSZS_subroutine(u8* src, u8* dest) {
     }
 
     SYaz0Header* header = reinterpret_cast< SYaz0Header* >(src);
-    endPtr = dest + (header->length - fileOffset);
+    endPtr = dest + (JKR_YAZ0_LENGTH(header) - fileOffset);
     if (endPtr > dest + maxDest) {
         endPtr = dest + maxDest;
     }

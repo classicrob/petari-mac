@@ -9,7 +9,14 @@
 #include <JSystem/JUtility/JUTVideo.hpp>
 #include <JSystem/JUtility/JUTXfb.hpp>
 #include <revolution/gx/GXRegs.h>
+#ifndef PETARI_NATIVE
 #include <runtime.h>
+#endif
+
+#ifdef PETARI_NATIVE
+extern "C" bool petari_gx_waiting_for_pipeline();
+extern "C" u64 petari_gx_sync_held_ticket();
+#endif
 
 MainLoopFramework* MainLoopFramework::sManager;
 
@@ -19,8 +26,22 @@ GXTexObj clear_z_tobj;
 
 Mtx e_mtx = {{1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f}};
 
+#ifdef PETARI_NATIVE
+// GX texture bytes keep Wii order even though the CPU is little-endian.
+u8 clearZTexData[] ATTRIBUTE_ALIGN(32) = {
+    0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
+    0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
+    0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
+    0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+};
+#else
 u32 clearZTexData[] ATTRIBUTE_ALIGN(32) = {0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF, 0x00FF00FF,
                                            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
+#endif
 
 namespace {
     s32 getDisplayingXfbIndex() NO_INLINE;
@@ -317,9 +338,9 @@ void MainLoopFramework::clearEfb(int param1, int param2, int param3, int param4,
     u16 fbWidth = JUTVideo::getManager()->getRenderMode()->fbWidth;
     u16 efbHeight = JUTVideo::getManager()->getRenderMode()->efbHeight;
     Mtx44 proj;
-    C_MTXOrtho(proj, 0f, efbHeight, 0f, fbWidth, 0f, 1f);
+    C_MTXOrtho(proj, 0.0f, efbHeight, 0.0f, fbWidth, 0.0f, 1.0f);
     GXSetProjection(proj, GX_ORTHOGRAPHIC);
-    GXSetViewport(0f, 0f, fbWidth, efbHeight, 0f, 1f);
+    GXSetViewport(0.0f, 0.0f, fbWidth, efbHeight, 0.0f, 1.0f);
     GXSetScissor(0, 0, fbWidth, efbHeight);
     GXLoadPosMtxImm(e_mtx, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
@@ -390,8 +411,8 @@ void MainLoopFramework::calcCombinationRatio() {
     }
 
     mCombinationRatio = (f32)var2 / (u32)mLastFrameTime;
-    if (mCombinationRatio > 1f) {
-        mCombinationRatio = 1f;
+    if (mCombinationRatio > 1.0f) {
+        mCombinationRatio = 1.0f;
     }
 }
 
@@ -459,7 +480,15 @@ namespace {
             OSCreateAlarm(&alarm);
             MainLoopFrameworkAlarm::sList.append(&alarm.mLink);
         }
+#ifdef PETARI_NATIVE
+        OSTime tick = static_cast< u64 >(OS_BUS_CLOCK / 4 * 0.5);
+#else
         OSTime tick = __cvt_dbl_usll(OS_BUS_CLOCK / 4 * 0.5);
+#endif
+#ifdef PETARI_NATIVE
+        u32 unused;
+        GXReadXfRasMetric(&unused, &unused, &unused, &alarm.mNativeLastProcessed);
+#endif
         OSSetAlarm(&alarm, tick, &handleGXAbortAlarm);
         GXDrawDone();
         DrawSyncManager::resetIfAborted();
@@ -475,13 +504,36 @@ namespace {
         u32 ras_busy, clocks, xf_wait_in, xf_wait_out;
         GXReadXfRasMetric(&xf_wait_in, &xf_wait_out, &ras_busy, &clocks);
         GXReadXfRasMetric(&xf_wait_in2, &xf_wait_out2, &ras_busy2, &clocks2);
+#ifdef PETARI_NATIVE
+        auto* nativeAlarm = static_cast<MainLoopFrameworkAlarm*>(alarm);
+        const bool compiling = petari_gx_waiting_for_pipeline();
+        const u64 capture = petari_gx_sync_held_ticket();
+        if (capture != nativeAlarm->mNativeCaptureTicket) {
+            nativeAlarm->mNativeCaptureTicket = capture;
+            nativeAlarm->mNativeCaptureSince = OSGetTime();
+        }
+        if (capture && OSGetTime() - nativeAlarm->mNativeCaptureSince > static_cast<OSTime>(OS_BUS_CLOCK / 4) * 30)
+            OSPanic(__FILE__, __LINE__, "GPU capture ticket %llu did not complete within 30 seconds", capture);
+        if (compiling || capture || clocks2 != nativeAlarm->mNativeLastProcessed) {
+            nativeAlarm->mNativeLastProcessed = clocks2;
+            OSReport("GX wait extended: pipeline=%u, capture=%llu, processed=%u\n", compiling, capture, clocks2);
+            OSSetAlarm(alarm, static_cast<OSTime>(OS_BUS_CLOCK / 8), &handleGXAbortAlarm);
+            return;
+        }
+        OSReport("GX abort: no processor progress and no pipeline compilation\n");
+#endif
         GXBool brkpt, cmdIdle, readIdle, underlow, overhi;
         GXGetGPStatus(&overhi, &underlow, &readIdle, &cmdIdle, &brkpt);
         GXDisableBreakPt();
         GXAbortFrame();
         DrawSyncManager::sInstance->clearFifo();
+#ifdef PETARI_NATIVE
+        GXCmd1u8(0x61);
+        GXCmd1u32(0x5800000f);
+#else
         GX_WRITE_U8(0x61);
         GX_WRITE_U32(0x5800000f);
+#endif
         GXSetDrawDone();
         DrawSyncManager::prepareReset();
     }

@@ -1,4 +1,7 @@
 #include "RVLFaceLibInternal.h"
+#ifdef PETARI_NATIVE
+#include "rfl_native.h"
+#endif
 
 static const u8 scDefaultData[][sizeof(RFLiCharData)] = {
     // "Guest A"
@@ -51,5 +54,12 @@ static const u8 scDefaultData[][sizeof(RFLiCharData)] = {
      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
 
 void RFLiGetDefaultData(RFLiCharInfo* info, u16 index) {
+#ifdef PETARI_NATIVE
+    // The records are stored as on the Wii: big-endian words of bitfields.
+    RFLiCharData data;
+    RFLiNativeDecodeCharData(scDefaultData[index], &data);
+    RFLiConvertRaw2Info(&data, info);
+#else
     RFLiConvertRaw2Info((RFLiCharData*)&scDefaultData[index], info);
+#endif
 }

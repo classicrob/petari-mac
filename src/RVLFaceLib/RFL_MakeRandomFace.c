@@ -1,5 +1,13 @@
 #include "RVLFaceLibInternal.h"
+#if defined(PETARI_NATIVE)
+#include <stdio.h>
+#else
 #include <cstdio>
+#endif
+#ifdef PETARI_NATIVE
+// Used below as an array length; no header defines it.
+#define LENGTHOF(a) (sizeof(a) / sizeof((a)[0]))
+#endif
 
 void RFLi_MakeRandomFace(RFLiCharInfo* info, RFLSex sex, RFLAge age,
                          RFLRace race) {

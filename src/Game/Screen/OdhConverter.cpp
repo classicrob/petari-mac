@@ -105,7 +105,7 @@ namespace MR {
 
     u32 getOdhImageSize() {
         if (!isExistSceneObj(SceneObj_OdhConverter)) {
-            return nullptr;
+            return 0;
         }
 
         return ::getConverter()->getImageSize();

@@ -53,7 +53,11 @@ void* FileRipper::loadToMainRAM(const char* fpath, u8* dest, bool decompress, JK
 
     if (decompress) {
         u8 buf[0x60];
+#ifdef PETARI_NATIVE
+        copySrc = reinterpret_cast< u8* >((reinterpret_cast< uintptr_t >(buf) + 0x3f) / 0x40 * 0x40);
+#else
         copySrc = (u8*)((u32)(buf + 0x3f) / 0x40 * 0x40);
+#endif
         while (true) {
             s32 result = DVDReadPrio(&fileInfo, copySrc, 0x20, 0, 2);
             if (result >= 0) {
@@ -172,7 +176,12 @@ bool FileRipper::decompressSzsSub(u8* src, u8* dest) {
         return false;
     }
 
+#ifdef PETARI_NATIVE
+    // The Yaz0 header's decompressed size is big-endian.
+    u32 data_len = (src[4] << 24) | (src[5] << 16) | (src[6] << 8) | src[7];
+#else
     u32 data_len = *(u32*)(src + 4);
+#endif
     u8* dest_end = dest + data_len;
     src += 0x10;
 

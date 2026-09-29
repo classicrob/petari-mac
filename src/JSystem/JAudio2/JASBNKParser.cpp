@@ -11,9 +11,31 @@
 #include "JSystem/JKernel/JKRSolidHeap.hpp"
 #include "JSystem/JSupport/JSupport.hpp"
 
+#ifdef PETARI_NATIVE
+// These structures overlay disc data and must keep the Wii layout.
+static_assert(sizeof(JASBNKParser::Ver1::TOsc) == 0x1C, "Ver1::TOsc layout");
+static_assert(sizeof(JASBNKParser::Ver1::TPercData) == 0x10, "Ver1::TPercData layout");
+static_assert(sizeof(JASBNKParser::Ver1::TVeloData) == 0x10, "Ver1::TVeloData layout");
+static_assert(sizeof(JASBNKParser::Ver0::TInst) == 0x2C, "Ver0::TInst layout");
+static_assert(sizeof(JASBNKParser::Ver0::TPerc) == 0x408, "Ver0::TPerc layout");
+static_assert(sizeof(JASBNKParser::Ver0::THeader) == 0x3E4, "Ver0::THeader layout");
+#endif
+
 template < typename T >
 inline T readStream(void const* stream, u32 offset) {
     return *(T*)((intptr_t)stream + offset);
+}
+
+// Oscillator point tables are copied out of the bank and read by the oscillator
+// at runtime, so native copies are converted to host order.
+static inline void JASBNKPointsToHost(void* pTable, u32 size) {
+#ifdef PETARI_NATIVE
+    JSU_BE(s16)* src = static_cast< JSU_BE(s16)* >(pTable);
+    s16* dst = static_cast< s16* >(pTable);
+    for (u32 i = 0; i < size / sizeof(s16); i++) {
+        dst[i] = src[i];
+    }
+#endif
 }
 
 JASBank* JASBNKParser::createBank(void const* stream, JKRHeap* heap) {
@@ -58,7 +80,7 @@ JASBNKParser::Ver1::TChunk* JASBNKParser::Ver1::findChunk(void const* stream, u3
 }
 
 JASInstEffect* JASBNKParser::Ver1::createEffector(void const* stream, JKRHeap* heap) {
-    u32* data = (u32*)(intptr_t)stream;
+    const JSU_BE(u32)* data = (const JSU_BE(u32)*)(intptr_t)stream;
     switch (*data++) {
     case 'Rand': {
         TRandData* randData = (TRandData*)data;
@@ -96,8 +118,9 @@ JASBasicBank* JASBNKParser::Ver1::createBasicBank(void const* stream, JKRHeap* h
 
     u8* envt = new (heap, 2) u8[envt_chunk->mSize];
     JASCalc::bcopy(envt_chunk->mData, envt, envt_chunk->mSize);
+    JASBNKPointsToHost(envt, envt_chunk->mSize);
 
-    u32* ptr = &osc_chunk->mCount;
+    JSU_BE(u32)* ptr = &osc_chunk->mCount;
     u32 count = *ptr++;
     JASOscillator::Data* osc_data = new (heap, 0) JASOscillator::Data[count];
     for (int i = 0; i < count; i++, ptr += sizeof(TOsc) >> 2) {
@@ -114,7 +137,7 @@ JASBasicBank* JASBNKParser::Ver1::createBasicBank(void const* stream, JKRHeap* h
     TListChunk* list = list_chunk;
     for (int i = 0; i < list->count; i++) {
         if (list->mOffsets[i] != 0) {
-            u32* data = (u32*)((intptr_t)stream + list->mOffsets[i]);
+            JSU_BE(u32)* data = (JSU_BE(u32)*)((intptr_t)stream + list->mOffsets[i]);
             switch (*data++) {
             case 'Inst': {
                 JASBasicInst* instp = new (heap, 0) JASBasicInst();
@@ -163,7 +186,7 @@ JASBasicBank* JASBNKParser::Ver1::createBasicBank(void const* stream, JKRHeap* h
                     u32 offset = *data++;
                     if (offset != 0) {
                         JASDrumSet::TPerc* percp = new (heap, 0) JASDrumSet::TPerc();
-                        u32* ptr = (u32*)((intptr_t)stream + offset);
+                        JSU_BE(u32)* ptr = (JSU_BE(u32)*)((intptr_t)stream + offset);
                         TPercData* perc_data = (TPercData*)(ptr + 1);
                         percp->setVolume(perc_data->mVolume);
                         percp->setPitch(perc_data->mPitch);
@@ -242,6 +265,7 @@ JASBasicBank* JASBNKParser::Ver0::createBasicBank(void const* stream, JKRHeap* h
                             int size = endPtr - points;
                             JASOscillator::Point* table = new (heap, 0) JASOscillator::Point[size];
                             JASCalc::bcopy(points, table, size * sizeof(JASOscillator::Point));
+                            JASBNKPointsToHost(table, size * sizeof(JASOscillator::Point));
                             osc->mTable = table;
                         } else {
                             osc->mTable = nullptr;
@@ -253,6 +277,7 @@ JASBasicBank* JASBNKParser::Ver0::createBasicBank(void const* stream, JKRHeap* h
                             int size = endPtr - points;
                             JASOscillator::Point* table = new (heap, 0) JASOscillator::Point[size];
                             JASCalc::bcopy(points, table, size * sizeof(JASOscillator::Point));
+                            JASBNKPointsToHost(table, size * sizeof(JASOscillator::Point));
                             osc->rel_table = table;
                         } else {
                             osc->rel_table = nullptr;
@@ -384,7 +409,8 @@ JASOscillator::Data* JASBNKParser::Ver0::findOscPtr(JASBasicBank* bank, THeader 
 JASOscillator::Point const* JASBNKParser::Ver0::getOscTableEndPtr(JASOscillator::Point const* points) {
     const JASOscillator::Point* ptr = points;
     while (true) {
-        s16 tmp = ptr->_0;
+        // Reads the serialized (big-endian) table.
+        s16 tmp = *reinterpret_cast< const JSU_BE(s16)* >(ptr);
         ptr++;
         if (tmp > 10) {
             break;

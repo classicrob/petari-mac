@@ -3,8 +3,9 @@
 #include "JSystem/JKernel/JKRAramStream.hpp"
 #include "JSystem/JKernel/JKRDecomp.hpp"
 #include "JSystem/JUtility/JUTException.hpp"
+#include <stdint.h>
 
-JKRAMCommand* JKRAramPiece::prepareCommand(int direction, u32 src, u32 dst, u32 length, JKRAramBlock* block, JKRAMCommand::AsyncCallback callback) {
+JKRAMCommand* JKRAramPiece::prepareCommand(int direction, uintptr_t src, uintptr_t dst, u32 length, JKRAramBlock* block, JKRAMCommand::AsyncCallback callback) {
     JKRAMCommand* command = new (JKRGetSystemHeap(), -4) JKRAMCommand();
     command->mTransferDirection = direction;
     command->mSrc = src;
@@ -22,7 +23,7 @@ void JKRAramPiece::sendCommand(JKRAMCommand* command) {
 JSUList< JKRAMCommand > JKRAramPiece::sAramPieceCommandList;
 OSMutex JKRAramPiece::mMutex;
 
-JKRAMCommand* JKRAramPiece::orderAsync(int direction, u32 source, u32 destination, u32 length, JKRAramBlock* block,
+JKRAMCommand* JKRAramPiece::orderAsync(int direction, uintptr_t source, uintptr_t destination, u32 length, JKRAramBlock* block,
                                        JKRAMCommand::AsyncCallback callback) {
     lock();
     if ((source & 0x1f) != 0 || (destination & 0x1f) != 0) {
@@ -67,7 +68,7 @@ BOOL JKRAramPiece::sync(JKRAMCommand* command, int is_non_blocking) {
     return TRUE;
 }
 
-BOOL JKRAramPiece::orderSync(int direction, u32 source, u32 destination, u32 length, JKRAramBlock* block) {
+BOOL JKRAramPiece::orderSync(int direction, uintptr_t source, uintptr_t destination, u32 length, JKRAramBlock* block) {
     lock();
 
     JKRAMCommand* command = JKRAramPiece::orderAsync(direction, source, destination, length, block, NULL);
@@ -78,7 +79,7 @@ BOOL JKRAramPiece::orderSync(int direction, u32 source, u32 destination, u32 len
     return result;
 }
 
-void JKRAramPiece::doneDMA(u32 requestAddress) {
+void JKRAramPiece::doneDMA(uintptr_t requestAddress) {
     JKRAMCommand* command = reinterpret_cast< JKRAMCommand* >(requestAddress);
 
     if (command->field_0x60 != 0) {

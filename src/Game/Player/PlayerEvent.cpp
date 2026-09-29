@@ -42,7 +42,11 @@ void EventSequencer::movement() {
 
 void EventSequencer::startEvent(const char* pName) {
     EventSequence* sequence;
+#ifdef PETARI_NATIVE
+    if (mHashTable->searchPtr(pName, &sequence)) {
+#else
     if (mHashTable->search(pName, reinterpret_cast< u32* >(&sequence))) {
+#endif
         mSequence = sequence;
         mSequenceFrame = 0;
         sequence->clearFlag();

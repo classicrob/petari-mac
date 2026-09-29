@@ -6,6 +6,9 @@
 #include "Game/Util/MapPartsUtil.hpp"
 #include "Game/Util/RailUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 void MapPartsRailGuideDrawer_FORCE_MATCH_SDATA2() {
     (void)0.0f;

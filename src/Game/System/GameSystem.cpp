@@ -35,6 +35,10 @@
 
 #define GX_FIFO_SIZE 0x80000
 
+#ifdef PETARI_NATIVE
+#include <petari/app.hpp>
+#endif
+
 #define INIT_AUDIO_KEY "オーディオ初期化"  // "Audio Initialization"
 
 namespace NrvGameSystem {
@@ -45,7 +49,12 @@ namespace NrvGameSystem {
     NEW_NERVE(GameSystemNormal, GameSystem, Normal);
 };  // namespace NrvGameSystem
 
+#ifdef PETARI_NATIVE
+// The native host entry point initializes the platform, then calls this game main.
+extern "C" void petari_game_main(void) {
+#else
 void main(void) {
+#endif
     OSInitFastCast();
     DVDInit();
     VIInit();
@@ -198,6 +207,10 @@ void GameSystem::frameLoop() {
     calcAnim();
     mObjHolder->captureIfAllowForScreenPreserver();
     MainLoopFramework::sManager->endFrame();
+#ifdef PETARI_NATIVE
+    // Host window, events and Aurora frame boundary (native/app).
+    petari_host_frame_seam();
+#endif
     MainLoopFramework::sManager->waitForRetrace();
 }
 

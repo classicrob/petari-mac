@@ -1,15 +1,25 @@
 #include "Game/Util/HashUtil.hpp"
 #include "Game/Util/MathUtil.hpp"
+#ifdef PETARI_NATIVE
+namespace {
+    // MSL's "C" locale lower-case map: only 'A'-'Z' change; other values, including
+    // negative (non-ASCII) chars, are returned unchanged.
+    inline int mslToLower(int c) {
+        return (c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c;
+    }
+}  // namespace
+#else
 #include <locale.h>
 
 // needed here for inlining reasons
 inline int tolower(int c) {
     return ((c < 0) || (c >= 0x100)) ? c : (int)(_current_locale.ctype_cmpt_ptr->lower_map_ptr[c]);
 }
+#endif
 
 HashSortTable::HashSortTable(u32 cnt) {
     mHashCodes = new u32[cnt];
-    _8 = new u32[cnt];
+    _8 = new Value[cnt];
     _C = new u16[0x100];
     _10 = new u16[0x100];
     mCurrentLength = 0;
@@ -17,7 +27,7 @@ HashSortTable::HashSortTable(u32 cnt) {
     mHasBeenSorted = false;
 }
 
-bool HashSortTable::add(const char* pName, u32 a2, bool isValidSkip) {
+bool HashSortTable::add(const char* pName, Value a2, bool isValidSkip) {
     u32 hash = MR::getHashCode(pName);
 
     if (isValidSkip) {
@@ -27,7 +37,7 @@ bool HashSortTable::add(const char* pName, u32 a2, bool isValidSkip) {
     }
 }
 
-bool HashSortTable::add(u32 a1, u32 a2) {
+bool HashSortTable::add(u32 a1, Value a2) {
     mHashCodes[mCurrentLength] = a1;
     _8[mCurrentLength] = a2;
     mCurrentLength++;
@@ -35,7 +45,7 @@ bool HashSortTable::add(u32 a1, u32 a2) {
     return true;
 }
 
-bool HashSortTable::addOrSkip(u32 a1, u32 a2) {
+bool HashSortTable::addOrSkip(u32 a1, Value a2) {
     for (u32 i = 0; i < mCurrentLength; i++) {
         if (a1 == mHashCodes[i]) {
             return false;
@@ -56,7 +66,7 @@ void HashSortTable::sort() {
 
     s32 originalIndices[0x400];
     MR::sortSmall(mCurrentLength, mHashCodes, originalIndices);
-    u32 swapArray[0x400];
+    Value swapArray[0x400];
 
     for (int i = 0; i < mCurrentLength; i++) {
         swapArray[i] = _8[originalIndices[i]];
@@ -108,7 +118,27 @@ void HashSortTable::sort() {
     mHasBeenSorted = true;
 }
 
+#ifdef PETARI_NATIVE
 bool HashSortTable::search(u32 a1, u32* a2) {
+    // Index payloads only; pointer payloads must use searchValue or searchPtr.
+    Value value;
+    bool isFound = searchValue(a1, &value);
+
+    if (a2 != nullptr) {
+        *a2 = static_cast< u32 >(value);
+    }
+
+    return isFound;
+}
+
+bool HashSortTable::searchValue(const char* a1, Value* a2) {
+    return searchValue(MR::getHashCode(a1), a2);
+}
+
+bool HashSortTable::searchValue(u32 a1, Value* a2) {
+#else
+bool HashSortTable::search(u32 a1, u32* a2) {
+#endif
     u8 upperByte = a1 >> 24;
 
     if (a2 != nullptr) {
@@ -182,7 +212,11 @@ namespace MR {
         u32 hash;
 
         for (hash = 0; *pStr != '\0'; pStr++) {
+#ifdef PETARI_NATIVE
+            hash = mslToLower(*pStr) + hash * 31;
+#else
             hash = tolower(*pStr) + hash * 31;
+#endif
         }
 
         return hash;

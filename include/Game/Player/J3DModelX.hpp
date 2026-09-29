@@ -37,7 +37,44 @@ public:
         inline void clear() {
             *(u32*)this = 0;
         }
-
+#ifdef PETARI_NATIVE
+        // MWCC allocates bitfields from the most significant bit of each 32-bit unit; Clang
+        // allocates from the least significant bit. Natively the fields are declared in reverse
+        // within each unit so the layout, and every numeric view of these words, matches the Wii.
+        // unit 0
+        unsigned _1F : 1;
+        unsigned _1E : 1;
+        unsigned _1D : 1;
+        unsigned _1C : 1;
+        unsigned _1B : 1;
+        unsigned _1A : 1;
+        unsigned _19 : 1;
+        unsigned _18 : 1;
+        unsigned _17 : 1;
+        unsigned _16 : 1;
+        unsigned _15 : 1;
+        unsigned _14 : 1;
+        unsigned _13 : 1;
+        unsigned _12 : 1;
+        unsigned _11 : 1;
+        unsigned _10 : 1;
+        unsigned _F : 1;
+        unsigned _E : 1;
+        unsigned _D : 1;
+        unsigned _C : 1;
+        unsigned _B : 1;
+        unsigned _A : 1;
+        unsigned _9 : 1;
+        unsigned _8 : 1;
+        unsigned _7 : 1;
+        unsigned _6 : 1;
+        unsigned _5 : 1;
+        unsigned _4 : 1;
+        unsigned _3 : 1;
+        unsigned _2 : 1;
+        unsigned _1 : 1;
+        unsigned _0 : 1;
+#else
         unsigned _0 : 1;
         unsigned _1 : 1;
         unsigned _2 : 1;
@@ -70,6 +107,7 @@ public:
         unsigned _1D : 1;
         unsigned _1E : 1;
         unsigned _1F : 1;
+#endif
     };
 
     /* 0xDC */ u8 _DC;

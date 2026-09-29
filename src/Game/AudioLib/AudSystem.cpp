@@ -139,6 +139,13 @@ AudSystem* AudNewAudSystem(JKRSolidHeap* pHeap, void* pV, JKRArchive* pSeqArchiv
     currHeap->becomeCurrentHeap();
     newHeap->finishBuild();
 
+#ifdef PETARI_NATIVE
+    // The audio heap size is tuned for 32-bit objects; report the native headroom
+    // so boot logs show whether it is enough.
+    OSReport("AudNewAudSystem: audio heap %u bytes free, section heap %u bytes free\n", pHeap->getFreeSize(),
+             newHeap->getHeap_()->getFreeSize());
+#endif
+
     return system;
 }
 

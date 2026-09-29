@@ -16,7 +16,13 @@ typedef enum {
 } RFLMiddleDBType;
 
 typedef struct RFLMiddleDB {
+#ifdef PETARI_NATIVE
+    // Holds an RFLiMiddleDB, which has two host pointers (checked in
+    // native/resource/rfl/rfl_native.cpp).
+    u64 dummy[5];
+#else
     u8 dummy[0x18];
+#endif
 } RFLMiddleDB;
 
 u32 RFLGetMiddleDBBufferSize(u16 size);

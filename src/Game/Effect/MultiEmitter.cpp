@@ -10,6 +10,9 @@
 #include "Game/Util/StringUtil.hpp"
 #include <JSystem/JParticle/JPAEmitter.hpp>
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 #include <cstring>
 
 template JGeometry::TVec3< s16 >::TVec3(s16, s16, s16);

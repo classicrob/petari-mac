@@ -1,11 +1,13 @@
 #pragma once
 
 #include "JSystem/JAudio2/JAIStreamDataMgr.hpp"
+#include "JSystem/JSupport/JSUBigEndian.hpp"
 
+// Stream file table (.bsft) overlays big-endian disc data; see JSUBigEndian.hpp.
 struct BinaryStreamFileTable {
     /* 0x0 */ char mIdentifier[4];
-    /* 0x4 */ u32 mNumFiles;
-    /* 0x8 */ int mFilePathOffsets[];
+    /* 0x4 */ JSU_BE(u32) mNumFiles;
+    /* 0x8 */ JSU_BE(int) mFilePathOffsets[];
 };
 
 struct JAUStreamFileTable {

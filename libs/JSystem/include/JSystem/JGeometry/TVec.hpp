@@ -97,13 +97,23 @@ namespace JGeometry {
             y += other.y;
         }
 
+        // These returned references to locals on the Wii (MWCC tolerated it). Native
+        // builds return by value; callers bind the result or copy it.
+#ifdef PETARI_NATIVE
+        inline TVec2 addInline(const TVec2< T >& other) const {
+#else
         inline TVec2& addInline(const TVec2< T >& other) const {
+#endif
             TVec2 ret(*this);
             ret.add(other);
             return ret;
         }
 
+#ifdef PETARI_NATIVE
+        inline const TVec2 addOperatorInline(const TVec2& rOther) const {
+#else
         inline const TVec2& addOperatorInline(const TVec2& rOther) const {
+#endif
             TVec2 ret(*this);
             ret.x += rOther.x;
             ret.y += rOther.y;
@@ -165,13 +175,21 @@ namespace JGeometry {
             y = rA.y - rB.y;
         }
 
+#ifdef PETARI_NATIVE
+        inline TVec2 subInline(const TVec2< T >& other) const {
+#else
         inline TVec2& subInline(const TVec2< T >& other) const {
+#endif
             TVec2 ret = *this;
             ret.sub(other);
             return ret;
         }
 
+#ifdef PETARI_NATIVE
+        inline const TVec2 subOperatorInline(const TVec2& rOther) const {
+#else
         inline const TVec2& subOperatorInline(const TVec2& rOther) const {
+#endif
             TVec2 ret(*this);
             ret.x -= rOther.x;
             ret.y -= rOther.y;
@@ -209,7 +227,11 @@ namespace JGeometry {
             y *= scalar;
         }
 
+#ifdef PETARI_NATIVE
+        inline TVec2 scaleInline(f32 scalar) {
+#else
         inline TVec2& scaleInline(f32 scalar) {
+#endif
             TVec2 ret(*this);
             ret.scale(scalar);
             return ret;
@@ -274,9 +296,17 @@ namespace JGeometry {
         T x, y;
     };
 
+    // Header definitions of explicit specializations need inline to link from
+    // more than one host translation unit.
+#ifdef PETARI_NATIVE
+    template <>
+    inline TVec2< f32 >::TVec2() {
+    }
+#else
     template <>
     TVec2< f32 >::TVec2() {
     }
+#endif
 
     template < typename T >
     struct TVec3 {

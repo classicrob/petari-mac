@@ -59,7 +59,7 @@ const StageBgmData sMAStageBgmData[] = {
     {"Game", "CannonFleetGalaxy", MBGM_GALAXY_11, 3},
     {"Game", "PeachCastleFinalGalaxy", STM_PROLOGUE_02, -1},
     {"Game", "E3HeavenlyBeachGalaxy", MBGM_GALAXY_13, -1},
-    {nullptr, nullptr, -1, -1},
+    {nullptr, nullptr, 0xFFFFFFFF, -1},
 };
 
 const u32 sMASenarioBgmData[][6] = {
@@ -80,7 +80,7 @@ const u32 sMASenarioBgmData[][6] = {
         STM_ASTRO_OUT_3,
     },
     {
-        -1,
+        0xFFFFFFFF,
         MBGM_GALAXY_24,
         MBGM_GALAXY_24,
         MBGM_GALAXY_24,
@@ -89,12 +89,12 @@ const u32 sMASenarioBgmData[][6] = {
 
     },
     {
-        -1,
-        -1,
-        -1,
-        -1,
+        0xFFFFFFFF,
+        0xFFFFFFFF,
+        0xFFFFFFFF,
+        0xFFFFFFFF,
         MBGM_GALAXY_21,
-        -1,
+        0xFFFFFFFF,
     },
     {
         MBGM_ASTRO_DOME,

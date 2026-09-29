@@ -7,7 +7,7 @@ class JKRDvdFile;
 
 class JKRCompArchive : public JKRArchive {
 public:
-    JKRCompArchive(long, EMountDirection);
+    JKRCompArchive(s32, EMountDirection);
     virtual ~JKRCompArchive(void);
 
     virtual void removeResourceAll();
@@ -18,7 +18,7 @@ public:
 
     bool open(s32);
 
-    /* 0x64 */ int field_0x64;
+    /* 0x64 */ uintptr_t field_0x64;
     /* 0x68 */ JKRAramBlock* mAramPart;
     /* 0x6C */ int field_0x6c;
     /* 0x70 */ JKRDvdFile* mDvdFile;

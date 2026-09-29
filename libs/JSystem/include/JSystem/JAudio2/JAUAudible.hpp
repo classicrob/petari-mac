@@ -12,6 +12,18 @@ struct JAUAudibleParam {
         _f1 = a2;
     }
 
+#ifdef PETARI_NATIVE
+    // The Wii u32 view is mAudibleSw << 16 | _f1 (big-endian halves). Native builds
+    // compute it from the fields instead of reading the union's memory.
+    JAUAudibleParam(u32 id) {
+        mAudibleSw = static_cast< u16 >(id >> 16);
+        _f1 = static_cast< u16 >(id);
+    }
+
+    operator u32() const {
+        return static_cast< u32 >(mAudibleSw) << 16 | _f1;
+    }
+#else
     JAUAudibleParam(u32 id) {
         raw = id;
     }
@@ -19,6 +31,7 @@ struct JAUAudibleParam {
     operator u32() const {
         return raw;
     }
+#endif
 
     u16 getAudibleSw() const {
         return mAudibleSw;
@@ -48,6 +61,15 @@ struct JAUAudibleParam {
         return mAudibleSw >> 6 & 1;
     }
 
+#ifdef PETARI_NATIVE
+    bool calcDoppler() const {
+        return (mAudibleSw >> 12 & 0xF) != 0;
+    }
+
+    u32 getDoppler() const {
+        return mAudibleSw >> 12 & 0xF;
+    }
+#else
     bool calcDoppler() const {
         return (raw >> 28 & 0xF) != 0;
     }
@@ -56,6 +78,7 @@ struct JAUAudibleParam {
         return (u32)((*(u16*)&raw >> 12) & 0xf);
         // return raw >> 28 & 0xF;
     }
+#endif
 
     f32 getDopplerPower() const {
         JAUAudibleParam param(*this);
@@ -67,15 +90,23 @@ struct JAUAudibleParam {
         return param.getDoppler() * (1.0f / 15.0f);
     }
 
+#ifdef PETARI_NATIVE
+    u32 getVolDistBit() const {
+        return 1 << ((mAudibleSw >> 4) & 3);
+    }
+#else
     u32 getVolDistBit() const {
         return 1 << ((*(u16*)&raw >> 4) & 3);
     }
+#endif
 
     union {
         /* 0x0 */ struct {
             /* 0x0 */ u16 mAudibleSw;
             /* 0x2 */ u16 _f1;
         };
+#ifndef PETARI_NATIVE
+        // Wii (MWCC) bit order over the big-endian halves; not used by the code.
         /* 0x0 */ struct {
             /* 0x0 */ u8 b0_0 : 4;
             /* 0x0 */ u8 b0_4 : 1;
@@ -89,6 +120,7 @@ struct JAUAudibleParam {
             /* 0x2 */ u8 b2;
             /* 0x3 */ u8 b3;
         };
+#endif
         /* 0x0 */ u32 raw;
     };
 };

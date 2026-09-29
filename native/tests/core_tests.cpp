@@ -12,6 +12,7 @@
 #include "JSystem/JGeometry/TMatrix.hpp"
 #include <revolution/os/OSFastCast.h>
 #include "JSystem/JAudio2/JASSeqReader.hpp"
+#include <petari/locale.hpp>
 
 static_assert(sizeof(u32) == 4 && sizeof(s32) == 4);
 static_assert(sizeof(u64) == 8 && sizeof(s64) == 8);
@@ -48,6 +49,15 @@ struct CountingNerve : Nerve {
 }
 
 int main() {
+    for (int requested = -1; requested <= 255; ++requested) {
+        const auto usa = PetariNative::selectDiscLanguage('E', requested);
+        check(usa && usa->table == 1 && (usa->language == 1 || usa->language == 3 || usa->language == 4), "USA language bounded to available locales");
+        const auto korea = PetariNative::selectDiscLanguage('K', requested);
+        check(korea && korea->table == 4 && korea->language == 9, "Korean assets select Korean language");
+    }
+    check(PetariNative::selectDiscLanguage('E', 3)->language == 3, "USA French selection");
+    check(PetariNative::selectDiscLanguage('E', 4)->language == 4, "USA Spanish selection");
+    check(!PetariNative::selectDiscLanguage('\0', 1), "Unrecognized disc region is rejected");
     u8 sequenceBytes[] = {0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0};
     JASSeqReader sequence;
     sequence.init(sequenceBytes);

@@ -1,14 +1,27 @@
 #include <aurora/aurora.h>
 #include <aurora/event.h>
 #include <aurora/main.h>
-#include <dolphin/gx.h>
-#include <dolphin/mtx.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 
-extern "C" void petari_probe_matrix(unsigned frame, float matrix[3][4]);
+extern "C" void petari_probe_draw(unsigned frame);
+extern "C" bool petari_probe_check_draws();
+extern "C" bool petari_probe_check_sync();
+extern "C" bool petari_probe_check_readback(unsigned frame);
+extern "C" bool petari_probe_load_model(const char* path);
+extern "C" void petari_probe_draw_model(unsigned frame);
+extern "C" void petari_probe_disable_window_restoration();
+extern "C" void petari_probe_start_watchdog();
+extern "C" void petari_probe_watchdog_progress();
+extern "C" void petari_probe_stop_watchdog();
+extern "C" void petari_probe_init_heaps();
+extern "C" void petari_probe_check_heap(unsigned frame);
+extern "C" void petari_probe_finish_heaps();
+extern "C" void petari_probe_init_vi();
+extern "C" unsigned petari_probe_wait_vi();
+extern "C" void petari_shutdown_vi_renderer();
 
 static void logMessage(AuroraLogLevel level, const char* module, const char* message, unsigned int length) {
     std::fprintf(stderr, "[%s] %.*s\n", module, static_cast<int>(length), message);
@@ -17,15 +30,24 @@ static void logMessage(AuroraLogLevel level, const char* module, const char* mes
 
 int main(int argc, char** argv) {
     unsigned frameLimit = 0;
-    if (argc == 3 && std::strcmp(argv[1], "--frames") == 0) {
-        char* end;
-        const auto value = std::strtoul(argv[2], &end, 10);
-        if (*end || value == 0 || value > 100000) return 2;
-        frameLimit = static_cast<unsigned>(value);
-    } else if (argc != 1) {
-        std::fprintf(stderr, "Usage: petari_gx_probe [--frames COUNT]\n");
-        return 2;
+    const char* modelPath = nullptr;
+    bool readbackCheck = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+            char* end;
+            const auto value = std::strtoul(argv[++i], &end, 10);
+            if (*end || value == 0 || value > 100000) return 2;
+            frameLimit = static_cast<unsigned>(value);
+        } else if (std::strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
+            modelPath = argv[++i];
+        } else if (std::strcmp(argv[i], "--readback-check") == 0) {
+            readbackCheck = true;
+        } else {
+            std::fprintf(stderr, "Usage: petari_gx_probe [--frames COUNT] [--model ARCHIVE] [--readback-check]\n");
+            return 2;
+        }
     }
+    petari_probe_disable_window_restoration();
     const auto statePath = (std::filesystem::current_path() / "build/gx-probe-state").string();
     std::filesystem::create_directories(statePath);
     AuroraConfig config{};
@@ -45,47 +67,48 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (frameLimit) petari_probe_start_watchdog();
+    petari_probe_init_vi();
+    petari_probe_init_heaps();
+    std::fprintf(stderr, "Probe: game heaps ready\n");
+    if (modelPath && !petari_probe_load_model(modelPath)) {
+        std::fprintf(stderr, "Model initialization failed\n");
+        petari_probe_stop_watchdog();
+        petari_shutdown_vi_renderer();
+        aurora_shutdown();
+        petari_probe_finish_heaps();
+        return 1;
+    }
+    unsigned retraces = 0;
     unsigned frames = 0;
     bool exiting = false;
     while (!exiting && (!frameLimit || frames < frameLimit)) {
+        if (!frames) std::fprintf(stderr, "Probe: update\n");
         for (const AuroraEvent* event = aurora_update(); event && event->type != AURORA_NONE; ++event)
             if (event->type == AURORA_EXIT) exiting = true;
+        if (!frames) std::fprintf(stderr, "Probe: begin frame\n");
         if (exiting || !aurora_begin_frame()) continue;
 
-        GXSetCopyClear(GXColor{12, 18, 32, 255}, GX_MAX_Z24);
-        GXSetViewport(0, 0, 640, 480, 0, 1);
-        GXSetScissor(0, 0, 640, 480);
-        GXSetCullMode(GX_CULL_NONE);
-        GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
-        GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
-        GXSetColorUpdate(GX_TRUE);
-        GXSetAlphaUpdate(GX_TRUE);
-        GXSetNumChans(1);
-        GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
-        GXSetNumTexGens(0);
-        GXSetNumTevStages(1);
-        GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
-        GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
-        const Mtx44 projection = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, -0.1f, -1}, {0, 0, 0, 1}};
-        GXSetProjection(projection, GX_ORTHOGRAPHIC);
-        Mtx model;
-        petari_probe_matrix(frames, model);
-        GXLoadPosMtxImm(model, GX_PNMTX0);
-        GXSetCurrentMtx(GX_PNMTX0);
-        GXClearVtxDesc();
-        GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
-        GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
-        GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
-        GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
-        GXBegin(GX_TRIANGLES, GX_VTXFMT0, 3);
-        GXPosition3f32(0, 0.65f, -1); GXColor4u8(255, 190, 50, 255);
-        GXPosition3f32(-0.65f, -0.55f, -1); GXColor4u8(80, 170, 255, 255);
-        GXPosition3f32(0.65f, -0.55f, -1); GXColor4u8(245, 100, 150, 255);
-        GXEnd();
+        if (!frames) std::fprintf(stderr, "Probe: wait VI\n");
+        retraces = petari_probe_wait_vi();
+        if (!frames) std::fprintf(stderr, "Probe: draw\n");
+        if (modelPath) petari_probe_draw_model(frames);
+        else petari_probe_draw(frames);
+        if (readbackCheck && !petari_probe_check_readback(frames)) std::abort();
+        if (readbackCheck && frames == 0 && !petari_probe_check_sync()) std::abort();
+        if (!frames) std::fprintf(stderr, "Probe: end frame\n");
         aurora_end_frame();
         ++frames;
+        petari_probe_watchdog_progress();
+        petari_probe_check_heap(frames);
+        if (frames % 60 == 0) std::fprintf(stderr, "Probe: %u frames, scene heap intact\n", frames);
     }
+    const bool drewGeometry = frames && petari_probe_check_draws();
+    petari_probe_stop_watchdog();
+    petari_shutdown_vi_renderer();
     aurora_shutdown();
-    std::printf("Rendered %u frames through native GX/Metal using Petari's quaternion math.\n", frames);
-    return frameLimit && frames < frameLimit ? 1 : 0;
+    petari_probe_finish_heaps();
+    std::printf("Native VI retraces: %u.\n", retraces);
+    std::printf("Rendered %u frames through native GX/Metal (%s).\n", frames, modelPath ? "J3D model" : "quaternion triangle");
+    return !drewGeometry || (frameLimit && frames < frameLimit) ? 1 : 0;
 }

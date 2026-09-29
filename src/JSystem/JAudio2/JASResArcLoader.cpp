@@ -31,7 +31,7 @@ JASResArcLoader::TLoadResInfo::TLoadResInfo(JKRArchive* archive, u16 id, void* b
     : mArchive(archive), mResID(id), mBuffer(buffer), mBufferSize(size), mCallback(nullptr), mCallbackArg(0), mMsgQueue(nullptr) {
 }
 
-int JASResArcLoader::loadResourceAsync(JKRArchive* archive, u16 id, u8* buffer, u32 size, LoadCallback callback, u32 callbackArg) {
+int JASResArcLoader::loadResourceAsync(JKRArchive* archive, u16 id, u8* buffer, u32 size, LoadCallback callback, uintptr_t callbackArg) {
     TLoadResInfo args(archive, id, buffer, size);
     args.mCallback = callback;
     args.mCallbackArg = callbackArg;

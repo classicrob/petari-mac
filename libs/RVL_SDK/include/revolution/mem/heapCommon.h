@@ -67,12 +67,22 @@ static inline void FillAllocMemory(MEMiHeapHead* pHeapHd, void* address, u32 siz
     }
 }
 
+#ifdef PETARI_NATIVE
+// Callers only use the sign; a 64-bit pointer difference does not fit in int.
+static inline int ComparePtr(const void* a, const void* b) {
+    const u8* wa = (const u8*)a;
+    const u8* wb = (const u8*)b;
+
+    return wa < wb ? -1 : (wa > wb ? 1 : 0);
+}
+#else
 static inline int ComparePtr(const void* a, const void* b) {
     const u8* wa = (const u8*)a;
     const u8* wb = (const u8*)b;
 
     return wa - wb;
 }
+#endif
 
 #define RoundUp(value, alignment) (((value) + ((alignment) - 1)) & ~((alignment) - 1))
 

@@ -30,6 +30,10 @@ inline f32 J3DCalcZValue(__REGISTER MtxPtr m, __REGISTER Vec v) {
     // clang-format on
 
     return out;
+#else
+    // Same pairing as the paired-single sequence: (x, y) products in one lane pair,
+    // then z and the translation are added before the final horizontal sum.
+    return (m[2][0] * v.x + v.z * m[2][2]) + (m[2][1] * v.y + m[2][3]);
 #endif
 }
 

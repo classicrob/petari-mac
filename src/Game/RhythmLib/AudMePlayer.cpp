@@ -7,6 +7,9 @@
 #include "Game/RhythmLib/AudMePlayer.hpp"
 #include "Game/Util/MathUtil.hpp"
 #include <JSystem/JAudio2/JASCriticalSection.hpp>
+#ifdef PETARI_NATIVE
+#include <petari/endian.hpp>
+#endif
 
 void AudMeHandle::releaseMe() {
     if (isMeAttached()) {
@@ -341,8 +344,13 @@ s32 AudMeMgr::getSeqStartPos(u32 meId) {
         return -1;
     }
 
+#ifdef PETARI_NATIVE
+    const BigEndianValue< s32 >* pStartPos = mMeSeq->mSeqStartPos;
+    if (meId >= static_cast< u32 >(static_cast< s32 >(mMeSeq->mNumEntries))) {
+#else
     s32* pStartPos = mMeSeq->mSeqStartPos;
     if (meId >= mMeSeq->mNumEntries) {
+#endif
         return -1;
     }
 
@@ -376,6 +384,28 @@ void AudMeMgr::setOuterPlayingParam(s32 meId, AudMe* pMe) {
     pMe->setOuterPlayingParams(vol, f2, f3, params->mPriority, params->_4);
 }
 
+#ifdef PETARI_NATIVE
+// Resource layout (big-endian): s32 entry count, s32 entry offset, s32 name-offset table
+// offset; the name table holds s32 offsets from the resource start. Names are resolved
+// into a host pointer table instead of being relocated in place.
+void AudMePlayingParamsHolder::setResource(void* pRes) {
+    u8* res = static_cast< u8* >(pRes);
+    s32 numEntries = PetariNative::readU32BE(res);
+    u32 entryOff = PetariNative::readU32BE(res + 4);
+    u32 namesOff = PetariNative::readU32BE(res + 8);
+
+    mNumEntries = numEntries;
+    mParams = reinterpret_cast< AudMePlayingParams* >(res + entryOff);
+
+    const char** names = new const char*[numEntries];
+    for (s32 i = 0; i < numEntries; i++) {
+        names[i] = reinterpret_cast< const char* >(res + PetariNative::readU32BE(res + namesOff + i * 4));
+    }
+
+    delete[] mNames;
+    mNames = names;
+}
+#else
 void AudMePlayingParamsHolder::setResource(void* pRes) {
     s32* cursor = (s32*)pRes;
 
@@ -394,3 +424,4 @@ void AudMePlayingParamsHolder::setResource(void* pRes) {
 
     mNames = (const char**)offsets;
 }
+#endif

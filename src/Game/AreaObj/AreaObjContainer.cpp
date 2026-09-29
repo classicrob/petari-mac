@@ -8,6 +8,9 @@
 #include "Game/AreaObj/WaterArea.hpp"
 #include "Game/Scene/SceneObjHolder.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 #include <cstring>
 
 namespace {

@@ -1,7 +1,11 @@
 #ifndef RVL_SDK_NWC24_TYPES_H
 #define RVL_SDK_NWC24_TYPES_H
 #include "revolution/types.h"
+#if defined(PETARI_NATIVE) && !defined(__cplusplus)
+#include <stdlib.h>
+#else
 #include <cstdlib>
+#endif
 
 #include "revolution/nand.h"
 #include "revolution/vf.h"

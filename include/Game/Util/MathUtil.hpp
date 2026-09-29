@@ -7,6 +7,17 @@
 #include <JSystem/JMath/JMATrigonometric.hpp>
 #include <revolution/gx.h>
 #include <revolution/types.h>
+#ifdef PETARI_NATIVE
+#include "Game/Util/NativeOverload.hpp"
+
+// MSL <cmath> extensions used by game code (MSL's M_PI is a float literal).
+#ifndef DEG_TO_RAD
+#define DEG_TO_RAD(degrees) (degrees * (3.14159265358979323846f / 180.0f))
+#endif
+#ifndef RAD_TO_DEG
+#define RAD_TO_DEG(radians) (radians * (180.0f / 3.14159265358979323846f))
+#endif
+#endif
 
 namespace MR {
     /// @brief Initializes the precomputed arccosine table.
@@ -32,6 +43,13 @@ namespace MR {
     /// @param max The exclusive maximum integer.
     /// @return The pseudorandom integer.
     s32 getRandom(s32 min, s32 max);
+
+#ifdef PETARI_NATIVE
+    template < typename A, typename B, PETARI_WII_LONG_ARGS(A, B) >
+    inline s32 getRandom(A min, B max) {
+        return getRandom(static_cast< s32 >(min), static_cast< s32 >(max));
+    }
+#endif
 
     /// @brief Computes the next pseudorandom floating-point number within the half-open interval `[0.0f, 360.0f)`.
     /// @return The pseudorandom number of degrees.
@@ -589,6 +607,13 @@ namespace MR {
         return ret;
     }
 
+#ifdef PETARI_NATIVE
+    template < typename A, typename B, typename C, PETARI_WII_LONG_ARGS(A, B, C) >
+    inline s32 clamp(A x, B min, C max) {
+        return clamp(static_cast< s32 >(x), static_cast< s32 >(min), static_cast< s32 >(max));
+    }
+#endif
+
     /// @brief Restricts a number to the unit interval.
     /// @param[in,out] pX A pointer to the number to evaluate and initialize.
     inline void clamp01(f32* pX) {
@@ -677,8 +702,24 @@ namespace MR {
     }
 
 #else
-    f32 frsqrte(f32);
-    f32 fastSqrtf(f32);
+    // Native versions of the inline asm above. __frsqrte is the native reciprocal
+    // square-root estimate (native/src/intrinsics.cpp); the Newton step is unchanged.
+    inline f32 frsqrte(f32 x) {
+        return __frsqrte(x) * x;
+    }
+
+    inline f32 fastSqrtf(f32 x) {
+        if (x > 0.0f) {
+            f32 recip = __frsqrte(x);
+            f32 v = recip * x;
+            recip = -(v * recip - 3.0f);
+            recip = (recip * v);
+            recip *= 0.5f;
+            return recip;
+        }
+
+        return x;
+    }
 #endif
 
     template < typename T >

@@ -27,6 +27,16 @@ struct J3DTransformInfo {
         mTranslate.z = b.mTranslate.z;
         return *this;
     }
+#else
+    // Matches the Wii copy: _12 is not assigned.
+    inline J3DTransformInfo& operator=(const J3DTransformInfo& b) {
+        mScale = b.mScale;
+        mRotation.x = b.mRotation.x;
+        mRotation.y = b.mRotation.y;
+        mRotation.z = b.mRotation.z;
+        mTranslate = b.mTranslate;
+        return *this;
+    }
 #endif
 };
 

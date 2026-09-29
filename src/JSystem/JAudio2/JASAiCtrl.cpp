@@ -200,7 +200,7 @@ void JASDriver::finishDSPFrame() {
     JASAudioThread::setDSPSyncCount(getSubFrames());
     JASProbe::start(7, "DSP-MAIN");
     u32 r27 = getFrameSamples();
-    JASDsp::syncFrame(getSubFrames(), u32(sDspDacBuffer[sDspDacWriteBuffer]), u32(sDspDacBuffer[sDspDacWriteBuffer] + r27));
+    JASDsp::syncFrame(getSubFrames(), JASDspAddr(sDspDacBuffer[sDspDacWriteBuffer]), JASDspAddr(sDspDacBuffer[sDspDacWriteBuffer] + r27));
     sDspStatus = 1;
     updateDSP();
     if (sDspDacCallback) {

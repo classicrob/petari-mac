@@ -1,6 +1,17 @@
 #include "RVLFaceLibInternal.h"
+#ifdef PETARI_NATIVE
+#include "rfl_native.h"
+#endif
+#if defined(PETARI_NATIVE)
+#include <stddef.h>
+#else
 #include <cstddef>
+#endif
+#if defined(PETARI_NATIVE)
+#include <stdio.h>
+#else
 #include <cstdio>
+#endif
 #include <revolution/gx/GXVert.h>
 
 #define NUM_VTX_POS(size) ((size) / VTX_POS_SIZE)
@@ -85,7 +96,7 @@ static const GXColor cFavoriteColor[RFLFavoriteColor_Max] = {
 
 static const GXColor cWhite = {255, 255, 255, 255};
 
-static void RFLSetCoordinate(RFLCoordinateType u, RFLCoordinateType f) {
+RFL_HEADER_STATIC void RFLSetCoordinate(RFLCoordinateType u, RFLCoordinateType f) {
     RFLCoordinateType r;
 
     union {
@@ -139,7 +150,7 @@ static void RFLSetCoordinate(RFLCoordinateType u, RFLCoordinateType f) {
     coordinateData.rRev = (r & RFLCoordinateType_RevMask) != 0;
 }
 
-static u32 RFLiGetExpressionNum(u32 exprFlags) {
+RFL_HEADER_STATIC u32 RFLiGetExpressionNum(u32 exprFlags) {
     int i;
     u32 num = 0;
 
@@ -263,7 +274,7 @@ void RFLSetExpression(RFLCharModel* model, RFLExpression expr) {
     imodel->expression = expr;
 }
 
-static RFLExpression RFLGetExpression(const RFLCharModel* model) {
+RFL_HEADER_STATIC RFLExpression RFLGetExpression(const RFLCharModel* model) {
     RFLiCharModel* imodel = (RFLiCharModel*)model;
     return imodel->expression;
 }
@@ -369,16 +380,16 @@ void RFLDrawOpaCore(const RFLCharModel* model, const RFLDrawCoreSetting* setting
 
     if (res->beardDlSize > 0) {
         GXSetTevKColor(setting->tevKColorID, cBeardColor[res->beardColor]);
-        GXSetArray(GX_VA_POS, res->beardVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->beardVtxNrm, 6);
+        GXSETARRAY(GX_VA_POS, res->beardVtxPos, sizeof(res->beardVtxPos), 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->beardVtxNrm, sizeof(res->beardVtxNrm), 6, 1);
         GXCallDisplayList(res->beardDl, res->beardDlSize);
     }
 
     GXSetTevKColor(setting->tevKColorID, cFacelineColor[res->facelineColor]);
 
     if (res->noseDlSize > 0) {
-        GXSetArray(GX_VA_POS, res->noseVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->noseVtxNrm, 6);
+        GXSETARRAY(GX_VA_POS, res->noseVtxPos, sizeof(res->noseVtxPos), 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->noseVtxNrm, sizeof(res->noseVtxNrm), 6, 1);
         GXCallDisplayList(res->noseDl, res->noseDlSize);
     }
 
@@ -387,15 +398,15 @@ void RFLDrawOpaCore(const RFLCharModel* model, const RFLDrawCoreSetting* setting
     }
 
     if (res->foreheadDlSize > 0) {
-        GXSetArray(GX_VA_POS, res->foreheadVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->foreheadVtxNrm, 6);
+        GXSETARRAY(GX_VA_POS, res->foreheadVtxPos, (const u8*)(res->capVtxPos + sizeof(res->capVtxPos) / sizeof(s16)) - (const u8*)res->foreheadVtxPos, 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->foreheadVtxNrm, (const u8*)(res->capVtxNrm + sizeof(res->capVtxNrm) / sizeof(s16)) - (const u8*)res->foreheadVtxNrm, 6, 1);
         GXCallDisplayList(res->foreheadDl, res->foreheadDlSize);
     }
 
     if (res->hairDlSize > 0) {
         GXSetTevKColor(setting->tevKColorID, cHairColor[res->hairColor]);
-        GXSetArray(GX_VA_POS, res->hairVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->hairVtxNrm, 6);
+        GXSETARRAY(GX_VA_POS, res->hairVtxPos, (const u8*)(res->capVtxPos + sizeof(res->capVtxPos) / sizeof(s16)) - (const u8*)res->hairVtxPos, 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->hairVtxNrm, (const u8*)(res->capVtxNrm + sizeof(res->capVtxNrm) / sizeof(s16)) - (const u8*)res->hairVtxNrm, 6, 1);
         GXCallDisplayList(res->hairDl, res->hairDlSize);
     }
 
@@ -409,9 +420,9 @@ void RFLDrawOpaCore(const RFLCharModel* model, const RFLDrawCoreSetting* setting
         GXSetTevKColor(setting->tevKColorID, cFavoriteColor[res->favoriteColor]);
 
         GXLoadTexObj(&res->capTexObj, setting->texMapID);
-        GXSetArray(GX_VA_POS, res->capVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->capVtxNrm, 6);
-        GXSetArray(GX_VA_TEX0, res->capVtxTxc, 4);
+        GXSETARRAY(GX_VA_POS, res->capVtxPos, sizeof(res->capVtxPos), 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->capVtxNrm, sizeof(res->capVtxNrm), 6, 1);
+        GXSETARRAY(GX_VA_TEX0, res->capVtxTxc, sizeof(res->capVtxTxc), 4, 1);
         GXCallDisplayList(res->capDl, res->capDlSize);
 
         GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, 1, setting->tevOutRegID);
@@ -426,9 +437,9 @@ void RFLDrawOpaCore(const RFLCharModel* model, const RFLDrawCoreSetting* setting
     }
 
     GXLoadTexObj(&res->faceTexObj, setting->texMapID);
-    GXSetArray(GX_VA_POS, res->faceVtxPos, 6);
-    GXSetArray(GX_VA_NRM, res->faceVtxNrm, 6);
-    GXSetArray(GX_VA_TEX0, res->faceVtxTxc, 4);
+    GXSETARRAY(GX_VA_POS, res->faceVtxPos, sizeof(res->faceVtxPos), 6, 1);
+    GXSETARRAY(GX_VA_NRM, res->faceVtxNrm, sizeof(res->faceVtxNrm), 6, 1);
+    GXSETARRAY(GX_VA_TEX0, res->faceVtxTxc, sizeof(res->faceVtxTxc), 4, 1);
     GXCallDisplayList(res->faceDl, res->faceDlSize);
 }
 
@@ -449,17 +460,17 @@ void RFLDrawXluCore(const RFLCharModel* model, const RFLDrawCoreSetting* setting
     GXSetCullMode(setting->reverseCulling ? GX_CULL_FRONT : GX_CULL_BACK);
 
     GXLoadTexObj(imodel->maskTexObj[imodel->expression], setting->texMapID);
-    GXSetArray(GX_VA_POS, res->maskVtxPos, 6);
-    GXSetArray(GX_VA_NRM, res->maskVtxNrm, 6);
-    GXSetArray(GX_VA_TEX0, res->maskVtxTxc, 4);
+    GXSETARRAY(GX_VA_POS, res->maskVtxPos, sizeof(res->maskVtxPos), 6, 1);
+    GXSETARRAY(GX_VA_NRM, res->maskVtxNrm, sizeof(res->maskVtxNrm), 6, 1);
+    GXSETARRAY(GX_VA_TEX0, res->maskVtxTxc, sizeof(res->maskVtxTxc), 4, 1);
     GXCallDisplayList(res->maskDl, res->maskDlSize);
 
     if (res->noselineDlSize > 0) {
         GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO);
         GXLoadTexObj(&res->noseTexObj, setting->texMapID);
-        GXSetArray(GX_VA_POS, res->noselineVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->noselineVtxNrm, 6);
-        GXSetArray(GX_VA_TEX0, res->noselineVtxTxc, 4);
+        GXSETARRAY(GX_VA_POS, res->noselineVtxPos, sizeof(res->noselineVtxPos), 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->noselineVtxNrm, sizeof(res->noselineVtxNrm), 6, 1);
+        GXSETARRAY(GX_VA_TEX0, res->noselineVtxTxc, sizeof(res->noselineVtxTxc), 4, 1);
         GXCallDisplayList(res->noselineDl, res->noselineDlSize);
     }
 
@@ -468,9 +479,9 @@ void RFLDrawXluCore(const RFLCharModel* model, const RFLDrawCoreSetting* setting
         GXSetCullMode(GX_CULL_NONE);
         GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_KONST, GX_CC_TEXC, GX_CC_ZERO);
         GXLoadTexObj(&res->glassesTexObj, setting->texMapID);
-        GXSetArray(GX_VA_POS, res->glassesVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->glassesVtxNrm, 6);
-        GXSetArray(GX_VA_TEX0, res->glassesVtxTxc, 4);
+        GXSETARRAY(GX_VA_POS, res->glassesVtxPos, sizeof(res->glassesVtxPos), 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->glassesVtxNrm, sizeof(res->glassesVtxNrm), 6, 1);
+        GXSETARRAY(GX_VA_TEX0, res->glassesVtxTxc, sizeof(res->glassesVtxTxc), 4, 1);
         GXCallDisplayList(res->glassesDl, res->glassesDlSize);
     }
 }
@@ -773,6 +784,11 @@ void RFLiInitShapeRes(RFLiShapeRes* shape) {
     u32 fileSize = RFLiGetShapeSize(shape->part, shape->file);
     res = RFLiAlloc32(fileSize);
     RFLiLoadShape(shape->part, shape->file, res);
+#ifdef PETARI_NATIVE
+    // Vertex data is big-endian in RFL_Res.dat; the parser below reads host
+    // values. The resource was validated by RFLInitResAsync.
+    RFLiNativeShapeToHost(res, fileSize);
+#endif
 
     ptr8 = (u8*)res;
     ptr8 += sizeof(u32);
@@ -965,13 +981,13 @@ void RFLiInitTexRes(GXTexObj* texObj, RFLiPartsShpTex part, u16 file, void* buff
     RFLiFree(tex);
 }
 
-static void RFLiTransformCoordinate(s16* to, const s16* from) {
+RFL_HEADER_STATIC void RFLiTransformCoordinate(s16* to, const s16* from) {
     to[coordinateData.rOff] = coordinateData.rRev ? -from[0] : from[0];
     to[coordinateData.uOff] = coordinateData.uRev ? -from[1] : from[1];
     to[coordinateData.fOff] = coordinateData.fRev ? -from[2] : from[2];
 }
 
-static void RFLDrawShape(const RFLCharModel* model) {
+RFL_HEADER_STATIC void RFLDrawShape(const RFLCharModel* model) {
     GXCullMode cullMode;
     RFLiCharModel* imodel = (RFLiCharModel*)model;
     RFLiCharModelRes* res = imodel->res;
@@ -988,14 +1004,14 @@ static void RFLDrawShape(const RFLCharModel* model) {
     GXSetCurrentMtx(0);
 
     if (res->beardDlSize > 0) {
-        GXSetArray(GX_VA_POS, res->beardVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->beardVtxNrm, 6);
+        GXSETARRAY(GX_VA_POS, res->beardVtxPos, sizeof(res->beardVtxPos), 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->beardVtxNrm, sizeof(res->beardVtxNrm), 6, 1);
         GXCallDisplayList(res->beardDl, res->beardDlSize);
     }
 
     if (res->noseDlSize > 0) {
-        GXSetArray(GX_VA_POS, res->noseVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->noseVtxNrm, 6);
+        GXSETARRAY(GX_VA_POS, res->noseVtxPos, sizeof(res->noseVtxPos), 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->noseVtxNrm, sizeof(res->noseVtxNrm), 6, 1);
         GXCallDisplayList(res->noseDl, res->noseDlSize);
     }
 
@@ -1012,22 +1028,22 @@ static void RFLDrawShape(const RFLCharModel* model) {
     }
 
     if (res->foreheadDlSize > 0) {
-        GXSetArray(GX_VA_POS, res->foreheadVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->foreheadVtxNrm, 6);
+        GXSETARRAY(GX_VA_POS, res->foreheadVtxPos, (const u8*)(res->capVtxPos + sizeof(res->capVtxPos) / sizeof(s16)) - (const u8*)res->foreheadVtxPos, 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->foreheadVtxNrm, (const u8*)(res->capVtxNrm + sizeof(res->capVtxNrm) / sizeof(s16)) - (const u8*)res->foreheadVtxNrm, 6, 1);
         GXCallDisplayList(res->foreheadDl, res->foreheadDlSize);
     }
 
     if (res->hairDlSize > 0) {
-        GXSetArray(GX_VA_POS, res->hairVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->hairVtxNrm, 6);
+        GXSETARRAY(GX_VA_POS, res->hairVtxPos, (const u8*)(res->capVtxPos + sizeof(res->capVtxPos) / sizeof(s16)) - (const u8*)res->hairVtxPos, 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->hairVtxNrm, (const u8*)(res->capVtxNrm + sizeof(res->capVtxNrm) / sizeof(s16)) - (const u8*)res->hairVtxNrm, 6, 1);
         GXCallDisplayList(res->hairDl, res->hairDlSize);
     }
 
     GXSetVtxDesc(GX_VA_TEX0, GX_VA_TEX1MTXIDX);
     if (res->capDlSize > 0) {
-        GXSetArray(GX_VA_POS, res->capVtxPos, 6);
-        GXSetArray(GX_VA_NRM, res->capVtxNrm, 6);
-        GXSetArray(GX_VA_TEX0, res->capVtxTxc, 4);
+        GXSETARRAY(GX_VA_POS, res->capVtxPos, sizeof(res->capVtxPos), 6, 1);
+        GXSETARRAY(GX_VA_NRM, res->capVtxNrm, sizeof(res->capVtxNrm), 6, 1);
+        GXSETARRAY(GX_VA_TEX0, res->capVtxTxc, sizeof(res->capVtxTxc), 4, 1);
         GXCallDisplayList(res->capDl, res->capDlSize);
     }
 
@@ -1042,9 +1058,9 @@ static void RFLDrawShape(const RFLCharModel* model) {
         }
     }
 
-    GXSetArray(GX_VA_POS, res->faceVtxPos, 6);
-    GXSetArray(GX_VA_NRM, res->faceVtxNrm, 6);
-    GXSetArray(GX_VA_TEX0, res->faceVtxTxc, 4);
+    GXSETARRAY(GX_VA_POS, res->faceVtxPos, sizeof(res->faceVtxPos), 6, 1);
+    GXSETARRAY(GX_VA_NRM, res->faceVtxNrm, sizeof(res->faceVtxNrm), 6, 1);
+    GXSETARRAY(GX_VA_TEX0, res->faceVtxTxc, sizeof(res->faceVtxTxc), 4, 1);
     GXCallDisplayList(res->faceDl, res->faceDlSize);
 }
 

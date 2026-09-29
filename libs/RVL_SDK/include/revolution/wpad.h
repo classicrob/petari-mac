@@ -414,6 +414,7 @@ s32 WPADControlDpd(s32 chan, u32 command, WPADCallback callback);
 u32 WPADGetDataFormat(s32 chan);
 s32 WPADSetDataFormat(s32 chan, u32 fmt);
 void WPADRead(s32 chan, void* status);
+s32 WPADReadFaceData(s32 chan, void* dst, u32 size, u32 src, WPADCallback callback);
 void WPADSetAutoSleepTime(u8);
 u8 WPADGetSensorBarPosition(void);
 s32 WPADProbe(s32 chan, u32* type);

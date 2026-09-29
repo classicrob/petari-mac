@@ -10,6 +10,7 @@
 #pragma inline_max_size(250)
 #include <revolution/os.h>
 #include <revolution/os/OSModule.h>
+#include <stdint.h>
 
 OSMessageQueue JUTException::sMessageQueue = {0};
 const char* JUTException::sCpuExpName[] = {
@@ -188,10 +189,16 @@ void JUTException::panic_f(const char* file, int line, const char* format, ...) 
     va_list args;
     va_start(args, format);
     panic_f_va(file, line, format, args);
-    va_end();
+    va_end(args);
 }
 
+// Reads the IEEE sign from the most significant byte.
+#ifdef PETARI_NATIVE
+#include <math.h>
+#define __signbit(x) signbit(x)
+#else
 #define __signbit(x) ((*reinterpret_cast< unsigned char* >(&(x))) & 0x80)
+#endif
 
 void JUTException::showFloatSub(int index, f32 value) {
     if (isnan(value)) {
@@ -669,8 +676,8 @@ void JUTException::createFB() {
     void* end = OSGetArenaHi();
     u32 size = (static_cast< u16 >(ALIGN_NEXT(renderMode->fbWidth, 16)) * renderMode->xfbHeight) * 2;
 
-    void* begin = reinterpret_cast< void* >(ALIGN_PREV(reinterpret_cast< u32 >(end) - size, 32));
-    void* object = reinterpret_cast< void* >(ALIGN_PREV(reinterpret_cast< u32 >(begin) - sizeof(JUTExternalFB), 32));
+    void* begin = reinterpret_cast< void* >(ALIGN_PREV(reinterpret_cast< uintptr_t >(end) - size, 32));
+    void* object = reinterpret_cast< void* >(ALIGN_PREV(reinterpret_cast< uintptr_t >(begin) - sizeof(JUTExternalFB), 32));
     new (object) JUTExternalFB(renderMode, GX_GM_1_7, begin, size);
 
     mDirectPrint->changeFrameBuffer(begin, renderMode->fbWidth, renderMode->efbHeight);

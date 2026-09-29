@@ -85,6 +85,16 @@ int J3DPacket::entry(J3DDrawBuffer* pBuffer) {
     return 1;
 }
 
+#ifdef PETARI_NATIVE
+// The Wii link strips this: SMG has no J3DPacket vtable (.data of J3DPacket.cpp only holds the
+// J3DMatPacket, J3DShapePacket and J3DDrawPacket vtables), so only overriding draw()s run.
+// Clang emits the base vtable from the inline constructor and needs a definition; the base
+// packet draws nothing, as in other JSystem titles (e.g. Twilight Princess's empty
+// J3DPacket::draw).
+void J3DPacket::draw() {
+}
+#endif
+
 void J3DPacket::addChildPacket(J3DPacket* pPacket) {
     if (mpFirstChild == NULL) {
         mpFirstChild = pPacket;

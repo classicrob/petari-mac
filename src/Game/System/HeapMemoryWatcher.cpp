@@ -119,6 +119,22 @@ void HeapMemoryWatcher::destroyGameHeap() {
 void HeapMemoryWatcher::createRootHeap() {
     JKRExpHeap* pHeap;
     void* newHi;
+#ifdef PETARI_NATIVE
+    uintptr_t arenaHi, arenaLo;
+
+    JKRExpHeap::createRoot(1, true);
+    arenaLo = reinterpret_cast< uintptr_t >(OSGetMEM2ArenaLo());
+    arenaHi = reinterpret_cast< uintptr_t >(OSGetMEM2ArenaHi());
+    // The start of MEM2 becomes ARAM (RVL "alternate ARAM"). The audio ARAM heap
+    // occupies offsets ARGetBaseAddress() (0x4000) .. 0x4000 + 0xE00000, so reserve
+    // that whole range. The Wii reserved only 0xE00000 bytes, which let the top
+    // 16 KiB of audio ARAM overlap the GDDR3 root heap and made JKRAram's
+    // graph-memory size wrap to 0xFFFFC000; natively it is exactly 0.
+    newHi = reinterpret_cast< void* >(arenaLo + 0x4000 + 0xE00000);
+    OSSetMEM2ArenaHi(newHi);
+    JKRHeap::setAltAramStartAdr(arenaLo);
+    pHeap = JKRExpHeap::create(newHi, arenaHi - reinterpret_cast< uintptr_t >(newHi), JKRHeap::sRootHeap, true);
+#else
     u32 arenaHi, arenaLo;
 
     JKRExpHeap::createRoot(1, true);
@@ -128,6 +144,7 @@ void HeapMemoryWatcher::createRootHeap() {
     OSSetMEM2ArenaHi(newHi);
     JKRHeap::setAltAramStartAdr(arenaLo);
     pHeap = JKRExpHeap::create(newHi, arenaHi - reinterpret_cast< u32 >(newHi), JKRHeap::sRootHeap, true);
+#endif
 
     if (MR::isEqualCurrentHeap(pHeap)) {
         JKRHeap::sRootHeap->becomeCurrentHeap();
@@ -139,10 +156,22 @@ void HeapMemoryWatcher::createRootHeap() {
 void HeapMemoryWatcher::createHeaps() {
     MR::CurrentHeapRestorer heapRestorer = MR::CurrentHeapRestorer(JKRHeap::sRootHeap);
     ::createExpHeap(0x40000, JKRHeap::sRootHeap, false)->becomeSystemHeap();
+#ifdef PETARI_NATIVE
+    // Measured by the AudioLib audit: native audio objects need about 280 KB more than
+    // the Wii's 0x1E0000, which left about 250 KB free.
+    mAudSystemHeap = ::createSolidHeap(0x300000, JKRHeap::sRootHeap);
+#else
     mAudSystemHeap = ::createSolidHeap(0x1E0000, JKRHeap::sRootHeap);
+#endif
     mStationedHeapNapa = ::createExpHeap(0x900000, JKRHeap::sRootHeap, false);
     JKRHeap* pRootHeapGDDR = HeapMemoryWatcher::sRootHeapGDDR3;
+#ifdef PETARI_NATIVE
+    // Wii 0xD0 is the 0x90 heap object, one 0x10 block header and 0x30 usable bytes.
+    // The native heap object is larger; keep the same usable bytes.
+    u32 wpadHeapSize = OSRoundUp32B(WPADGetWorkMemorySize()) + ALIGN_NEXT(sizeof(JKRExpHeap), 0x10) + sizeof(JKRExpHeap::CMemBlock) + 0x30;
+#else
     u32 wpadHeapSize = OSRoundUp32B(WPADGetWorkMemorySize()) + 0xD0;
+#endif
     mWPadHeap = ::createExpHeap(wpadHeapSize, pRootHeapGDDR, false);
     mHomeButtonLayoutHeap = ::createExpHeap(0x80000, HeapMemoryWatcher::sRootHeapGDDR3, false);
     mStationedHeapGDDR = ::createExpHeap(0x1400000, HeapMemoryWatcher::sRootHeapGDDR3, false);
@@ -161,9 +190,18 @@ HeapMemoryWatcher::HeapMemoryWatcher()
     createHeaps();
 }
 
+#ifdef PETARI_NATIVE
+void HeapMemoryWatcher::memoryErrorCallback(void* heap, u32 bytes, int alignment) {
+    JKRHeap* allocator = static_cast<JKRHeap*>(heap);
+    OSPanic(__FILE__, __LINE__, "Native heap allocation failed: heap=%p, requested=%u, alignment=%d, size=%u, free=%d, max=%d",
+            heap, bytes, alignment,
+            static_cast< u32 >(static_cast< u8* >(allocator->getEndAddr()) - static_cast< u8* >(allocator->getStartAddr())), allocator->getTotalFreeSize(), allocator->getFreeSize());
+}
+#else
 void HeapMemoryWatcher::memoryErrorCallback(void*, u32, int) {
     OSPanic(__FILE__, 537, "");
 }
+#endif
 
 void HeapMemoryWatcher::checkRestMemory() {
 }

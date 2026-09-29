@@ -78,14 +78,23 @@ void* DrawSyncManager::threadFunc(void* pArg) {
         OSMessage message;
         OSReceiveMessage(&pManager->mQueue, &message, OS_MESSAGE_BLOCK);
 
-        if (reinterpret_cast< u32 >(message) >= 0x80000000) {
+#ifdef PETARI_NATIVE
+        // Messages are FIFO write pointers, draw-sync tokens (< 0x10000) or 0x10000. On
+        // macOS arm64 every user-space pointer lies above 4 GiB, so the Wii's cached-address
+        // test still separates pointers from tokens.
+        const uintptr_t messageValue = reinterpret_cast< uintptr_t >(message);
+#else
+        const u32 messageValue = reinterpret_cast< u32 >(message);
+#endif
+
+        if (messageValue >= 0x80000000) {
             pManager->mFifo->push(message);
             const bool aborted = pManager->mAborted;
 
             if (pManager->mFifo->getCount() == 2) {
                 GXEnableBreakPt(message);
             }
-        } else if (reinterpret_cast< u32 >(message) < 0x10000) {
+        } else if (messageValue < 0x10000) {
             pManager->mFifo->pop();
             const bool aborted = pManager->mAborted;
 

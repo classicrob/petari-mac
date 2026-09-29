@@ -29,7 +29,7 @@ public:
 
     u32 get24(u32 param_0) const {
 #ifdef PETARI_NATIVE
-        return Petari::readU24BE(mSeqBuff + param_0);
+        return PetariNative::readU24BE(mSeqBuff + param_0);
 #else
         return (*(u32*)(mSeqBuff + param_0 - 1)) & 0xffffff;
 #endif
@@ -53,14 +53,14 @@ public:
     }
     u16 get16(u32 param_0) const {
 #ifdef PETARI_NATIVE
-        return Petari::readU16BE(mSeqBuff + param_0);
+        return PetariNative::readU16BE(mSeqBuff + param_0);
 #else
         return *(u16*)(mSeqBuff + param_0);
 #endif
     }
     u32 get32(u32 param_0) const {
 #ifdef PETARI_NATIVE
-        return Petari::readU32BE(mSeqBuff + param_0);
+        return PetariNative::readU32BE(mSeqBuff + param_0);
 #else
         return *(u32*)(mSeqBuff + param_0);
 #endif
@@ -75,7 +75,7 @@ public:
 #ifdef __MWERKS__
         return *((u16*)mSeqCursor)++;
 #elif defined(PETARI_NATIVE)
-        const u16 value = Petari::readU16BE(mSeqCursor);
+        const u16 value = PetariNative::readU16BE(mSeqCursor);
         mSeqCursor += 2;
         return value;
 #else
@@ -86,7 +86,7 @@ public:
     }
     u32 read24() {
 #ifdef PETARI_NATIVE
-        const u32 value = Petari::readU24BE(mSeqCursor);
+        const u32 value = PetariNative::readU24BE(mSeqCursor);
         mSeqCursor += 3;
         return value;
 #else

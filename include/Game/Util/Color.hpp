@@ -17,7 +17,12 @@ public:
     }
 
     Color8(u32 color) {
+#ifdef PETARI_NATIVE
+        // Packed colors are 0xRRGGBBAA; the union's u32 view is only that on big-endian hosts.
+        set(color >> 24, color >> 16, color >> 8, color);
+#else
         mColor = color;
+#endif
     }
 
     inline operator GXColor() const {
@@ -25,7 +30,11 @@ public:
     }
 
     inline operator u32() const {
+#ifdef PETARI_NATIVE
+        return static_cast< u32 >(r) << 24 | static_cast< u32 >(g) << 16 | static_cast< u32 >(b) << 8 | a;
+#else
         return mColor;
+#endif
     }
 
     inline const Color8& operator=(const GXColor& rOther) {

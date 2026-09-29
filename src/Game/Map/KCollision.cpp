@@ -5,6 +5,10 @@
 #include "Game/Util/JMapInfo.hpp"
 #include "Game/Util/MathUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/kcl_collision.hpp>
+#include <revolution/os.h>
+#endif
 
 void KCollision_FORCE_MATCH_SDATA2() {
     (void)1.0f;
@@ -46,6 +50,32 @@ void KCollisionServer::init(void* pData, const void* pMapData) {
     }
 }
 
+#ifdef PETARI_NATIVE
+void KCollisionServer::setData(void* pData) {
+    // ResourceHolder converts .kcl resources to host order when their archive is mounted.
+    if (!isBinaryInitialized(pData)) {
+        OSPanic(__FILE__, __LINE__, "KCL resource was not converted at registration");
+    }
+
+    const u8* pBytes = static_cast< const u8* >(pData);
+    const f32* pHeader = reinterpret_cast< const f32* >(pBytes);
+    const s32* pShifts = reinterpret_cast< const s32* >(pBytes);
+    KCLFile* pFile = new KCLFile;
+    pFile->mPos = reinterpret_cast< TVec3f* >(static_cast< u8* >(pData) + PetariNative::KCL::positionOffset(pData));
+    pFile->mNorms = reinterpret_cast< TVec3f* >(static_cast< u8* >(pData) + PetariNative::KCL::normalOffset(pData));
+    pFile->mPrisms = reinterpret_cast< KC_PrismData* >(static_cast< u8* >(pData) + PetariNative::KCL::prismOffset(pData));
+    pFile->mOctree = static_cast< u8* >(pData) + PetariNative::KCL::octreeOffset(pData);
+    pFile->mThickness = pHeader[4];
+    pFile->mMin.set(pHeader[5], pHeader[6], pHeader[7]);
+    pFile->mXMask = pShifts[8];
+    pFile->mYMask = pShifts[9];
+    pFile->mZMask = pShifts[10];
+    pFile->mBlockWidthShift = pShifts[11];
+    pFile->mBlockXShift = pShifts[12];
+    pFile->mBlockXYShift = pShifts[13];
+    mFile = pFile;
+}
+#else
 void KCollisionServer::setData(void* pData) {
     mFile = reinterpret_cast< KCLFile* >(pData);
 
@@ -56,6 +86,7 @@ void KCollisionServer::setData(void* pData) {
         mFile->mOctree = reinterpret_cast< void* >(reinterpret_cast< u8* >(mFile) + mFile->mOctreeOffset);
     }
 }
+#endif
 
 bool KCollisionServer::calcFarthestVertexDistance() {
     s32 triCount = getTriangleNum();
@@ -1202,7 +1233,8 @@ edgeFinish: {
 }
 
 finish:
-    f32 distance = MR::sqrt(*pDist);
+    f32 distance;
+    distance = MR::sqrt(*pDist);
 
     if (distances[0] + distance < 0.0f) {
         *pFlag = 0;

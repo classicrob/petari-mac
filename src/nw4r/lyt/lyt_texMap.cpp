@@ -4,6 +4,11 @@
 #include <revolution/gx/GXGet.h>
 #include <revolution/gx/GXStruct.h>
 #include <revolution/tpl.h>
+#include <stdint.h>
+
+#ifdef PETARI_NATIVE
+#include <petari/endian.hpp>
+#endif
 
 namespace nw4r {
     namespace lyt {
@@ -70,11 +75,42 @@ namespace nw4r {
         }
 
         void TexMap::ReplaceImage(TPLPalette* p, u32 id) {
-            if (reinterpret_cast< u32 >(p->descriptorArray) < 0x80000000) {
+#ifdef PETARI_NATIVE
+            // TPLBind relocates file offsets into the 32-bit pointer fields of the
+            // TPL structures, which cannot hold host pointers. Read the big-endian
+            // file directly instead; it is not modified. Image and palette data
+            // stay big-endian, as GX texture formats are byte-defined.
+            const u8* file = reinterpret_cast< const u8* >(p);
+            const u32 imageNum = PetariNative::readU32BE(file + 4);
+            if (id >= imageNum) {
+                OSPanic(__FILE__, __LINE__, "TexMap::ReplaceImage: TPL image %u of %u", id, imageNum);
+            }
+
+            const u8* entry = file + PetariNative::readU32BE(file + 8) + id * 8;
+            const u8* image = file + PetariNative::readU32BE(entry);
+            const u32 paletteOffset = PetariNative::readU32BE(entry + 4);
+
+            mImage = const_cast< u8* >(file) + PetariNative::readU32BE(image + 8);
+            SetSize(PetariNative::readU16BE(image + 2), PetariNative::readU16BE(image));
+            SetTexelFormat(GXTexFmt(PetariNative::readU32BE(image + 4)));
+
+            if (paletteOffset != 0) {
+                const u8* palette = file + paletteOffset;
+                SetPalette(const_cast< u8* >(file) + PetariNative::readU32BE(palette + 8));
+                SetPaletteFormat(GXTlutFmt(PetariNative::readU32BE(palette + 4)));
+                SetPaletteEntryNum(PetariNative::readU16BE(palette));
+            } else {
+                SetPalette(nullptr);
+                SetPaletteFormat(GXTlutFmt(0));
+                SetPaletteEntryNum(0);
+            }
+#else
+            if (reinterpret_cast< uintptr_t >(p->descriptorArray) < 0x80000000) {
                 TPLBind(p);
             }
 
             ReplaceImage(TPLGet(p, id));
+#endif
         }
     };  // namespace lyt
 };  // namespace nw4r

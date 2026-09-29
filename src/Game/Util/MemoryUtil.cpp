@@ -100,8 +100,13 @@ namespace MR {
     void copyMemory(void* pDst, const void* pSrc, u32 size) {
         u8* pDstBytes = static_cast< u8* >(pDst);
         const u8* pSrcBytes = static_cast< const u8* >(pSrc);
+#ifdef PETARI_NATIVE
+        u32 srcAlignment = reinterpret_cast< uintptr_t >(pSrc) & 3;
+        u32 dstAlignment = reinterpret_cast< uintptr_t >(pDst) & 3;
+#else
         u32 srcAlignment = reinterpret_cast< u32 >(pSrc) & 3;
         u32 dstAlignment = reinterpret_cast< u32 >(pDst) & 3;
+#endif
 
         if (srcAlignment == dstAlignment && (size & 0xF) == 0) {
             const u32* pSrcWords = reinterpret_cast< const u32* >(pSrcBytes);
@@ -155,9 +160,15 @@ namespace MR {
 
     void zeroMemory(void* pDst, u32 size) {
         u8* pDstBytes = static_cast< u8* >(pDst);
+#ifdef PETARI_NATIVE
+        u32 alignment = reinterpret_cast< uintptr_t >(pDst) & 3;
+
+        if ((reinterpret_cast< uintptr_t >(pDst) & 0x1F) == 0 && (size & 0x1F) == 0) {
+#else
         u32 alignment = reinterpret_cast< u32 >(pDst) & 3;
 
         if ((reinterpret_cast< u32 >(pDst) & 0x1F) == 0 && (size & 0x1F) == 0) {
+#endif
             DCZeroRange(pDst, size);
         } else if (alignment == 0 && (size & 0xF) == 0) {
             for (u32 count = size / 16; count != 0; count--) {

@@ -4,6 +4,14 @@
 #include "nw4r/db/mapFile.h"
 #include <va_list.h>
 
+#ifdef PETARI_NATIVE
+#include <dlfcn.h>
+#include <execinfo.h>
+#define NW4R_DB_WEAK __attribute__((weak))
+#else
+#define NW4R_DB_WEAK __declspec(weak)
+#endif
+
 namespace nw4r {
     namespace db {
         static ConsoleHandle sAssertionConsole = NULL;
@@ -18,6 +26,26 @@ namespace nw4r {
             va_end(vlist);
         }
 
+#ifdef PETARI_NATIVE
+        // Host equivalent of the PowerPC back-chain walk: print return addresses
+        // and the nearest exported symbol from the dynamic loader.
+        static void ShowStack_() {
+            Assertion_Printf_("-------------------------------- TRACE\n");
+            Assertion_Printf_("Address:            Symbol\n");
+
+            void* frames[17];
+            int count = backtrace(frames, 17);
+            for (int i = 1; i < count; i++) {
+                Dl_info info;
+                if (dladdr(frames[i], &info) && info.dli_sname != NULL) {
+                    Assertion_Printf_("%p  %s+0x%lx\n", frames[i], info.dli_sname,
+                                      static_cast< unsigned long >(static_cast< char* >(frames[i]) - static_cast< char* >(info.dli_saddr)));
+                } else {
+                    Assertion_Printf_("%p\n", frames[i]);
+                }
+            }
+        }
+#else
         static bool ShowMapInfoSubroutine_(u32 address, bool preCRFlag) {
             if (address < 0x80000000 || 0x82ffffff < address) {
                 return false;
@@ -63,13 +91,16 @@ namespace nw4r {
 
             return;
         }
+#endif
 
-        __declspec(weak) void VPanic(const char* file, int line, const char* fmt, va_list vlist, bool halt) {
+        NW4R_DB_WEAK void VPanic(const char* file, int line, const char* fmt, va_list vlist, bool halt) {
+#ifndef PETARI_NATIVE
             register u32 stackPointer;
             asm {
         mr  stackPointer, r1
             }
             stackPointer = *((u32*)stackPointer);
+#endif
             (void)OSDisableInterrupts();
             (void)OSDisableScheduler();
 
@@ -80,7 +111,11 @@ namespace nw4r {
                 (void)detail::DirectPrint_SetupFB(NULL);
             }
 
+#ifdef PETARI_NATIVE
+            ShowStack_();
+#else
             ShowStack_(stackPointer);
+#endif
 
             if (sAssertionConsole) {
                 Console_Printf(sAssertionConsole, "%s:%d Panic:", file, line);
@@ -100,7 +135,7 @@ namespace nw4r {
             }
         }
 
-        __declspec(weak) void Panic(const char* file, int line, const char* fmt, ...) {
+        NW4R_DB_WEAK void Panic(const char* file, int line, const char* fmt, ...) {
             va_list vlist;
             va_start(vlist, fmt);
             nw4r::db::VPanic(file, line, fmt, vlist, true);

@@ -12,7 +12,7 @@ void CameraAnim_FORCE_MATCH_SDATA2() {
 
 void CamAnmDataAccessor::set(void* pInfo, void* pValues) {
     mInfo = reinterpret_cast< CanmFrameInfo* >(pInfo);
-    mValues = reinterpret_cast< f32* >(pValues);
+    mValues = reinterpret_cast< CanmValue* >(pValues);
 }
 
 void CamAnmDataAccessor::getPos(TVec3f* pPos, f32 key) const {
@@ -55,7 +55,7 @@ f32 CamAnmDataAccessor::get(f32 key, u32 offset, u32 count) const {
 
 void KeyCamAnmDataAccessor::set(void* pInfo, void* pValues) {
     mInfo = reinterpret_cast< CanmKeyFrameInfo* >(pInfo);
-    mValues = reinterpret_cast< f32* >(pValues);
+    mValues = reinterpret_cast< CanmValue* >(pValues);
 }
 
 void KeyCamAnmDataAccessor::getPos(TVec3f* pPos, f32 key) const {
@@ -113,14 +113,14 @@ u32 KeyCamAnmDataAccessor::searchKeyFrameIndex(f32 key, u32 offset, u32 count, u
 
 f32 KeyCamAnmDataAccessor::get3f(f32 key, u32 offset, u32 count) const {
     u32 index = searchKeyFrameIndex(key, offset, count, 3);
-    f32* values = mValues + offset + index * 3;
+    const CanmValue* values = mValues + offset + index * 3;
 
     return calcHermite(key, values[0], values[1], values[2], values[3], values[4], values[5]);
 }
 
 f32 KeyCamAnmDataAccessor::get4f(f32 key, u32 offset, u32 count) const {
     u32 index = searchKeyFrameIndex(key, offset, count, 4);
-    f32* values = mValues + offset + index * 4;
+    const CanmValue* values = mValues + offset + index * 4;
 
     return calcHermite(key, values[0], values[1], values[3], values[4], values[5], values[6]);
 }
@@ -247,7 +247,11 @@ bool CameraAnim::loadBin(u8* pFile) {
 
     u32 valueOffset = pHeader->mValueOffset;
 
+#ifdef PETARI_NATIVE
+    mNrValues = PetariNative::readU32BE(&pEntry[valueOffset]) / sizeof(f32);
+#else
     mNrValues = *(reinterpret_cast< u32* >(&pEntry[valueOffset])) / sizeof(f32);
+#endif
 
     mFileDataAccessor->set(pEntry, pEntry + valueOffset + 4);
 

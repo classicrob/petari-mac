@@ -2,6 +2,9 @@
 
 #include <cstring>
 #include <revolution.h>
+#ifdef PETARI_NATIVE
+#include "Game/Util/BigEndian.hpp"
+#endif
 
 #define JMAP_VALUE_TYPE_LONG 0
 #define JMAP_VALUE_TYPE_STRING 1
@@ -14,6 +17,45 @@
 
 class JMapInfoIter;
 
+#ifdef PETARI_NATIVE
+template < typename T >
+using JMapBigEndian = BigEndianValue< T >;
+
+struct JMapItem {
+    /* 0x00 */ JMapBigEndian< u32 > mHash;
+    /* 0x04 */ JMapBigEndian< u32 > mMask;
+    /* 0x08 */ JMapBigEndian< u16 > mOffsData;
+    /* 0x0A */ u8 mShift;
+    /* 0x0B */ u8 mType;
+};
+
+struct JMapData {
+    /* 0x00 */ JMapBigEndian< s32 > mNumEntries;
+    /* 0x04 */ JMapBigEndian< s32 > mNumFields;
+    /* 0x08 */ JMapBigEndian< s32 > mDataOffset;
+    /* 0x0C */ JMapBigEndian< u32 > mEntrySize;
+    /* 0x10 */ const JMapItem mItems[];
+};
+
+static_assert(sizeof(JMapItem) == 0xC, "JMapItem must match the BCSV field record");
+static_assert(sizeof(JMapData) == 0x10, "JMapData must match the BCSV header");
+
+/// @brief Reads raw BCSV cell values, which are big-endian in the resource.
+inline u32 readJMapU32(const char* pValue) {
+    return PetariNative::readU32BE(pValue);
+}
+
+inline u16 readJMapU16(const char* pValue) {
+    return PetariNative::readU16BE(pValue);
+}
+
+inline f32 readJMapF32(const char* pValue) {
+    u32 bits = PetariNative::readU32BE(pValue);
+    f32 value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+#else
 struct JMapItem {
     /* 0x00 */ u32 mHash;
     /* 0x04 */ u32 mMask;
@@ -29,6 +71,7 @@ struct JMapData {
     /* 0x0C */ u32 mEntrySize;
     /* 0x10 */ const JMapItem mItems[];
 };
+#endif
 
 template < typename T >
 inline bool compareValues(const T a, const T b) {
@@ -76,13 +119,21 @@ public:
     bool getValueFast(int entryIndex, int itemIndex, f32* pValueOut) const {
         const JMapItem* pItem = &mData->mItems[itemIndex];
         const char* pValue = getEntryAddress(mData, mData->mDataOffset, entryIndex) + pItem->mOffsData;
+#ifdef PETARI_NATIVE
+        *pValueOut = readJMapF32(pValue);
+#else
         *pValueOut = *reinterpret_cast< const f32* >(pValue);
+#endif
         return true;
     }
     bool getValueFast(int entryIndex, int itemIndex, bool* pValueOut) const {
         const JMapItem* pItem = &mData->mItems[itemIndex];
         const char* pValue = getEntryAddress(mData, mData->mDataOffset, entryIndex) + pItem->mOffsData;
+#ifdef PETARI_NATIVE
+        *pValueOut = (readJMapU32(pValue) & pItem->mMask) != 0;
+#else
         *pValueOut = (*reinterpret_cast< const u32* >(pValue) & pItem->mMask) != 0;
+#endif
         return true;
     }
 

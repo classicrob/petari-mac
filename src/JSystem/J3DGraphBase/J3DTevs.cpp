@@ -5,6 +5,9 @@
 #include "JSystem/J3DGraphBase/J3DSys.hpp"
 #include "JSystem/J3DGraphBase/J3DTransform.hpp"
 #include <revolution/gx/GXEnum.h>
+#ifdef PETARI_NATIVE
+#include <petari/endian.hpp>
+#endif
 
 static void J3DGDLoadTexMtxImm(f32 (*)[4], u32, GXTexMtxType);
 static void J3DGDLoadPostTexMtxImm(f32 (*)[4], u32);
@@ -261,7 +264,12 @@ bool isTexNoReg(void* pDL) {
 }
 
 u16 getTexNoReg(void* pDL) {
+#ifdef PETARI_NATIVE
+    // Display lists are big-endian GX command streams.
+    u32 var_r31 = PetariNative::readU32BE((u8*)pDL + 1);
+#else
     u32 var_r31 = *(u32*)((u8*)pDL + 1);
+#endif
     return var_r31 & 0xFFFFFF;
 }
 
@@ -271,7 +279,7 @@ void loadTexNo(u32 param_0, const u16& texNo) {
     J3DSys::sTexCoordScaleTable[param_0].field_0x02 = (u16)resTIMG->mHeight;
 
     GDOverflowCheck(0x14);
-    J3DGDSetTexImgPtr(GXTexMapID(param_0), (u8*)resTIMG + resTIMG->mImageDataOffset);
+    J3DGDSetTexImgPtr(GXTexMapID(param_0), (u8*)resTIMG + JUT_RESTIMG_OFFSET(resTIMG->mImageDataOffset));
     J3DGDSetTexImgAttr(GXTexMapID(param_0), resTIMG->mWidth, resTIMG->mHeight, GXTexFmt(resTIMG->mFormat & 0x0f));
     J3DGDSetTexLookupMode(GXTexMapID(param_0), GXTexWrapMode(resTIMG->mWrapS), GXTexWrapMode(resTIMG->mWrapT), GXTexFilter(resTIMG->mMinType),
                           GXTexFilter(resTIMG->mMagType), static_cast< s8 >(resTIMG->mMinLod) * 0.125f, static_cast< s8 >(resTIMG->mMaxLod) * 0.125f,
@@ -280,7 +288,7 @@ void loadTexNo(u32 param_0, const u16& texNo) {
     if (resTIMG->mPaletteName == true) {
         GXTlutSize tlutSize = resTIMG->mPaletteNum > 16 ? GX_TLUT_256 : GX_TLUT_16;
         GDOverflowCheck(0x14);
-        J3DGDLoadTlut((u8*)resTIMG + resTIMG->mPaletteDataOffset, (param_0 << 13) + 0xf0000, tlutSize);
+        J3DGDLoadTlut((u8*)resTIMG + JUT_RESTIMG_OFFSET(resTIMG->mPaletteDataOffset), (param_0 << 13) + 0xf0000, tlutSize);
         J3DGDSetTexTlut(GXTexMapID(param_0), (param_0 << 13) + 0xf0000, GXTlutFmt(resTIMG->mPaletteFormat));
     }
 }

@@ -24,6 +24,25 @@ public:
     f32 x, y, z;
 };
 
+#ifdef PETARI_NATIVE
+// Host descriptor of a converted KCL resource (see petari/kcl_collision.hpp). The Wii build
+// relocates the resource header itself into this layout; natively the section pointers
+// cannot fit the 32-bit header slots, so the descriptor is separate from the resource.
+struct KCLFile {
+    TVec3f* mPos;
+    TVec3f* mNorms;
+    KC_PrismData* mPrisms;
+    void* mOctree;
+    f32 mThickness;
+    TVec3f mMin;
+    s32 mXMask;
+    s32 mYMask;
+    s32 mZMask;
+    s32 mBlockWidthShift;
+    s32 mBlockXShift;
+    s32 mBlockXYShift;
+};
+#else
 struct KCLFile {
     union {
         /* 0x00 */ TVec3f* mPos;
@@ -50,6 +69,7 @@ struct KCLFile {
     /* 0x30 */ s32 mBlockXShift;
     /* 0x34 */ s32 mBlockXYShift;
 };
+#endif
 
 class KCollisionServer {
 public:

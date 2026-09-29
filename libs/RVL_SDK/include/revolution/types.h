@@ -146,12 +146,18 @@ typedef int BOOL;
 /* just some common intrinsics */
 
 #ifndef __MWERKS__
+#if defined(PETARI_NATIVE) && defined(__cplusplus)
+extern "C" {
+#endif
 f32 __frsqrte(f32);
 u32 __cntlzw(u32);
 s32 __abs(s32);
 f32 __fabsf(f32);
 f64 __fabs(f64);
 void* __memcpy(void*, const void*, int);
+#if defined(PETARI_NATIVE) && defined(__cplusplus)
+}
+#endif
 #endif
 
 #endif  // TYPES_H

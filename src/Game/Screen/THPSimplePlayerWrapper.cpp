@@ -5,6 +5,10 @@
 #include <JSystem/JAudio2/JASAiCtrl.hpp>
 #include <JSystem/JKernel/JKRHeap.hpp>
 #include <cstring>
+#ifdef PETARI_NATIVE
+#include <cstdlib>
+#include <petari/endian.hpp>
+#endif
 
 static u16 VolumeTable[] = {0,     2,     8,     18,    32,    50,    73,    99,    130,   164,   203,   245,   292,   343,   398,   457,
                             520,   587,   658,   733,   812,   895,   983,   1074,  1170,  1269,  1373,  1481,  1592,  1708,  1828,  1952,
@@ -16,6 +20,9 @@ static u16 VolumeTable[] = {0,     2,     8,     18,    32,    50,    73,    99,
                             25484, 25941, 26402, 26868, 27337, 27810, 28288, 28769, 29255, 29744, 30238, 30736, 31238, 31744, 32254, 32768};
 
 static s32 WorkBuffer[16] __attribute__((aligned(32)));
+
+// Bytes per interleaved stereo sample in the mix buffers.
+#define THP_STEREO_SAMPLE_BYTES (2 * sizeof(s16))
 
 THPSimplePlayerStaticAudio THPSimplePlayerWrapper::mStaticAudioPlayer;
 THPSimplePlayerWrapper* THPSimplePlayerStaticAudio::mPlayer;
@@ -30,6 +37,25 @@ namespace NrvTHPSimplePlayerWrapper {
 };  // namespace NrvTHPSimplePlayerWrapper
 
 namespace {
+#ifdef PETARI_NATIVE
+    PetariNative::Movie::ThpHeader toMovieHeader(const THPHeader& rHeader) {
+        PetariNative::Movie::ThpHeader header;
+        memcpy(header.magic, rHeader.magic, sizeof(header.magic));
+        header.version = rHeader.version;
+        header.bufSize = rHeader.bufSize;
+        header.audioMaxSamples = rHeader.audioMaxSamples;
+        header.frameRate = rHeader.frameRate;
+        header.numFrames = rHeader.numFrames;
+        header.firstFrameSize = rHeader.firstFrameSize;
+        header.movieDataSize = rHeader.movieDataSize;
+        header.compInfoDataOffsets = rHeader.compInfoDataOffsets;
+        header.offsetDataOffsets = rHeader.offsetDataOffsets;
+        header.movieDataOffsets = rHeader.movieDataOffsets;
+        header.finalFrameDataOffsets = rHeader.finalFrameDataOffsets;
+        return header;
+    }
+#endif
+
     void dvdCallBackFunc(s32 a1, DVDFileInfo* pFileInfo) {
         THPSimplePlayerWrapper* player = (THPSimplePlayerWrapper*)pFileInfo->cb.userData;
         player->dvdCallBack(a1);
@@ -73,15 +99,23 @@ THPSimplePlayerWrapper::THPSimplePlayerWrapper(const char* pName) : NerveExecuto
     MR::zeroMemory(mSoundBuffer[1], 0x8C0);
     DCFlushRange(mSoundBuffer[0], 0x8C0);
     DCFlushRange(mSoundBuffer[1], 0x8C0);
-    MR::zeroMemory(&mFileInfo, 0x3C);
-    MR::zeroMemory(&mHeader, 0x30);
-    MR::zeroMemory(&mFrameComp, 0x14);
-    MR::zeroMemory(&mVideoInfo, 0xC);
-    MR::zeroMemory(&mAudioInfo, 0x10);
-    MR::zeroMemory(mReadBuffer, 0xF0);
-    MR::zeroMemory(&mTextureSet[0], 0x10);
-    MR::zeroMemory(&mTextureSet[1], 0x10);
-    MR::zeroMemory(mAudioBuffer, 0xF0);
+    MR::zeroMemory(&mFileInfo, sizeof(mFileInfo));
+    MR::zeroMemory(&mHeader, sizeof(mHeader));
+    MR::zeroMemory(&mFrameComp, sizeof(mFrameComp));
+    MR::zeroMemory(&mVideoInfo, sizeof(mVideoInfo));
+    MR::zeroMemory(&mAudioInfo, sizeof(mAudioInfo));
+    MR::zeroMemory(mReadBuffer, sizeof(mReadBuffer));
+    MR::zeroMemory(&mTextureSet[0], sizeof(mTextureSet[0]));
+    MR::zeroMemory(&mTextureSet[1], sizeof(mTextureSet[1]));
+    MR::zeroMemory(mAudioBuffer, sizeof(mAudioBuffer));
+#ifdef PETARI_NATIVE
+    mNativeName = "";
+    MR::zeroMemory(&mNativeComponents, sizeof(mNativeComponents));
+    MR::zeroMemory(mNativeReadSize, sizeof(mNativeReadSize));
+    mNativeCompletion = 0;
+    mNativeCompletionPending = false;
+    mNativeReadIssued = false;
+#endif
     initNerve(GET_NERVE(THPSimplePlayerWrapper, HostTypeWait));
 }
 
@@ -234,12 +268,37 @@ bool THPSimplePlayerWrapper::preLoad(s32 loop) {
 
 bool THPSimplePlayerWrapper::loadStop() {
     if (mOpen && !mAudioState) {
+#ifdef PETARI_NATIVE
+        // DVD callbacks run on the drive thread. Stop further prefetch and read the
+        // in-flight state under the interrupt lock, then cancel any read still
+        // targeting the movie buffers (including a preload read) before the caller
+        // frees them.
+        BOOL level = OSDisableInterrupts();
+        mPreFetchState = 0;
+        bool inFlight = mReadProgress || mNativeReadIssued;
+        OSRestoreInterrupts(level);
+
+        if (inFlight) {
+            DVDCancel(&mFileInfo.cb);
+        }
+
+        level = OSDisableInterrupts();
+        mReadProgress = 0;
+        mNativeReadIssued = false;
+        mNativeCompletionPending = false;
+        OSRestoreInterrupts(level);
+
+        if (isPreLoading()) {
+            setNerve(GET_NERVE(THPSimplePlayerWrapper, HostTypeWait));
+        }
+#else
         mPreFetchState = 0;
 
         if (mReadProgress) {
             DVDCancel(&mFileInfo.cb);
             mReadProgress = 0;
         }
+#endif
 
         for (s32 i = 0; i < 0x14; i++) {
             mReadBuffer[i].isValid = 0;
@@ -269,9 +328,34 @@ bool THPSimplePlayerWrapper::loadStop() {
 }
 
 s32 THPSimplePlayerWrapper::decode(s32 audio) {
+#ifdef PETARI_NATIVE
+    // The drive thread publishes read buffers under the interrupt lock.
+    BOOL level = OSDisableInterrupts();
     bool isValid = mReadBuffer[mNextDecodeIndex].isValid == true;
+    OSRestoreInterrupts(level);
+#else
+    bool isValid = mReadBuffer[mNextDecodeIndex].isValid == true;
+#endif
     if (isValid) {
+#ifdef PETARI_NATIVE
+        // Same early returns as below, taken before validation so a frame waiting
+        // for audio buffer space is not re-validated on every call.
+        if (mAudioExist) {
+            if (audio < 0 || audio >= mAudioInfo.sndNumTracks) {
+                return 4;
+            }
+
+            if (mAudioBuffer[mAudioDecodeIndex].validSample != 0) {
+                return 3;
+            }
+        }
+
+        u32 compSizes[PetariNative::Movie::kThpMaxComponents];
+        nativeValidateFrame(mReadBuffer[mNextDecodeIndex].ptr, audio, compSizes);
+        u32* compSize = compSizes;
+#else
         u32* compSize = (u32*)mReadBuffer[mNextDecodeIndex].ptr + 2;
+#endif
         u8* ptr = mReadBuffer[mNextDecodeIndex].ptr + mFrameComp.numComponents * 4 + 8;
 
         if (mAudioExist) {
@@ -392,6 +476,10 @@ void THPSimplePlayerWrapper::readFrameAsync() {
             }
         }
 
+#ifdef PETARI_NATIVE
+        nativeCheckFrameRead(mCurOffset, mReadSize);
+        mNativeReadSize[mReadIndex] = mReadSize;
+#endif
         mReadProgress = 1;
         mFileInfo.cb.userData = this;
 
@@ -427,7 +515,11 @@ void THPSimplePlayerWrapper::dvdCallBack(s32 result) {
     mTotalReadFrame++;
     mReadBuffer[mReadIndex].isValid = 1;
     mCurOffset += mReadSize;
+#ifdef PETARI_NATIVE
+    mReadSize = PetariNative::readU32BE(mReadBuffer[mReadIndex].ptr);
+#else
     mReadSize = *(u32*)mReadBuffer[mReadIndex].ptr;
+#endif
     int index = mReadIndex;
     index = getNextBuffer(index);
     mReadIndex = index;
@@ -440,6 +532,12 @@ void THPSimplePlayerWrapper::dvdCallBack(s32 result) {
 }
 
 void THPSimplePlayerWrapper::readAsyncCallBack(s32 a1) {
+#ifdef PETARI_NATIVE
+    if (a1 < 0) {
+        // The original closes the file and leaves the nerve waiting forever.
+        nativeFail(a1 == -3 ? "a header or preload read was canceled" : "a header or preload read failed");
+    }
+#endif
     if (a1 < 0) {
         if (!isNerve(GET_NERVE(THPSimplePlayerWrapper, HostTypeReadHeader)) && !isNerve(GET_NERVE(THPSimplePlayerWrapper, HostTypeReadFrameComp)) &&
             !isNerve(GET_NERVE(THPSimplePlayerWrapper, HostTypeReadVideoComp)) &&
@@ -510,6 +608,13 @@ bool THPSimplePlayerWrapper::tryDvdOpen(const char* pFileName) {
         return false;
     }
 
+#ifdef PETARI_NATIVE
+    mNativeName = pFileName;
+    MR::zeroMemory(&mNativeComponents, sizeof(mNativeComponents));
+    mNativeCompletionPending = false;
+    mNativeReadIssued = false;
+#endif
+
     _C = 0;
     _9 = 0;
     return true;
@@ -535,7 +640,15 @@ void THPSimplePlayerWrapper::setupParams() {
 namespace {
     void readAsyncCallBackFunc(s32 a1, DVDFileInfo* pInfo) {
         THPSimplePlayerWrapper* player = (THPSimplePlayerWrapper*)pInfo->cb.userData;
+#ifdef PETARI_NATIVE
+        // Runs on the drive thread with interrupts disabled. The game thread
+        // applies the result in nativePollReadCompletion().
+        player->mNativeCompletion = a1;
+        player->mNativeCompletionPending = true;
+        player->mNativeReadIssued = false;
+#else
         player->readAsyncCallBack(a1);
+#endif
     }
 };  // namespace
 
@@ -545,34 +658,77 @@ void THPSimplePlayerWrapper::exeWait() {
 void THPSimplePlayerWrapper::exeReadHeader() {
     if (MR::isFirstStep(this)) {
         mFileInfo.cb.userData = this;
+#ifdef PETARI_NATIVE
+        mNativeReadIssued = true;
+#endif
         DVDReadAsyncPrio(&mFileInfo, WorkBuffer, 64, _C, ::readAsyncCallBackFunc, 2);
     }
+#ifdef PETARI_NATIVE
+    nativePollReadCompletion();
+#endif
 }
 
 void THPSimplePlayerWrapper::exeReadFrameComp() {
     if (MR::isFirstStep(this)) {
         mFileInfo.cb.userData = this;
         _C = mHeader.compInfoDataOffsets;
+#ifdef PETARI_NATIVE
+        mNativeReadIssued = true;
+#endif
         DVDReadAsyncPrio(&mFileInfo, WorkBuffer, 32, _C, ::readAsyncCallBackFunc, 2);
     }
+#ifdef PETARI_NATIVE
+    nativePollReadCompletion();
+#endif
 }
 
 void THPSimplePlayerWrapper::exeReadVideoComp() {
     if (MR::isFirstStep(this)) {
         mFileInfo.cb.userData = this;
+#ifdef PETARI_NATIVE
+        mNativeReadIssued = true;
+#endif
         DVDReadAsyncPrio(&mFileInfo, WorkBuffer, 32, _C, ::readAsyncCallBackFunc, 2);
     }
+#ifdef PETARI_NATIVE
+    nativePollReadCompletion();
+#endif
 }
 
 void THPSimplePlayerWrapper::exeReadAudioComp() {
     if (MR::isFirstStep(this)) {
         mFileInfo.cb.userData = this;
+#ifdef PETARI_NATIVE
+        mNativeReadIssued = true;
+#endif
         DVDReadAsyncPrio(&mFileInfo, WorkBuffer, 32, _C, ::readAsyncCallBackFunc, 2);
     }
+#ifdef PETARI_NATIVE
+    nativePollReadCompletion();
+#endif
 }
 
 void THPSimplePlayerWrapper::endReadHeader() {
+#ifdef PETARI_NATIVE
+    PetariNative::Movie::ThpHeader header;
+    if (const char* pError = PetariNative::Movie::parseThpHeader(WorkBuffer, 64, &header)) {
+        nativeFail(pError);
+    }
+    memcpy(mHeader.magic, header.magic, sizeof(mHeader.magic));
+    mHeader.version = header.version;
+    mHeader.bufSize = header.bufSize;
+    mHeader.audioMaxSamples = header.audioMaxSamples;
+    mHeader.frameRate = header.frameRate;
+    mHeader.numFrames = header.numFrames;
+    mHeader.firstFrameSize = header.firstFrameSize;
+    mHeader.movieDataSize = header.movieDataSize;
+    mHeader.compInfoDataOffsets = header.compInfoDataOffsets;
+    mHeader.offsetDataOffsets = header.offsetDataOffsets;
+    mHeader.movieDataOffsets = header.movieDataOffsets;
+    mHeader.finalFrameDataOffsets = header.finalFrameDataOffsets;
+#else
     memcpy(&mHeader, WorkBuffer, sizeof(mHeader));
+#endif
     if (strcmp(mHeader.magic, "THP")) {
         DVDClose(&mFileInfo);
         return;
@@ -584,28 +740,85 @@ void THPSimplePlayerWrapper::endReadHeader() {
 }
 
 void THPSimplePlayerWrapper::endReadFrameComp() {
+#ifdef PETARI_NATIVE
+    PetariNative::Movie::ThpComponents& components = mNativeComponents;
+    if (const char* pError =
+            PetariNative::Movie::parseThpFrameCompInfo(WorkBuffer, 32, &components.numComponents, components.kinds)) {
+        nativeFail(pError);
+    }
+    components.byteSize = PetariNative::Movie::kThpFrameCompInfoSize;
+    mFrameComp.numComponents = components.numComponents;
+    memcpy(mFrameComp.frameComp, components.kinds, sizeof(mFrameComp.frameComp));
+#else
     memcpy(&mFrameComp, WorkBuffer, sizeof(mFrameComp));
+#endif
     mAudioExist = 0;
     _C += 0x14;
 }
 
 void THPSimplePlayerWrapper::endReadVideoComp() {
+#ifdef PETARI_NATIVE
+    PetariNative::Movie::ThpComponents& components = mNativeComponents;
+    if (components.hasVideo) {
+        nativeFail("THP has more than one video component");
+    }
+    if (const char* pError = PetariNative::Movie::parseThpVideoInfo(WorkBuffer, 32, &components.video)) {
+        nativeFail(pError);
+    }
+    components.hasVideo = true;
+    components.byteSize += PetariNative::Movie::kThpVideoInfoSize;
+    mVideoInfo.xSize = components.video.xSize;
+    mVideoInfo.ySize = components.video.ySize;
+    mVideoInfo.videoType = components.video.videoType;
+#else
     memcpy(&mVideoInfo, WorkBuffer, sizeof(mVideoInfo));
+#endif
     _C += 12;
     _10++;
 }
 
 void THPSimplePlayerWrapper::endReadAudioComp() {
+#ifdef PETARI_NATIVE
+    PetariNative::Movie::ThpComponents& components = mNativeComponents;
+    if (components.hasAudio) {
+        nativeFail("THP has more than one audio component");
+    }
+    if (const char* pError = PetariNative::Movie::parseThpAudioInfo(WorkBuffer, 32, &components.audio)) {
+        nativeFail(pError);
+    }
+    components.hasAudio = true;
+    components.byteSize += PetariNative::Movie::kThpAudioInfoSize;
+    mAudioInfo.sndChannels = components.audio.sndChannels;
+    mAudioInfo.sndFrequency = components.audio.sndFrequency;
+    mAudioInfo.sndNumSamples = components.audio.sndNumSamples;
+    mAudioInfo.sndNumTracks = components.audio.sndNumTracks;
+#else
     memcpy(&mAudioInfo, WorkBuffer, sizeof(mAudioInfo));
+#endif
     mAudioExist = 1;
     _C += 0x10;
     _10++;
 }
 
 void THPSimplePlayerWrapper::exeReadPreLoad() {
+#ifdef PETARI_NATIVE
+    // The original also issues a read on the step after the last preload
+    // completes; it lands in read buffer 0 (already holding frame 0) while
+    // playback may decode it. Natively only the counted preload reads are issued.
+    if (MR::isFirstStep(this) && _314 > 0) {
+        nativeCheckFrameRead(mCurOffset, mReadSize);
+        mNativeReadSize[mReadIndex] = mReadSize;
+        mFileInfo.cb.userData = this;
+        mNativeReadIssued = true;
+        DVDReadAsyncPrio(&mFileInfo, mReadBuffer[mReadIndex].ptr, mReadSize, mCurOffset, ::readAsyncCallBackFunc, 2);
+    }
+
+    nativePollReadCompletion();
+#else
     if (MR::isFirstStep(this)) {
         DVDReadAsyncPrio(&mFileInfo, mReadBuffer[mReadIndex].ptr, mReadSize, mCurOffset, ::readAsyncCallBackFunc, 2);
     }
+#endif
 
     if (!_314) {
         mPreFetchState = 1;
@@ -615,7 +828,11 @@ void THPSimplePlayerWrapper::exeReadPreLoad() {
 
 void THPSimplePlayerWrapper::endReadPreLoadOne() {
     mCurOffset += mReadSize;
+#ifdef PETARI_NATIVE
+    mReadSize = PetariNative::readU32BE(mReadBuffer[mReadIndex].ptr);
+#else
     mReadSize = *(s32*)mReadBuffer[mReadIndex].ptr;
+#endif
     mReadBuffer[mReadIndex].isValid = 1;
     mReadBuffer[mReadIndex].frameNumber = mTotalReadFrame;
     mReadIndex = getNextBuffer(mReadIndex);
@@ -651,6 +868,17 @@ bool THPSimplePlayerWrapper::tryFinishDvdOpen() {
     if (_10 < mFrameComp.numComponents) {
         return false;
     }
+
+#ifdef PETARI_NATIVE
+    const PetariNative::Movie::ThpHeader header = toMovieHeader(mHeader);
+    if (const char* pError = PetariNative::Movie::validateThpStream(header, mNativeComponents, mFileInfo.length)) {
+        nativeFail(pError);
+    }
+    // mixAudio() plays decoded samples at the 32 kHz DAC rate without resampling.
+    if (mNativeComponents.hasAudio && mNativeComponents.audio.sndFrequency != 32000) {
+        nativeFail("THP audio is not 32000 Hz; the simple player does not resample");
+    }
+#endif
 
     setupParams();
     _9 = 1;
@@ -705,11 +933,11 @@ void THPSimplePlayerWrapper::mixAudio(s16* pDest, u32 sample) {
             s32 idx1 = (mAudioOutputIndex + 1) % 0x14;
             s32 idx2 = (mAudioOutputIndex + 2) % 0x14;
             if (!mAudioBuffer[idx1].validSample || !mAudioBuffer[idx2].validSample) {
-                MR::zeroMemory(pDest, sample * sizeof(s16*));
+                MR::zeroMemory(pDest, sample * THP_STEREO_SAMPLE_BYTES);
                 return;
             }
         } else if (!mAudioBuffer[(mAudioOutputIndex + 1) % 0x14].validSample) {
-            MR::zeroMemory(pDest, sample * sizeof(s16*));
+            MR::zeroMemory(pDest, sample * THP_STEREO_SAMPLE_BYTES);
             return;
         }
 
@@ -801,20 +1029,20 @@ void THPSimplePlayerWrapper::mixAudio(s16* pDest, u32 sample) {
                 if (sample == 0)
                     break;
             } else {
-                MR::zeroMemory(pDest, sample * sizeof(s16*));
+                MR::zeroMemory(pDest, sample * THP_STEREO_SAMPLE_BYTES);
                 return;
             }
         } while (true);
 
     } else {
-        MR::zeroMemory(pDest, sample * sizeof(s16*));
+        MR::zeroMemory(pDest, sample * THP_STEREO_SAMPLE_BYTES);
     }
 }
 
 void THPSimplePlayerWrapper::resetAudioParams() {
     mAudioDecodeIndex = 0;
     mAudioOutputIndex = 0;
-    MR::zeroMemory(mAudioBuffer, 0xF0);
+    MR::zeroMemory(mAudioBuffer, sizeof(mAudioBuffer));
 
     for (s32 i = 0; i < 20; i++) {
         mAudioBuffer[i].validSample = 0;
@@ -870,6 +1098,70 @@ void THPSimplePlayerWrapper::setUnpauseFrameFlag() {
     _2F0 = 1;
     OSRestoreInterrupts(en);
 }
+
+#ifdef PETARI_NATIVE
+void THPSimplePlayerWrapper::nativeFail(const char* pReason, s32 frame) const {
+    // A damaged or unsupported movie must not play as garbage or be skipped.
+    if (frame >= 0) {
+        OSPanic(__FILE__, __LINE__, "THP movie %s, frame %d: %s", mNativeName, frame, pReason);
+    } else {
+        OSPanic(__FILE__, __LINE__, "THP movie %s: %s", mNativeName, pReason);
+    }
+    std::abort();
+}
+
+void THPSimplePlayerWrapper::nativePollReadCompletion() {
+    BOOL level = OSDisableInterrupts();
+    bool pending = mNativeCompletionPending;
+    s32 result = mNativeCompletion;
+    mNativeCompletionPending = false;
+    OSRestoreInterrupts(level);
+
+    if (pending) {
+        readAsyncCallBack(result);
+    }
+}
+
+void THPSimplePlayerWrapper::nativeCheckFrameRead(u32 offset, s32 size) const {
+    if (size < 0) {
+        nativeFail("THP frame size is negative", mTotalReadFrame);
+    }
+    if (const char* pError = PetariNative::Movie::checkThpFrameRead(toMovieHeader(mHeader), mNativeComponents,
+                                                                    mFileInfo.length, offset, size)) {
+        nativeFail(pError, mTotalReadFrame);
+    }
+}
+
+void THPSimplePlayerWrapper::nativeValidateFrame(const u8* pFrame, s32 audio, u32* pCompSizes) {
+    const PetariNative::Movie::ThpComponents& components = mNativeComponents;
+    const s32 frame = mReadBuffer[mNextDecodeIndex].frameNumber;
+    PetariNative::Movie::ThpFrame layout;
+    if (const char* pError = PetariNative::Movie::parseThpFrame(pFrame, mNativeReadSize[mNextDecodeIndex], components,
+                                                                &layout)) {
+        nativeFail(pError, frame);
+    }
+
+    for (u32 i = 0; i < components.numComponents; i++) {
+        const u8* pComp = pFrame + layout.componentOffsets[i];
+        const u32 size = layout.componentSizes[i];
+        const char* pError = nullptr;
+        pCompSizes[i] = size;
+
+        if (components.kinds[i] == PetariNative::Movie::kThpComponentVideo) {
+            pError = PetariNative::Movie::validateThpVideoComponent(pComp, size, components.video.xSize,
+                                                                    components.video.ySize);
+        } else if (audio >= 0 && static_cast< u32 >(audio) < components.audio.sndNumTracks) {
+            u32 samples;
+            pError = PetariNative::Movie::validateThpAudioComponent(pComp + size * audio, size, components.audio,
+                                                                    mHeader.audioMaxSamples, &samples);
+        }
+
+        if (pError != nullptr) {
+            nativeFail(pError, frame);
+        }
+    }
+}
+#endif
 
 s16* THPSimplePlayerStaticAudio::audioCallback(s32 audio) {
     THPSimplePlayerWrapper* player = THPSimplePlayerStaticAudio::mPlayer;

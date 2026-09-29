@@ -3,6 +3,7 @@
 #include "JSystem/JMath.hpp"
 #include "JSystem/JMath/JMATrigonometric.hpp"
 #include <cmath>
+#include <math.h>
 #include <revolution/mtx.h>
 
 const J3DTransformInfo j3dDefaultTransformInfo = {
@@ -72,6 +73,7 @@ void J3DCalcYBBoardMtx(Mtx mtx) {
     mtx[2][2] = vec.z * z;
 }
 
+#ifdef __MWERKS__
 asm void J3DPSCalcInverseTranspose(__REGISTER Mtx src, __REGISTER Mtx33 dst) {
 #ifdef __MWERKS__  // clang-format off
 	psq_l    f0, 0(src), 1, 0
@@ -128,6 +130,43 @@ lbl_8005F118:
 	blr
 #endif  // clang-format on
 }
+#else
+void J3DPSCalcInverseTranspose(Mtx src, Mtx33 dst) {
+    // Cofactors are formed in the same lane order as the paired-single code. The
+    // Wii refines an fres estimate with two Newton steps; native uses 1/det.
+    f32 a00 = src[0][0], a01 = src[0][1], a02 = src[0][2];
+    f32 a10 = src[1][0], a11 = src[1][1], a12 = src[1][2];
+    f32 a20 = src[2][0], a21 = src[2][1], a22 = src[2][2];
+
+    f32 c20 = fmaf(a01, a12, -(a11 * a02));
+    f32 c21 = fmaf(a02, a10, -(a12 * a00));
+    f32 c00 = fmaf(a11, a22, -(a21 * a12));
+    f32 c01 = fmaf(a12, a20, -(a22 * a10));
+    f32 c10 = fmaf(a21, a02, -(a01 * a22));
+    f32 c11 = fmaf(a22, a00, -(a02 * a20));
+    f32 c02 = fmaf(a10, a21, -(a11 * a20));
+    f32 c12 = fmaf(a01, a20, -(a00 * a21));
+    f32 c22 = fmaf(a00, a11, -(a01 * a10));
+
+    f32 det = a00 * c00;
+    det = fmaf(a10, c10, det);
+    det = fmaf(a20, c20, det);
+    if (det == 0.0f) {
+        return;
+    }
+
+    f32 inv = 1.0f / det;
+    dst[0][0] = c00 * inv;
+    dst[0][1] = c01 * inv;
+    dst[0][2] = c02 * inv;
+    dst[1][0] = c10 * inv;
+    dst[1][1] = c11 * inv;
+    dst[1][2] = c12 * inv;
+    dst[2][0] = c20 * inv;
+    dst[2][1] = c21 * inv;
+    dst[2][2] = c22 * inv;
+}
+#endif
 
 void J3DGetTranslateRotateMtx(const J3DTransformInfo& tx, Mtx dst) {
     f32 cxsz;
@@ -261,6 +300,7 @@ void J3DGetTextureMtxMayaOld(const J3DTextureSRTInfo& srt, Mtx dst) {
     dst[2][2] = 1.0f;
 }
 
+#ifdef __MWERKS__
 asm void J3DScaleNrmMtx(__REGISTER Mtx mtx, const __REGISTER Vec& scl) {
 #ifdef __MWERKS__  // clang-format off
 	nofralloc;
@@ -296,7 +336,17 @@ asm void J3DScaleNrmMtx(__REGISTER Mtx mtx, const __REGISTER Vec& scl) {
 	blr
 #endif  // clang-format on
 }
+#else
+void J3DScaleNrmMtx(Mtx mtx, const Vec& scl) {
+    for (int row = 0; row < 3; row++) {
+        mtx[row][0] *= scl.x;
+        mtx[row][1] *= scl.y;
+        mtx[row][2] *= scl.z;
+    }
+}
+#endif
 
+#ifdef __MWERKS__
 asm void J3DScaleNrmMtx33(__REGISTER Mtx33 mtx, const __REGISTER Vec& scale) {
 #ifdef __MWERKS__  // clang-format off
 	psq_l    f0, 0(mtx), 0, 0
@@ -322,7 +372,17 @@ asm void J3DScaleNrmMtx33(__REGISTER Mtx33 mtx, const __REGISTER Vec& scale) {
 	blr
 #endif  // clang-format on
 }
+#else
+void J3DScaleNrmMtx33(Mtx33 mtx, const Vec& scale) {
+    for (int row = 0; row < 3; row++) {
+        mtx[row][0] *= scale.x;
+        mtx[row][1] *= scale.y;
+        mtx[row][2] *= scale.z;
+    }
+}
+#endif
 
+#ifdef __MWERKS__
 asm void J3DMtxProjConcat(__REGISTER Mtx mtx1, __REGISTER Mtx mtx2, __REGISTER Mtx dst) {
 #ifdef __MWERKS__  // clang-format off
 	psq_l    f2, 0(mtx1), 0, 0
@@ -400,6 +460,20 @@ asm void J3DMtxProjConcat(__REGISTER Mtx mtx1, __REGISTER Mtx mtx2, __REGISTER M
 	blr
 #endif  // clang-format on
 }
+#else
+void J3DMtxProjConcat(Mtx mtx1, Mtx mtx2, Mtx dst) {
+    // mtx2 is read as a 4x4 projection matrix; mtx1 and dst are 3x4.
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 4; col++) {
+            f32 value = mtx1[row][0] * mtx2[0][col];
+            value = fmaf(mtx1[row][1], mtx2[1][col], value);
+            value = fmaf(mtx1[row][2], mtx2[2][col], value);
+            value = fmaf(mtx1[row][3], mtx2[3][col], value);
+            dst[row][col] = value;
+        }
+    }
+}
+#endif
 
 static f32 Unit01[2] = {0.0f, 1.0f};
 
@@ -507,5 +581,22 @@ loop:
 #undef FP15
 #undef FP31
 #undef UNIT_R
+}
+#else
+void J3DPSMtxArrayConcat(Mtx mA, Mtx mB, Mtx mAB, u32 count) {
+    // mAB[i] = mA * mB[i], using the same product order as PSMTXConcat.
+    for (u32 i = 0; i < count; i++) {
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 4; col++) {
+                f32 value = mB[i * 3 + 0][col] * mA[row][0];
+                value = fmaf(mB[i * 3 + 1][col], mA[row][1], value);
+                value = fmaf(mB[i * 3 + 2][col], mA[row][2], value);
+                if (col >= 2) {
+                    value = fmaf(Unit01[col - 2], mA[row][3], value);
+                }
+                mAB[i * 3 + row][col] = value;
+            }
+        }
+    }
 }
 #endif  // clang-format on

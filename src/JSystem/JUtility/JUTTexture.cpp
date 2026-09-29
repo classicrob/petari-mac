@@ -47,7 +47,7 @@ JUTTexture::~JUTTexture() {
 void JUTTexture::storeTIMG(const ResTIMG* pTIMG, u8 a1) {
     if (pTIMG != nullptr && a1 < 0x10) {
         mTIMG = pTIMG;
-        mImage = reinterpret_cast< u8* >(const_cast< ResTIMG* >(pTIMG)) + pTIMG->mImageDataOffset;
+        mImage = reinterpret_cast< u8* >(const_cast< ResTIMG* >(pTIMG)) + JUT_RESTIMG_OFFSET(pTIMG->mImageDataOffset);
         if (pTIMG->mImageDataOffset == 0)
             mImage = reinterpret_cast< u8* >(const_cast< ResTIMG* >(pTIMG)) + sizeof(ResTIMG);
 
@@ -76,12 +76,12 @@ void JUTTexture::storeTIMG(const ResTIMG* pTIMG, u8 a1) {
         if (mEmbPalette == nullptr || (mFlag & 2) == 0) {
             mEmbPalette = new JUTPalette(static_cast< GXTlut >(lut), static_cast< GXTlutFmt >(getTexInfo()->mPaletteFormat),
                                          static_cast< JUTTransparency >(getTexInfo()->mTransparency), getTexInfo()->mPaletteNum,
-                                         reinterpret_cast< u8* >(const_cast< ResTIMG* >(getTexInfo())) + getTexInfo()->mPaletteDataOffset);
+                                         reinterpret_cast< u8* >(const_cast< ResTIMG* >(getTexInfo())) + JUT_RESTIMG_OFFSET(getTexInfo()->mPaletteDataOffset));
             setEmbPaletteDelFlag(true);
         } else {
             mEmbPalette->storeTLUT(static_cast< GXTlut >(lut), static_cast< GXTlutFmt >(getTexInfo()->mPaletteFormat),
                                    static_cast< JUTTransparency >(getTexInfo()->mTransparency), getTexInfo()->mPaletteNum,
-                                   reinterpret_cast< u8* >(const_cast< ResTIMG* >(getTexInfo())) + getTexInfo()->mPaletteDataOffset);
+                                   reinterpret_cast< u8* >(const_cast< ResTIMG* >(getTexInfo())) + JUT_RESTIMG_OFFSET(getTexInfo()->mPaletteDataOffset));
         }
         attachPalette(mEmbPalette);
     }
@@ -102,7 +102,7 @@ void JUTTexture::storeTIMG(const ResTIMG* pTIMG, JUTPalette* pPalette) {
 void JUTTexture::storeTIMG(ResTIMG const* pTIMG, JUTPalette* pPalette, GXTlut a1) {
     if (pTIMG != nullptr) {
         mTIMG = pTIMG;
-        mImage = reinterpret_cast< u8* >(const_cast< ResTIMG* >(pTIMG)) + pTIMG->mImageDataOffset;
+        mImage = reinterpret_cast< u8* >(const_cast< ResTIMG* >(pTIMG)) + JUT_RESTIMG_OFFSET(pTIMG->mImageDataOffset);
         if (pTIMG->mImageDataOffset == 0)
             mImage = reinterpret_cast< u8* >(const_cast< ResTIMG* >(pTIMG)) + sizeof(ResTIMG);
 
@@ -163,7 +163,7 @@ void JUTTexture::initTexObj() {
         mipmapEnabled = 0;
     }
     u8* image = reinterpret_cast< u8* >(const_cast< ResTIMG* >(mTIMG));
-    image += (mTIMG->mImageDataOffset ? mTIMG->mImageDataOffset : 0x20);
+    image += (mTIMG->mImageDataOffset ? JUT_RESTIMG_OFFSET(mTIMG->mImageDataOffset) : 0x20);
     GXInitTexObj(&mObj, image, mTIMG->mWidth, mTIMG->mHeight, static_cast< GXTexFmt >(mTIMG->mFormat), static_cast< GXTexWrapMode >(mWrapS),
                  static_cast< GXTexWrapMode >(mWrapT), mipmapEnabled);
 
@@ -180,7 +180,7 @@ void JUTTexture::initTexObj(GXTlut lut) {
     }
     mTlutName = lut;
     u8* image = reinterpret_cast< u8* >(const_cast< ResTIMG* >(mTIMG));
-    image += (mTIMG->mImageDataOffset ? mTIMG->mImageDataOffset : 0x20);
+    image += (mTIMG->mImageDataOffset ? JUT_RESTIMG_OFFSET(mTIMG->mImageDataOffset) : 0x20);
     GXInitTexObjCI(&mObj, image, mTIMG->mWidth, mTIMG->mHeight, static_cast< GXCITexFmt >(mTIMG->mFormat), static_cast< GXTexWrapMode >(mWrapS),
                    static_cast< GXTexWrapMode >(mWrapT), mipmapEnabled, lut);
 

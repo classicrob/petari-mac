@@ -12,6 +12,14 @@
 #include "JSystem/JParticle/JPAParticle.hpp"
 #include "JSystem/JParticle/JPAResourceManager.hpp"
 
+// Size and alignment of one entry in the calc/draw function lists. Native function
+// pointers are 8 bytes; a list sized with 4 bytes per entry overruns its block.
+#ifdef PETARI_NATIVE
+#define JPA_FUNC_LIST_ENTRY sizeof(EmitterFunc)
+#else
+#define JPA_FUNC_LIST_ENTRY 4
+#endif
+
 JPAResource::JPAResource() {
     mpDrawEmitterChildFuncList = NULL;
     mpDrawEmitterFuncList = NULL;
@@ -102,7 +110,7 @@ void JPAResource::init(JKRHeap* heap) {
     }
 
     if (mpCalcEmitterFuncListNum != 0) {
-        mpCalcEmitterFuncList = (EmitterFunc*)JKRAllocFromHeap(heap, mpCalcEmitterFuncListNum * 4, 4);
+        mpCalcEmitterFuncList = (EmitterFunc*)JKRAllocFromHeap(heap, mpCalcEmitterFuncListNum * JPA_FUNC_LIST_ENTRY, JPA_FUNC_LIST_ENTRY);
     }
 
     int func_no = 0;
@@ -198,7 +206,7 @@ void JPAResource::init(JKRHeap* heap) {
     }
 
     if (mpCalcParticleFuncListNum != 0) {
-        mpCalcParticleFuncList = (ParticleFunc*)JKRAllocFromHeap(heap, mpCalcParticleFuncListNum * 4, 4);
+        mpCalcParticleFuncList = (ParticleFunc*)JKRAllocFromHeap(heap, mpCalcParticleFuncListNum * JPA_FUNC_LIST_ENTRY, JPA_FUNC_LIST_ENTRY);
     }
 
     func_no = 0;
@@ -316,7 +324,7 @@ void JPAResource::init(JKRHeap* heap) {
     }
 
     if (mpCalcParticleChildFuncListNum != 0) {
-        mpCalcParticleChildFuncList = (ParticleFunc*)JKRAllocFromHeap(heap, mpCalcParticleChildFuncListNum * 4, 4);
+        mpCalcParticleChildFuncList = (ParticleFunc*)JKRAllocFromHeap(heap, mpCalcParticleChildFuncListNum * JPA_FUNC_LIST_ENTRY, JPA_FUNC_LIST_ENTRY);
     }
 
     func_no = 0;
@@ -359,7 +367,7 @@ void JPAResource::init(JKRHeap* heap) {
     }
 
     if (mpDrawEmitterFuncListNum != 0) {
-        mpDrawEmitterFuncList = (EmitterFunc*)JKRAllocFromHeap(heap, mpDrawEmitterFuncListNum * 4, 4);
+        mpDrawEmitterFuncList = (EmitterFunc*)JKRAllocFromHeap(heap, mpDrawEmitterFuncListNum * JPA_FUNC_LIST_ENTRY, JPA_FUNC_LIST_ENTRY);
     }
 
     func_no = 0;
@@ -455,7 +463,7 @@ void JPAResource::init(JKRHeap* heap) {
     }
 
     if (mpDrawEmitterChildFuncListNum != 0) {
-        mpDrawEmitterChildFuncList = (EmitterFunc*)JKRAllocFromHeap(heap, mpDrawEmitterChildFuncListNum * 4, 4);
+        mpDrawEmitterChildFuncList = (EmitterFunc*)JKRAllocFromHeap(heap, mpDrawEmitterChildFuncListNum * JPA_FUNC_LIST_ENTRY, JPA_FUNC_LIST_ENTRY);
     }
 
     func_no = 0;
@@ -501,7 +509,7 @@ void JPAResource::init(JKRHeap* heap) {
     }
 
     if (mpDrawParticleFuncListNum != 0) {
-        mpDrawParticleFuncList = (ParticleFunc*)JKRAllocFromHeap(heap, mpDrawParticleFuncListNum * 4, 4);
+        mpDrawParticleFuncList = (ParticleFunc*)JKRAllocFromHeap(heap, mpDrawParticleFuncListNum * JPA_FUNC_LIST_ENTRY, JPA_FUNC_LIST_ENTRY);
     }
 
     func_no = 0;
@@ -603,7 +611,7 @@ void JPAResource::init(JKRHeap* heap) {
     }
 
     if (mpDrawParticleChildFuncListNum != 0) {
-        mpDrawParticleChildFuncList = (ParticleFunc*)JKRAllocFromHeap(heap, mpDrawParticleChildFuncListNum * 4, 4);
+        mpDrawParticleChildFuncList = (ParticleFunc*)JKRAllocFromHeap(heap, mpDrawParticleChildFuncListNum * JPA_FUNC_LIST_ENTRY, JPA_FUNC_LIST_ENTRY);
     }
 
     func_no = 0;
@@ -907,8 +915,8 @@ void JPAResource::setPTev() {
     }
     int pos_offset = center_offset + base_plane_type * 0x6C;
     int crd_offset = (mpBaseShape->getTilingS() + 2 * mpBaseShape->getTilingT()) * 8;
-    GXSetArray(GX_VA_POS, jpa_pos + pos_offset, 3);
-    GXSetArray(GX_VA_TEX0, jpa_crd + crd_offset, 2);
+    GXSETARRAY(GX_VA_POS, jpa_pos + pos_offset, sizeof(jpa_pos) - pos_offset, 3, true);
+    GXSETARRAY(GX_VA_TEX0, jpa_crd + crd_offset, sizeof(jpa_crd) - crd_offset, 2, true);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
 
     if (mpExTexShape != NULL) {
@@ -946,8 +954,8 @@ void JPAResource::setPTev() {
 void JPAResource::setCTev(JPAEmitterWorkData* work) {
     int base_plane_type = (mpChildShape->getType() == 3 || mpChildShape->getType() == 7) ? mpChildShape->getBasePlaneType() : 0;
     int pos_offset = 0x30 + base_plane_type * 0x6C;
-    GXSetArray(GX_VA_POS, jpa_pos + pos_offset, 3);
-    GXSetArray(GX_VA_TEX0, jpa_crd, 2);
+    GXSETARRAY(GX_VA_POS, jpa_pos + pos_offset, sizeof(jpa_pos) - pos_offset, 3, true);
+    GXSETARRAY(GX_VA_TEX0, jpa_crd, sizeof(jpa_crd), 2, true);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP1, GX_COLOR_NULL);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C, GX_FALSE, 0x7D);
     GXSetTevDirect(GX_TEVSTAGE0);

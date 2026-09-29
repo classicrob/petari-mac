@@ -1,5 +1,6 @@
 #include "nw4r/lyt/arcResourceAccessor.h"
 #include <cstdio>
+#include <cstring>
 #include <extras.h>
 #include <revolution/arc.h>
 

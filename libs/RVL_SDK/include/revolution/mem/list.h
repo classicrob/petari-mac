@@ -1,12 +1,18 @@
 #ifndef LIST_H
 #define LIST_H
 
+// Native C++ may include this inside another header's extern "C" block, so use
+// the C header there.
+#if defined(PETARI_NATIVE) || !defined(__cplusplus)
+#include <stddef.h>
+#else
+#include <cstddef>
+#endif
+#include "revolution/types.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include <cstddef>
-#include "revolution/types.h"
 
 
 typedef struct {

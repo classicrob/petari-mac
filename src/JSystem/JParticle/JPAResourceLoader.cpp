@@ -9,8 +9,19 @@
 #include "JSystem/JParticle/JPAKeyBlock.hpp"
 #include "JSystem/JParticle/JPAResource.hpp"
 #include "JSystem/JParticle/JPAResourceManager.hpp"
+#ifdef PETARI_NATIVE
+#include <petari/jpa_resource.hpp>
+#include <revolution/os.h>
+#endif
 
 JPAResourceLoader::JPAResourceLoader(u8 const* data, JPAResourceManager* mgr) {
+#ifdef PETARI_NATIVE
+    // Callers pass a host-layout image (petari/jpa_resource.hpp); the original big-endian
+    // container would otherwise fail the version check below and load nothing.
+    if (PetariNative::JPA::classifyImage(data, 8) == PetariNative::JPA::ImageKind::BigEndian) {
+        OSPanic(__FILE__, __LINE__, "JPAResourceLoader: particle container was not converted to host layout");
+    }
+#endif
     if (*(u32*)(data + 4) == '2-10') {
         load_jpc(data, mgr);
     }

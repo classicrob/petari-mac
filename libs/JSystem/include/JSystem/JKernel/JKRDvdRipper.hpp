@@ -17,6 +17,14 @@ struct SYaz0Header {
     u32 length;
 };
 
+// Yaz0 headers are big-endian.
+#ifdef PETARI_NATIVE
+#include <petari/endian.hpp>
+#define JKR_YAZ0_LENGTH(header) PetariNative::readU32BE(&(header)->length)
+#else
+#define JKR_YAZ0_LENGTH(header) ((header)->length)
+#endif
+
 class JKRDMCommand {
     JKRDMCommand();
     ~JKRDMCommand();

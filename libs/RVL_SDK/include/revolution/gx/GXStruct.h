@@ -18,11 +18,19 @@ typedef struct _GXColorS10 {
 } GXColorS10;
 
 typedef struct _GXTexObj {
+#ifdef PETARI_NATIVE
+    u32 dummy[16];
+#else
     u32 dummy[8];
+#endif
 } GXTexObj;
 
 typedef struct _GXTlutObj {
+#ifdef PETARI_NATIVE
+    u32 dummy[10];
+#else
     u32 dummy[3];
+#endif
 } GXTlutObj;
 
 typedef struct _GXLightObj {

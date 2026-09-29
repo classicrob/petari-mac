@@ -79,6 +79,9 @@ namespace nw4r {
         }
 
         bool Layout::Build(const void* lytResBuf, ResourceAccessor* pResAcsr) {
+#ifdef PETARI_NATIVE
+            detail::NativeNormalizeResource(const_cast< void* >(lytResBuf), res::FILESIGNATURE_RLYT);
+#endif
             const res::BinaryFileHeader* const pFileHead = static_cast< const res::BinaryFileHeader* >(lytResBuf);
             if (!detail::TestFileHeader(*pFileHead, 'RLYT')) {
                 return false;

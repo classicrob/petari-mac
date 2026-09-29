@@ -1,0 +1,133 @@
+#pragma once
+// GX synchronisation between game threads and the native graphics processor
+// (GP): draw-sync tokens, draw done, FIFO breakpoints, abort, and GP status.
+// See native/platform/GX_SYNC_PLAN.md.
+//
+// Division of work:
+// - The renderer (root's native/gx and Aurora patches) owns the FIFO stream.
+//   Its public GX wrappers (GXSetDrawSync, GXDrawDone, GXEnableBreakPt,
+//   GXGetFifoPtrs, ...) write commands and call the game-side functions
+//   below. Its command processor calls the report* functions from its own
+//   thread as it processes the stream.
+// - This platform component turns reports into GP interrupts delivered in
+//   stream order on a GP interrupt thread with the OS interrupt lock held,
+//   keeps the token register and callbacks, holds the breakpoint, and
+//   implements waits that yield the OS CPU baton.
+//
+// FIFO positions are 64-bit byte offsets into the stream. Game code sees them
+// as opaque pointer-width values (positionToPointer) that it never
+// dereferences; they are at least 4 GiB, so DrawSyncManager's
+// pointer-versus-token test stays correct.
+
+#include <cstdint>
+
+#include <revolution/gx/GXFifo.h>
+#include <revolution/gx/GXManage.h>
+
+namespace PetariNative::Platform::GXSync {
+
+inline constexpr std::uint64_t kNoBreakpoint = UINT64_MAX;
+
+// ---- FIFO positions as game-visible pointers ----
+void* positionToPointer(std::uint64_t position);
+std::uint64_t pointerToPosition(const void* pointer);  // aborts on a value not made by positionToPointer
+
+// ---- Renderer -> platform (command-processor thread). Never block on OS
+// locks. Positions must not decrease across reports: events are delivered in
+// report order, which must be stream order. Nothing is dropped. ----
+void reportToken(std::uint16_t token, std::uint64_t position);  // PE token interrupt BP (0x48) processed
+void setTokenRegister(std::uint16_t token);                     // PE token BP without interrupt (0x47) processed
+void reportDrawDone(std::uint64_t position);                     // draw-done BP processed
+void reportBreakpointReached(std::uint64_t position);           // processing halted at the breakpoint (deduplicated)
+void reportProgress(std::uint64_t processed, std::uint64_t written);  // stream positions, for GP status and waits
+
+// Platform -> renderer: the processor must not process bytes at or beyond
+// this position (kNoBreakpoint when none).
+std::uint64_t breakpointPosition();
+// The processor may process [processed, returned position). A return equal
+// to `processed` means it is halted at the breakpoint (reported here, once);
+// it must wait for the renderer's wake, which the GX wrappers issue after
+// every breakpoint change and abort.
+std::uint64_t processLimit(std::uint64_t processed, std::uint64_t target);
+// The processor skipped the stream discarded by GXAbortFrame and is now at
+// `processed`.
+void abortApplied(std::uint64_t processed, std::uint64_t written);
+
+// ---- Token-time snapshots (renderer readback) ----
+// With a snapshot hook installed, every processed token interrupt gets a
+// ticket (1, 2, ... in stream order). The hook runs on the processor thread
+// right after the token is processed and before any later command, with no
+// platform lock held; the renderer captures the EFB there. That token's
+// interrupt, and every event after it, is delivered only after
+// snapshotReady(ticket), from any thread. The processor is never blocked by
+// an incomplete ticket. Every ticket must eventually be completed, including
+// across GXAbortFrame (a capture may complete as "unavailable").
+//
+// Without a hook, tokens get ticket 0 and are delivered on processing: no
+// token-time capture exists then, so GXPeekZ fidelity at tokens is
+// unavailable, not approximated.
+using SnapshotHook = void (*)(std::uint64_t ticket, std::uint16_t token, std::uint64_t position, void* user);
+void setSnapshotHook(SnapshotHook hook, void* user);
+void snapshotReady(std::uint64_t ticket);
+// Optional. Called on the processor thread, no platform lock held, when a
+// draw done or a breakpoint hit is queued behind an incomplete ticket: the
+// game may be waiting for an event that depends on that capture. Covers every
+// incomplete ticket <= `ticket`. At most once per ticket.
+using FlushHook = void (*)(std::uint64_t ticket, void* user);
+void setFlushHook(FlushHook hook, void* user);
+// On the calling thread inside a token callback: that token's ticket; else 0.
+std::uint64_t deliveringTicket();
+// Oldest ticket whose capture is not complete yet (events are held behind
+// it), or 0. For hang detection: the processor may be idle while a draw done
+// waits only for this capture.
+std::uint64_t heldTicket();
+// Last ticket whose callback has returned. Deliveries are in ticket order, so
+// every capture up to this one is no longer readable by the game.
+std::uint64_t deliveredTicket();
+
+// ---- Game side (called by the renderer's GX wrappers) ----
+void setBreakpoint(std::uint64_t position);  // GXEnableBreakPt
+void clearBreakpoint();                      // GXDisableBreakPt
+// GXSetDrawDone: call after writing the draw-done BP; returns the draw-done
+// count to wait for.
+std::uint64_t noteDrawDoneIssued();
+// GXDrawDone/GXWaitDrawDone: waits until that many draw-done interrupts have
+// been delivered. OS threads sleep (other game threads run); host threads wait
+// on a condition variable. Aborts if called from interrupt context.
+void waitDrawDone(std::uint64_t count);
+// True while an OS or host thread waits in waitDrawDone.
+bool drawDoneWaitPending();
+// Waits until the processor has processed up to `position` (Aurora's
+// fifo::drain). Yields the OS CPU baton like waitDrawDone.
+void waitProcessed(std::uint64_t position);
+// GXAbortFrame: clears the breakpoint and records the draw-done BPs issued so
+// far. When the processor applies the discard (abortApplied), those not yet
+// processed are lost; the next delivered draw done also completes their
+// waits, as the SDK's single draw-done flag would. Interrupts already reported
+// are still delivered (they happened). Safe in interrupt context.
+void abortFrame();
+
+GXDrawSyncCallback setDrawSyncCallback(GXDrawSyncCallback callback);
+GXDrawDoneCallback setDrawDoneCallback(GXDrawDoneCallback callback);
+GXBreakPtCallback setBreakpointCallback(GXBreakPtCallback callback);
+std::uint16_t lastToken();  // GXReadDrawSync: last token the GP processed
+
+// Actual processor state for GXGetGPStatus. FIFO watermark flags (overhi,
+// underlow) are not modelled and report false.
+struct GPStatus {
+    bool readIdle;     // processed == written
+    bool commandIdle;  // same: no unprocessed commands
+    bool breakpoint;   // halted at the breakpoint
+};
+GPStatus gpStatus();
+
+// Last processed stream position reported by the renderer.
+std::uint64_t processedPosition();
+
+// Stops the GP interrupt thread and resets all state; undelivered events
+// (including ones waiting for a snapshot) are discarded. For tests and
+// shutdown. Must not be called with interrupts disabled: delivery takes the
+// interrupt lock, so the join could never finish (aborts instead).
+void shutdown();
+
+}  // namespace PetariNative::Platform::GXSync

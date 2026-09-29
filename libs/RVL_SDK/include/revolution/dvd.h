@@ -212,6 +212,10 @@ BOOL DVDFastOpen(s32, DVDFileInfo*);
 BOOL DVDOpenDir(const char*, DVDDir*);
 
 s32 DVDCancel(DVDCommandBlock*);
+BOOL DVDCancelAsync(DVDCommandBlock*, DVDCBCallback);
+BOOL DVDCancelAllAsync(DVDCBCallback);
+void DVDPause(void);
+void DVDResume(void);
 BOOL DVDClose(DVDFileInfo*);
 
 BOOL DVDReadDir(DVDDir*, DVDDirEntry*);

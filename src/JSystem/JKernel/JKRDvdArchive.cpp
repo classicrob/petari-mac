@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mem.h>
+#include <stdint.h>
 
 JKRDvdArchive::JKRDvdArchive(s32 entryNum, EMountDirection mountDir) : JKRArchive(entryNum, MOUNT_MODE_DVD) {
     mMountDir = mountDir;
@@ -79,6 +80,13 @@ bool JKRDvdArchive::open(s32 entryNum) {
         DCInvalidateRange(header, 32);
 
         int alignment = mMountDir == MOUNT_DIRECTION_1 ? 32 : -32;
+#ifdef PETARI_NATIVE
+        // header is a private copy, so decode it in place.
+        if (!readNativeHeader(header, header)) {
+            mMountMode = MOUNT_MODE_0;
+            goto cleanup;
+        }
+#endif
         mInfoBlock = reinterpret_cast< RarcInfoBlock* >(JKRHeap::alloc(header->mFileDataOffset, alignment, mHeap));
         if (mInfoBlock == nullptr) {
             mMountMode = MOUNT_MODE_0;
@@ -86,6 +94,19 @@ bool JKRDvdArchive::open(s32 entryNum) {
             JKRDvdRipper::loadToMainRAM(entryNum, reinterpret_cast< u8* >(mInfoBlock), EXPAND_SWITCH_UNKNOWN1, header->mFileDataOffset, nullptr,
                                         JKRDvdRipper::ALLOC_DIRECTION_FORWARD, 32, nullptr, nullptr);
             DCInvalidateRange(mInfoBlock, header->mFileDataOffset);
+
+#ifdef PETARI_NATIVE
+            {
+                void* rawInfoBlock = mInfoBlock;
+                bool converted = setupNativeTables(rawInfoBlock, header->mFileDataOffset, header->mTotalDataSize, alignment);
+                JKRFreeToHeap(mHeap, rawInfoBlock);
+                if (!converted) {
+                    mInfoBlock = nullptr;
+                    mMountMode = MOUNT_MODE_0;
+                    goto cleanup;
+                }
+            }
+#endif
 
             mDirs = reinterpret_cast< SDIDirEntry* >(reinterpret_cast< u8* >(mInfoBlock) + mInfoBlock->mDirOffset);
             mFiles = reinterpret_cast< SDIFileEntry* >(reinterpret_cast< u8* >(mInfoBlock) + mInfoBlock->mFileOffset);
@@ -214,7 +235,7 @@ u32 JKRDvdArchive::getExpandedResSize(const void* pArg) const {
     }
 
     u8 buff[0x40];
-    u8* alignedPointer = reinterpret_cast< u8* >((ALIGN_NEXT(reinterpret_cast< u32 >(buff), 32)));
+    u8* alignedPointer = reinterpret_cast< u8* >((ALIGN_NEXT(reinterpret_cast< uintptr_t >(buff), 32)));
 
     JKRDvdRipper::loadToMainRAM(mEntryNum, alignedPointer, EXPAND_SWITCH_UNKNOWN2, 0x20, nullptr, JKRDvdRipper::ALLOC_DIRECTION_FORWARD,
                                 _64 + fileEntry->mDataOffset, nullptr, nullptr);
@@ -249,7 +270,7 @@ u32 JKRDvdArchive::fetchResource_subroutine(s32 entryNum, u32 offset, u32 source
         case 1:
         case 2: {
             u8 headerBuffer[0x40];
-            u8* header = reinterpret_cast< u8* >((ALIGN_NEXT(reinterpret_cast< u32 >(headerBuffer), 32)));
+            u8* header = reinterpret_cast< u8* >((ALIGN_NEXT(reinterpret_cast< uintptr_t >(headerBuffer), 32)));
 
             JKRDvdRipper::loadToMainRAM(entryNum, header, EXPAND_SWITCH_UNKNOWN2, 0x20, nullptr, JKRDvdRipper::ALLOC_DIRECTION_FORWARD, offset,
                                         nullptr, nullptr);
@@ -315,7 +336,7 @@ u32 JKRDvdArchive::fetchResource_subroutine(s32 entryNum, u32 offset, u32 source
         case 1:
         case 2: {
             u8 headerBuffer[0x40];
-            u8* header = reinterpret_cast< u8* >((ALIGN_NEXT(reinterpret_cast< u32 >(headerBuffer), 32)));
+            u8* header = reinterpret_cast< u8* >((ALIGN_NEXT(reinterpret_cast< uintptr_t >(headerBuffer), 32)));
 
             JKRDvdRipper::loadToMainRAM(entryNum, header, EXPAND_SWITCH_UNKNOWN2, 0x20, nullptr, JKRDvdRipper::ALLOC_DIRECTION_FORWARD, offset,
                                         nullptr, nullptr);

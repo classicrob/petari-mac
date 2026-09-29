@@ -1,6 +1,7 @@
 #pragma once
 
 #include "JSystem/JKernel/JKRFileLoader.hpp"
+#include <stdint.h>
 
 class JKRArcFinder;
 
@@ -128,8 +129,9 @@ public:
     virtual void setExpandSize(SDIFileEntry*, u32);
     virtual u32 getExpandSize(SDIFileEntry*) const;
 
-    static JKRArchive* check_mount_already(s32);
-    static JKRArchive* check_mount_already(s32, JKRHeap*);
+    // Memory archives use their data address as the mount identity.
+    static JKRArchive* check_mount_already(intptr_t);
+    static JKRArchive* check_mount_already(intptr_t, JKRHeap*);
     static JKRArchive* mount(const char*, EMountMode, JKRHeap*, EMountDirection);
     static JKRArchive* mount(s32, EMountMode, JKRHeap*, EMountDirection);
     bool getDirEntry(SDirEntry*, u32) const;
@@ -153,7 +155,7 @@ public:
     /* 0x38 */ JKRHeap* mHeap;
     /* 0x3C */ u8 mMountMode;
     u8 _3D[3];
-    /* 0x40 */ s32 mEntryNum;
+    /* 0x40 */ intptr_t mEntryNum;
     /* 0x44 */ RarcInfoBlock* mInfoBlock;
     /* 0x48 */ SDIDirEntry* mDirs;
     /* 0x4C */ SDIFileEntry* mFiles;
@@ -162,4 +164,18 @@ public:
     u32 _58;
     int _5C;
     /* 0x60 */ EMountDirection mMountDir;
+
+#ifdef PETARI_NATIVE
+    // RARC tables on disc are big-endian and SDIFileEntry holds a pointer, so native
+    // archives use a host-layout copy: one heap block holding RarcInfoBlock, the
+    // directory and file tables, and the string table, with offsets relative to
+    // the block. mInfoBlock points at that block; the serialized bytes are not
+    // modified. See JKRArchivePri.cpp.
+    static bool readNativeHeader(RarcHeader* pDst, const void* pSrc);
+    bool setupNativeTables(const void* pInfoBlock, u32 infoSize, u32 dataSize, int alignment);
+
+    // Serialized info block kept alive after conversion (compressed archives keep
+    // their preloaded file data behind it).
+    void* mRawInfoBlock;
+#endif
 };

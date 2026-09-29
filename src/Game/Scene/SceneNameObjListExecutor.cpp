@@ -188,7 +188,7 @@ namespace {
             1,
         },
         {
-            -1,  // TODO "None" MovementType name?
+            0xFFFFFFFF,  // TODO "None" MovementType name?
             0,
         },
     };
@@ -282,7 +282,7 @@ namespace {
             2,
         },
         {
-            -1,  // TODO "None" CalcAnimType name?
+            0xFFFFFFFF,  // TODO "None" CalcAnimType name?
             0,
         },
     };
@@ -290,7 +290,7 @@ namespace {
         {
             MR::DrawBufferType_0x26,
             16,
-            MR::LightType_None,
+            static_cast< u32 >(MR::LightType_None),
             MR::CameraType_3D,
         },
         {
@@ -524,19 +524,19 @@ namespace {
         {
             MR::DrawBufferType_Model3DFor2D,
             16,
-            MR::LightType_None,
+            static_cast< u32 >(MR::LightType_None),
             MR::CameraType_2D,
         },
         {
             MR::DrawBufferType_0x25,
             16,
-            MR::LightType_None,
+            static_cast< u32 >(MR::LightType_None),
             MR::CameraType_2D,
         },
         {
-            -1,  // TODO "None" DrawBufferType name?
+            0xFFFFFFFF,  // TODO "None" DrawBufferType name?
             0,
-            MR::LightType_None,
+            static_cast< u32 >(MR::LightType_None),
             MR::CameraType_3D,
         },
     };
@@ -874,7 +874,7 @@ namespace {
             256,
         },
         {
-            -1,  // TODO "None" DrawType name?
+            0xFFFFFFFF,  // TODO "None" DrawType name?
             0,
         },
     };

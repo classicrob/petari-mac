@@ -3,13 +3,14 @@
 #include "JSystem/JSupport/JSUList.hpp"
 #include <revolution.h>
 #include <revolution/aralt.h>
+#include <stdint.h>
 
 class JKRDecompCommand;
 class JKRAramBlock;
 
 class JKRAMCommand {
 public:
-    typedef void (*AsyncCallback)(u32);
+    typedef void (*AsyncCallback)(uintptr_t);
 
     JKRAMCommand();
     ~JKRAMCommand();
@@ -21,8 +22,8 @@ public:
 
     /* 0x40 */ s32 mTransferDirection;
     /* 0x44 */ u32 mDataLength;
-    /* 0x48 */ u32 mSrc;
-    /* 0x4C */ u32 mDst;
+    /* 0x48 */ uintptr_t mSrc;
+    /* 0x4C */ uintptr_t mDst;
     /* 0x50 */ JKRAramBlock* mAramBlock;
     /* 0x54 */ u32 field_0x54;
     /* 0x58 */ AsyncCallback mCallback;
@@ -48,13 +49,13 @@ struct JKRAramCommand {
 
 class JKRAramPiece {
 public:
-    static JKRAMCommand* prepareCommand(int direction, u32 src, u32 dst, u32 length, JKRAramBlock* block, JKRAMCommand::AsyncCallback callback);
+    static JKRAMCommand* prepareCommand(int direction, uintptr_t src, uintptr_t dst, u32 length, JKRAramBlock* block, JKRAMCommand::AsyncCallback callback);
     static void sendCommand(JKRAMCommand*);
-    static JKRAMCommand* orderAsync(int direction, u32 source, u32 destination, u32 length, JKRAramBlock* block,
+    static JKRAMCommand* orderAsync(int direction, uintptr_t source, uintptr_t destination, u32 length, JKRAramBlock* block,
                                     JKRAMCommand::AsyncCallback callback);
     static BOOL sync(JKRAMCommand*, int);
-    static BOOL orderSync(int, unsigned long, unsigned long, unsigned long, JKRAramBlock*);
-    static void doneDMA(unsigned long);
+    static BOOL orderSync(int, uintptr_t, uintptr_t, u32, JKRAramBlock*);
+    static void doneDMA(uintptr_t);
     static void startDMA(JKRAMCommand*);
 
     static OSMutex mMutex;
@@ -72,6 +73,6 @@ inline void JKRAramPcs_SendCommand(JKRAMCommand* command) {
     JKRAramPiece::sendCommand(command);
 }
 
-inline BOOL JKRAramPcs(int direction, u32 source, u32 destination, u32 length, JKRAramBlock* block) {
+inline BOOL JKRAramPcs(int direction, uintptr_t source, uintptr_t destination, u32 length, JKRAramBlock* block) {
     return JKRAramPiece::orderSync(direction, source, destination, length, block);
 }

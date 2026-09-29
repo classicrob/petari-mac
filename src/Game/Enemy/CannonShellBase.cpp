@@ -1,6 +1,9 @@
 #include "Game/Enemy/CannonShellBase.hpp"
 #include "Game/Util/LiveActorUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 CannonShellHolder::CannonShellHolder(int num) {
     mShells.init(num);

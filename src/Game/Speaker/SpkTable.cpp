@@ -1,4 +1,7 @@
 #include "Game/Speaker/SpkTable.hpp"
+#ifdef PETARI_NATIVE
+#include <petari/endian.hpp>
+#endif
 
 SpkTable::SpkTable() {
     mInitialized = false;
@@ -7,6 +10,27 @@ SpkTable::SpkTable() {
     mNames = nullptr;
 }
 
+#ifdef PETARI_NATIVE
+// Resource layout is SpkFile (big-endian); the names table holds s32 offsets from the
+// resource start. Names are resolved into a host pointer table instead of in place.
+void SpkTable::setResource(void* pRes) {
+    mInitialized = false;
+
+    u8* res = static_cast< u8* >(pRes);
+    mResourceCount = PetariNative::readU32BE(res + 0x0);
+    mParameters = reinterpret_cast< SpkParameters* >(res + PetariNative::readU32BE(res + 0x4));
+    u32 namesOff = PetariNative::readU32BE(res + 0x8);
+
+    const char** names = new const char*[mResourceCount];
+    for (s32 i = 0; i < mResourceCount; i++) {
+        names[i] = reinterpret_cast< const char* >(res + PetariNative::readU32BE(res + namesOff + i * 4));
+    }
+
+    delete[] mNames;
+    mNames = names;
+    mInitialized = true;
+}
+#else
 void SpkTable::setResource(void* pRes) {
     mInitialized = false;
 
@@ -33,3 +57,4 @@ void SpkTable::setResource(void* pRes) {
     *pIsDataOffsetsInitialized = TRUE;
     mInitialized = true;
 }
+#endif

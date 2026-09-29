@@ -6,6 +6,9 @@
 #include "JSystem/J3DGraphBase/J3DVertex.hpp"
 #include <revolution/gd.h>
 #include <stdint.h>
+#ifdef PETARI_NATIVE
+#include <petari/gx_commands.hpp>
+#endif
 
 void J3DShape::initialize() {
     mMaterial = nullptr;
@@ -127,6 +130,21 @@ static void J3DLoadArrayBasePtr(GXAttr attr, void* data) {
 }
 
 void J3DShape::loadVtxArray() const {
+#ifdef PETARI_NATIVE
+    const u8 posStride = mVertexData->getVtxPosType() == GX_F32 ? 12 : 6;
+    const u8 nrmStride = mVertexData->getVtxNrmType() == GX_F32 ? 12 : 6;
+    const auto posBytes = j3dSys.getVtxPos() == mVertexData->getVtxPosArray()
+        ? mVertexData->mNativeArrayBytes[0] : mVertexData->getVtxNum() * posStride;
+    GXSetArray(GX_VA_POS, j3dSys.getVtxPos(), posBytes, posStride, true);
+    if (!mHasNBT) {
+        const auto nrmBytes = j3dSys.getVtxNrm() == mVertexData->getVtxNrmArray()
+            ? mVertexData->mNativeArrayBytes[1] : mVertexData->getNrmNum() * nrmStride;
+        GXSetArray(GX_VA_NRM, j3dSys.getVtxNrm(), nrmBytes, nrmStride, true);
+    }
+    const auto colorBytes = j3dSys.getVtxCol() == mVertexData->getVtxColorArray(0)
+        ? mVertexData->mNativeArrayBytes[3] : mVertexData->mColNum * sizeof(GXColor);
+    GXSetArray(GX_VA_CLR0, j3dSys.getVtxCol(), colorBytes, sizeof(GXColor), true);
+#else
     J3DLoadArrayBasePtr(GX_VA_POS, j3dSys.getVtxPos());
 
     if (!mHasNBT) {
@@ -134,6 +152,7 @@ void J3DShape::loadVtxArray() const {
     }
 
     J3DLoadArrayBasePtr(GX_VA_CLR0, j3dSys.getVtxCol());
+#endif
 }
 
 bool J3DShape::isSameVcdVatCmd(J3DShape* other) {
@@ -216,10 +235,17 @@ void J3DShape::makeVtxArrayCmd() {
     }
 
     for (u32 i = 0; i < 12; i++) {
+#ifdef PETARI_NATIVE
+        const u32 field = i == 1 && mHasNBT ? 2 : i < 2 ? i : i + 1;
+        const auto command = PetariNative::GX::arrayCommand(i, array[i], mVertexData->mNativeArrayBytes[field], stride[i], true);
+        GDOverflowCheck(command.size());
+        for (u8 byte : command) __GDWrite(byte);
+#else
         if (array[i] != 0)
             GDSetArray((GXAttr)(i + GX_VA_POS), array[i], stride[i]);
         else
-            GDSetArrayRaw((GXAttr)(i + GX_VA_POS), nullptr, stride[i]);
+            GDSetArrayRaw((GXAttr)(i + GX_VA_POS), 0, stride[i]);
+#endif
     }
 }
 

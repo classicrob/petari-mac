@@ -16,6 +16,9 @@
 #include "Game/Util/StarPointerUtil.hpp"
 #include "Game/Util/StringUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 // FIXME: String "Record" is out of order in .data, yet function order matches in retail and debug
 

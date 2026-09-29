@@ -4,6 +4,7 @@
 #include "JSystem/JAudio2/JAIStreamDataMgr.hpp"
 #include "JSystem/JAudio2/JAIStreamMgr.hpp"
 #include "JSystem/JAudio2/JASAramStream.hpp"
+#include <stdint.h>
 
 static void JAIStream_JASAramStreamCallback_(u32 type, JASAramStream* aramStream, void* userData) {
     JAIStream* stream = (JAIStream*)userData;
@@ -54,7 +55,8 @@ bool JAIStream::prepare_prepareStream_() {
 
         streamAramAddr = streamAramMgr->newStreamAram(&local_28);
         if (streamAramAddr != nullptr) {
-            inner_.aramStream.init((u32)streamAramAddr, local_28, &JAIStream_JASAramStreamCallback_, this);
+            // Stream heaps come from the ARAM heap, whose bases are 32-bit ARAM offsets.
+            inner_.aramStream.init((u32)(uintptr_t)streamAramAddr, local_28, &JAIStream_JASAramStreamCallback_, this);
             mPrepareState = 1;
             mPrepareCount = 0;
         } else {

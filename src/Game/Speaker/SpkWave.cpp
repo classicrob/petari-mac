@@ -1,4 +1,7 @@
 #include "Game/Speaker/SpkWave.hpp"
+#ifdef PETARI_NATIVE
+#include <petari/endian.hpp>
+#endif
 #include <JSystem/JAudio2/JASCriticalSection.hpp>
 #include <revolution/os.h>
 
@@ -43,5 +46,10 @@ s16* SpkWave::getWave(s32 wave) const {
 }
 
 WaveData* SpkWave::getWaveData(s32 wave) const {
+#ifdef PETARI_NATIVE
+    u8* res = static_cast< u8* >(mResource);
+    return reinterpret_cast< WaveData* >(res + PetariNative::readU32BE(res + wave * 4 + 8));
+#else
     return (WaveData*)((u32)mResource + *(u32*)((u32)mResource + wave * 4 + 8));
+#endif
 }

@@ -5,6 +5,9 @@
 
 #include <JSystem/JParticle/JPAEmitter.hpp>
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include <petari/game_compat.hpp>
+#endif
 
 ParticleEmitterHolder::ParticleEmitterHolder(const EffectSystem* pEffectSystem, int numEmitters) : mEffectSystem(pEffectSystem) {
     mEmitters.init(numEmitters);
@@ -97,6 +100,12 @@ inline bool ParticleEmitter::isValid() const {
     return mEmitter != nullptr;
 }
 
+#ifdef PETARI_NATIVE
+// SingleEmitter.cpp calls this too; MWCC emits NO_INLINE functions even when marked inline,
+// but an inline definition in C++ is only available in this translation unit.
+bool ParticleEmitter::isContinuousParticle() const {
+#else
 inline bool ParticleEmitter::isContinuousParticle() const NO_INLINE {
+#endif
     return mEmitter != nullptr && mEmitter->mMaxFrame == 0;
 }

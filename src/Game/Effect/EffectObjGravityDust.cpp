@@ -28,7 +28,14 @@ f32 EffectObjGravityDust::getClippingRadius() const {
 }
 
 TVec3f* EffectObjGravityDust::getClippingCenterOffset() const {
+#ifdef PETARI_NATIVE
+    // The Wii build returns the address of a temporary; the caller copies it immediately.
+    static TVec3f sOffset;
+    sOffset.set(0.0f, 500.0f * mScale.y, 0.0f);
+    return &sOffset;
+#else
     return &(TVec3f(0.0f, 500.0f * mScale.y, 0.0f));
+#endif
 }
 
 EffectObjGravityDust::~EffectObjGravityDust() {

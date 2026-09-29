@@ -4,6 +4,10 @@
 #include <JSystem/JKernel/JKRExpHeap.hpp>
 #include <revolution/rso.h>
 
+#ifdef PETARI_NATIVE
+#include "petari/home_menu_hbm.hpp"
+#endif
+
 void (*HBMCreateRSO)(const HBMDataInfo*);
 void (*HBMInitRSO)(void);
 void (*HBMCalcRSO)(const HBMControllerData*);
@@ -12,6 +16,20 @@ HBMSelectBtnNum (*HBMGetSelectBtnNumRSO)(void);
 void (*HBMSetAdjustFlagRSO)(int);
 void (*HBMStartBlackOutRSO)(void);
 
+#ifdef PETARI_NATIVE
+// The HOME Button Menu module (/ModuleData/HomeButtonMenuWrapperRSO.rso) is
+// PowerPC code and cannot be loaded natively. The entry points are served by
+// the native menu instead (native/home_menu, petari/home_menu.hpp).
+void RSO::setupRsoHomeButtonMenu() {
+    HBMCreateRSO = &PetariNative::HomeMenu::Hbm::create;
+    HBMInitRSO = &PetariNative::HomeMenu::Hbm::init;
+    HBMCalcRSO = &PetariNative::HomeMenu::Hbm::calc;
+    HBMDrawRSO = &PetariNative::HomeMenu::Hbm::draw;
+    HBMGetSelectBtnNumRSO = &PetariNative::HomeMenu::Hbm::getSelectBtnNum;
+    HBMSetAdjustFlagRSO = &PetariNative::HomeMenu::Hbm::setAdjustFlag;
+    HBMStartBlackOutRSO = &PetariNative::HomeMenu::Hbm::startBlackOut;
+}
+#else
 static RSOExportFuncTable exp_tbl[] = {{"HBMCreateRSO", (u32*)&HBMCreateRSO},
                                        {"HBMInitRSO", (u32*)&HBMInitRSO},
                                        {"HBMCalcRSO", (u32*)&HBMCalcRSO},
@@ -59,6 +77,7 @@ void RSO::setupRsoHomeButtonMenu() {
         }
     }
 }
+#endif
 
 void RSO::HBMCreate(const HBMDataInfo* pHBInfo) {
     (*HBMCreateRSO)(pHBInfo);

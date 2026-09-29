@@ -45,7 +45,11 @@
 #include <JSystem/JGeometry/TMatrix.hpp>
 #include <JSystem/JGeometry/TUtil.hpp>
 #include <cstdio>
+#ifdef PETARI_NATIVE
+#include <cstdarg>
+#else
 #include <va_list.h>
+#endif
 
 void ObjUtil_FORCE_MATCH_SDATA2() {
     (void)1.0f;
