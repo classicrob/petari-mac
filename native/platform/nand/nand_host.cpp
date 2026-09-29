@@ -12,8 +12,8 @@
 //   0x00010000'<game code>, home /title/00010000/<code hex>/data.
 // - NAND error logging (NANDLoggingAddMessageAsync, which writes a log file on
 //   the console) goes to OSReport.
-// - The asynchronous NAND API is not implemented; the game only uses the
-//   synchronous calls, from its NAND manager thread.
+// - Asynchronous operations and safe-open/close are implemented in nand_async.cpp.
+//   The game save manager uses the synchronous calls from its NAND manager thread.
 
 #include <revolution/dvd.h>
 #include <revolution/esp.h>

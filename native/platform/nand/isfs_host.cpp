@@ -617,10 +617,15 @@ ISFSError rename(const char* oldPath, const char* newPath) {
         if (hasOpenDescriptorUnder(newPath)) {
             return ISFS_ERROR_OPENFD;
         }
-        std::error_code ec;
-        fs::remove_all(target, ec);
-        if (ec) {
-            return hostError(ec.value());
+        // POSIX rename replaces files atomically. Removing the destination first
+        // would lose the old save if rename fails or the process stops here.
+        // Keep the existing IOS directory-replacement behavior separately.
+        if (kind == Kind::Dir) {
+            std::error_code ec;
+            fs::remove_all(target, ec);
+            if (ec) {
+                return hostError(ec.value());
+            }
         }
     }
     if (::rename(source.c_str(), target.c_str()) != 0) {

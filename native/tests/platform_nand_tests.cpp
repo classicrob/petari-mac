@@ -17,6 +17,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "petari/platform/dvd.hpp"
@@ -294,6 +295,40 @@ s32 await(s32 immediate) {
     return gLast.result;
 }
 
+// Readers must always see a complete old or new file while NANDMove replaces
+// it. The reader deliberately uses the host filesystem, outside the NAND lock.
+void testAtomicReplacement() {
+    char home[64];
+    check(NANDGetHomeDir(home) == NAND_RESULT_OK, "replacement home");
+    const std::string initial(1024, 'a');
+    u32 written = 0;
+    check(writeSequence("atomic.bin", initial.data(), initial.size(), 0x3C, &written) == NAND_RESULT_OK,
+          "initial replacement file");
+    const fs::path target = PNAND::hostPath((std::string(home) + "/atomic.bin").c_str());
+    std::atomic<bool> stop{false}, invalid{false};
+    std::atomic<unsigned> observations{0};
+    std::thread reader([&] {
+        while (!stop.load()) {
+            const std::string data = readHost(target);
+            if (data.size() != 1024 || data.find_first_not_of(data.empty() ? 'a' : data.front()) != std::string::npos) {
+                invalid.store(true);
+            }
+            observations.fetch_add(1);
+        }
+    });
+    while (observations.load() == 0) std::this_thread::yield();
+    for (unsigned i = 0; i < 256; ++i) {
+        const std::string next(1024, static_cast<char>('a' + i % 26));
+        check(writeSequence("/tmp/atomic.bin", next.data(), next.size(), 0x3C, &written) == NAND_RESULT_OK,
+              "stage complete replacement");
+        check(NANDMove("/tmp/atomic.bin", home) == NAND_RESULT_OK, "commit atomic replacement");
+    }
+    stop.store(true);
+    reader.join();
+    check(!invalid.load(), "replacement never exposes a missing or partial file");
+    check(NANDDelete("atomic.bin") == NAND_RESULT_OK, "remove replacement fixture");
+}
+
 void testAsync(const fs::path& root) {
     OSInitMessageQueue(&gNandDone, gNandDoneSlots, 4);
     static NANDCommandBlock block;
@@ -441,6 +476,7 @@ int main() {
     testSaveData(nandRoot);
     testOnOsThread();
     testAsync(nandRoot);
+    testAtomicReplacement();
     PNAND::shutdown();
     testSettings(tempDir("sc"));
 
