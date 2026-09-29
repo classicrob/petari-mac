@@ -210,7 +210,21 @@ if(_petari_build_testing)
     petari_encode_target_sources(petari_speaker_tests)
     target_link_libraries(petari_speaker_tests PRIVATE petari_j3d)
     target_link_options(petari_speaker_tests PRIVATE -Wl,-dead_strip)
+    add_executable(petari_kcl_server_tests
+        "${CMAKE_SOURCE_DIR}/native/tests/kcl_server_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Map/KCollision.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Map/KCollisionPlus.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Util/JMapInfo.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Util/MathUtil.cpp"
+        "${CMAKE_SOURCE_DIR}/src/JSystem/JGadget/hashcode.cpp")
+    petari_encode_target_sources(petari_kcl_server_tests)
+    target_link_libraries(petari_kcl_server_tests PRIVATE petari_j3d)
+    target_link_options(petari_kcl_server_tests PRIVATE -Wl,-dead_strip)
+    add_test(NAME native_kcl_server COMMAND petari_kcl_server_tests)
     if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        add_test(NAME native_kcl_server_assets COMMAND petari_kcl_server_tests
+            --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
         add_test(NAME native_speaker_assets COMMAND petari_speaker_tests
             --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
     endif()

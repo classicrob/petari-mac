@@ -41,6 +41,10 @@ struct KCLFile {
     s32 mBlockWidthShift;
     s32 mBlockXShift;
     s32 mBlockXYShift;
+    // Prism count excluding the unused prism 0. The Wii derives it from the distance between
+    // the prism and octree sections, which is only meaningful for a contiguous resource;
+    // generated collision (DynamicCollisionObj) allocates the sections separately.
+    s32 mTriangleNum;
 };
 #else
 struct KCLFile {
@@ -89,6 +93,11 @@ public:
 
     void init(void*, const void*);
     void setData(void*);
+#ifdef PETARI_NATIVE
+    // Generated collision: the server uses pFile itself (not a copy), so later updates to it
+    // (DynamicCollisionObj::syncCollision) are seen, as on the Wii.
+    void initWithFile(KCLFile* pFile, const void* pMapData);
+#endif
     bool calcFarthestVertexDistance();
     static bool isBinaryInitialized(const void*) NO_INLINE;
     KC_PrismData* checkPoint(Fxyz*, f32, f32*);

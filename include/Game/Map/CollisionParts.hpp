@@ -11,12 +11,19 @@ class KCollisionServer;
 class Triangle;
 class TriangleFilterBase;
 
+struct KCLFile;
+
 class CollisionParts {
 public:
     CollisionParts();
 
     TVec3f getTrans();
     void init(const TPos3f&, HitSensor*, const void*, const void*, s32, bool);
+#ifdef PETARI_NATIVE
+    // Generated collision (host KCLFile, see KCollisionServer::initWithFile).
+    void init(const TPos3f&, HitSensor*, KCLFile*, const void*, s32, bool);
+    void initAfterServerData(const TPos3f&, HitSensor*, s32, bool);
+#endif
     void addToBelongZone();
     void removeFromBelongZone();
     void initWithAutoEqualScale(const TPos3f&, HitSensor*, const void*, const void*, s32, bool);

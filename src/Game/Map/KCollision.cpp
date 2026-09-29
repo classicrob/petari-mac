@@ -73,7 +73,16 @@ void KCollisionServer::setData(void* pData) {
     pFile->mBlockWidthShift = pShifts[11];
     pFile->mBlockXShift = pShifts[12];
     pFile->mBlockXYShift = pShifts[13];
+    pFile->mTriangleNum = (reinterpret_cast< u8* >(pFile->mOctree) - reinterpret_cast< u8* >(pFile->mPrisms + 1)) / sizeof(KC_PrismData);
     mFile = pFile;
+}
+
+void KCollisionServer::initWithFile(KCLFile* pFile, const void* pMapData) {
+    mFile = pFile;
+
+    if (pMapData != nullptr) {
+        mapInfo->attach(pMapData);
+    }
 }
 #else
 void KCollisionServer::setData(void* pData) {
@@ -1445,7 +1454,11 @@ KC_PrismData* KCollisionServer::getPrismData(u32 index) const {
 }
 
 s32 KCollisionServer::getTriangleNum() const {
+#ifdef PETARI_NATIVE
+    return mFile->mTriangleNum;
+#else
     return (reinterpret_cast< u8* >(mFile->mOctree) - reinterpret_cast< u8* >(mFile->mPrisms + 1)) / sizeof(KC_PrismData);
+#endif
 }
 
 JMapInfoIter KCollisionServer::getAttributes(u32 index) const {
@@ -1461,11 +1474,21 @@ s32* KCollisionServer::searchBlock(s32* pShift, const u32& rX, const u32& rY, co
 
     s32 xyShift = file->mBlockXYShift;
     s32 xShift = file->mBlockXShift;
+#ifdef PETARI_NATIVE
+    // Generated collision marks a single root block with -1 shifts; test that before shifting
+    // (a negative shift count is undefined behaviour in C++).
+    s32 offset = 0;
+
+    if (xyShift != -1 || xShift != -1) {
+        offset = (((rZ >> blockWidthShift) << xyShift) | ((rY >> blockWidthShift) << xShift) | (rX >> blockWidthShift)) * 4;
+    }
+#else
     s32 offset = (((rZ >> blockWidthShift) << xyShift) | ((rY >> blockWidthShift) << xShift) | (rX >> blockWidthShift)) * 4;
 
     if (xyShift == -1 && xShift == -1) {
         offset = 0;
     }
+#endif
 
     while ((offset = *reinterpret_cast< s32* >(octree + offset)) >= 0) {
         octree += offset;
