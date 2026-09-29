@@ -40,8 +40,10 @@
 // 6. FileSelector.MiiSelect: MiiSelect.Mario. FileSelector.FileConfirm:
 //    FileSelect.Start. After FileSelector.DemoStartWait any scene and stage
 //    may follow.
-// 7. The prologue: tap A 30 frames after each PictureBook.PageReady and
-//    PrologueLetter.Ready milestone, never otherwise. FAIL if no prologue
+// 7. The prologue: tap A 30 frames after each ProloguePictureBook.PageReady
+//    (ProloguePictureBook::exeKeyWait, five pages) and PrologueLetter.Ready
+//    milestone, never otherwise. The storybook's PictureBook.PageReady does
+//    not drive the prologue. FAIL if no prologue
 //    milestone arrives for 3600 frames.
 // 8. Prologue.GameStart: 120 frames later record Mario's position, hold the
 //    input bound to the stick's up for 90 frames, and PASS if he moved at

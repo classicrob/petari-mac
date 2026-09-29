@@ -7,6 +7,14 @@
 #include "Game/Util/SoundUtil.hpp"
 #include <JSystem/J3DGraphAnimator/J3DAnimation.hpp>
 
+#ifdef PETARI_NATIVE
+// Progress telemetry and the automated smoke run (native/app); observation only.
+#include <petari/milestone.hpp>
+#define NATIVE_MILESTONE(name) petari_milestone(name)
+#else
+#define NATIVE_MILESTONE(name)
+#endif
+
 namespace {
     static s32 sBookPageInfo[] = {0, 350, 700, 1050, 1400, 1748, -1};
 }  // namespace
@@ -79,6 +87,8 @@ void ProloguePictureBook::exeKeyWait() {
     J3DFrameCtrl* animCtrl = MR::getAnimCtrl(this, 0);
 
     if (MR::isFirstStep(this)) {
+        // The book stops at each sBookPageInfo frame until A is pressed.
+        NATIVE_MILESTONE("ProloguePictureBook.PageReady");
         mIconAButton->openWithoutMessage();
         animCtrl->setRate(0.0f);
     }

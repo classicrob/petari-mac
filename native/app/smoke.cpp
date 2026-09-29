@@ -337,7 +337,8 @@ Step Driver::step(const Observation& observation) {
         // observation, before the phase moves on), each ready page or letter
         // gets its tap; an earlier pending tap is kept.
         if (mScript == Script::Playable && seen("FileSelector.DemoStartWait") && !seen("Prologue.GameStart") &&
-            (milestone == "PictureBook.PageReady" || milestone == "PrologueLetter.Ready") && mPrologueTapAt < 0) {
+            (milestone == "ProloguePictureBook.PageReady" || milestone == "PrologueLetter.Ready") &&
+            mPrologueTapAt < 0) {
             mPrologueTapAt = static_cast<long>(mFrame + kPrologueTapDelay);
         }
         if (milestone == "TitleSequence.BgmPrepare") {

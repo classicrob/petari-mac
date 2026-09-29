@@ -373,12 +373,12 @@ void testPlayableFlow() {
     run.frame(with(garden, "Prologue.PictureBook"));
     run.frames(garden, 200);
     check(run.count(Button::A, true) == aPrologue, "no blind prose presses");
-    run.frame(with(garden, "PictureBook.PageReady"));
+    run.frame(with(garden, "ProloguePictureBook.PageReady"));
     run.frames(garden, 29);
     check(run.count(Button::A, true) == aPrologue, "page settles 30 frames");
     run.frame(garden);
     check(run.count(Button::A, true) == aPrologue + 1, "A after a page is ready");
-    run.frame(with(garden, "PictureBook.PageReady"));
+    run.frame(with(garden, "ProloguePictureBook.PageReady"));
     run.frames(garden, 40);
     run.frame(with(garden, "Prologue.PeachLetter"));
     run.frame(with(garden, "PrologueLetter.Ready"));
@@ -427,12 +427,12 @@ void testPrologueSameFrame() {
         const int before = run.count(Button::A, true);
         Observation demo = fileSelect(true);
         if (variant == 0) {
-            demo.milestones = {"FileSelector.DemoStartWait", "PictureBook.PageReady"};
+            demo.milestones = {"FileSelector.DemoStartWait", "ProloguePictureBook.PageReady"};
             run.frame(demo);
         } else {
             demo.milestones = {"FileSelector.DemoStartWait"};
             run.frame(demo);
-            run.frame(with(fileSelect(true), "PictureBook.PageReady"));
+            run.frame(with(fileSelect(true), "ProloguePictureBook.PageReady"));
         }
         run.frames(fileSelect(true), 40);
         check(run.count(Button::A, true) == before + 1,
@@ -444,7 +444,7 @@ void testPrologueSameFrame() {
     Run early(1000000, Smoke::Script::Playable);
     toFileSelect(early);
     const int before = early.count(Button::A, true);
-    early.frame(with(fileSelect(true), "PictureBook.PageReady"));
+    early.frame(with(fileSelect(true), "ProloguePictureBook.PageReady"));
     early.frames(fileSelect(true), 40);
     check(early.count(Button::A, true) == before, "no page tap before the demo starts");
 }
@@ -571,6 +571,39 @@ void testIconSavingWindow() {
     check(late.driver.result() == Result::Blocked, "System_Save01 after FileConfirm blocks");
 }
 
+void testProloguePictureBook() {
+    // The prologue's book is ProloguePictureBook: five key waits, each
+    // announced by ProloguePictureBook.PageReady, then the letter.
+    Run run(1000000, Smoke::Script::Playable);
+    toFileSelect(run);
+    run.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 3);
+    run.frame(with(fileSelect(true), "FileSelector.MiiSelect"));
+    run.frames(target(fileSelect(true), "MiiSelect.Mario", 0, 0.5f, 0.5f, kSel | kPoint), 3);
+    run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+    run.frames(target(fileSelect(true), "FileSelect.Start", 0, 0.5f, 0.5f, kSel | kPoint), 3);
+    Observation garden;
+    garden.scene = "Game";
+    garden.stage = "PeachCastleGardenGalaxy";
+    garden.sceneReady = true;
+    run.frame(with(garden, "FileSelector.DemoStartWait"));
+    run.frame(with(garden, "Prologue.PictureBook"));
+    const int before = run.count(Button::A, true);
+    for (int page = 0; page < 5; page++) {
+        run.frames(garden, 300);  // the book animates to its next stop
+        run.frame(with(garden, "ProloguePictureBook.PageReady"));
+        run.frames(garden, 40);
+    }
+    check(run.count(Button::A, true) == before + 5, "one A per ProloguePictureBook page, five pages");
+    run.frame(with(garden, "Prologue.PeachLetter"));
+    run.frame(with(garden, "PrologueLetter.Ready"));
+    run.frames(garden, 40);
+    check(run.count(Button::A, true) == before + 6, "and one for the letter");
+    check(run.driver.result() == Result::Running, "still running toward GameStart");
+    run.frame(with(garden, "PictureBook.PageReady"));
+    run.frames(garden, 40);
+    check(run.count(Button::A, true) == before + 6, "the storybook's PictureBook.PageReady gets no tap");
+}
+
 void testPlayableGuards() {
     Run unknown(1000000, Smoke::Script::Playable);
     toFileSelect(unknown);
@@ -658,6 +691,7 @@ int main() {
     testFileSelectMilestone();
     testSavingWindow();
     testIconSavingWindow();
+    testProloguePictureBook();
     testPlayableGuards();
     testMilestones();
     std::printf("native app smoke tests passed (%d checks)\n", checks);
