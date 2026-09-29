@@ -66,7 +66,10 @@ std::atomic<OSThread*> gCurrent{nullptr};
 bool gPreemptPending;
 
 std::unordered_map<OSThread*, std::shared_ptr<HostThread>>& hosts() {
-    static auto* instance = new std::unordered_map<OSThread*, std::shared_ptr<HostThread>>;
+    static auto* instance = [] {
+        PetariNative::HostAllocationScope hostAllocations;  // first use may be on a game thread
+        return new std::unordered_map<OSThread*, std::shared_ptr<HostThread>>;
+    }();
     return *instance;
 }
 

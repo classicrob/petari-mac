@@ -31,6 +31,10 @@
 #include "Game/Util/SingletonHolder.hpp"
 #include <JSystem/JAudio2/JAISoundHandles.hpp>
 #include <JSystem/JAudio2/JASAiCtrl.hpp>
+#include <JSystem/JAudio2/JASWaveArcLoader.hpp>
+#include <JSystem/JAudio2/JASWaveInfo.hpp>
+#include <JSystem/JAudio2/JAUSectionHeap.hpp>
+#include "Game/AudioLib/AudSceneMgr.hpp"
 #include <JSystem/JKernel/JKRAram.hpp>
 #include <JSystem/JKernel/JKRExpHeap.hpp>
 #include <JSystem/JKernel/JKRSolidHeap.hpp>
@@ -53,6 +57,14 @@
 #include <vector>
 
 extern "C" void OSInit();
+
+// Language-state scaffold storage (see main). SingletonHolder<GameSystem>'s
+// instance pointer is private; this explicit specialization of the member
+// points it at zeroed storage for the whole program.
+alignas(16) static unsigned char gGameSystemStorage[sizeof(GameSystem)] = {};
+alignas(16) static unsigned char gObjHolderStorage[sizeof(GameSystemObjHolder)] = {};
+template <>
+GameSystem* SingletonHolder< GameSystem >::sInstance = reinterpret_cast<GameSystem*>(gGameSystemStorage);
 
 namespace PAudio = PetariNative::Platform::Audio;
 namespace PDVD = PetariNative::Platform::DVD;
@@ -120,6 +132,31 @@ double rms(std::size_t fromFrame, std::size_t toFrame, int channel) {
     return n ? std::sqrt(sum / n) : 0;
 }
 
+// Why a wave bank is not loaded: per arc, the disc entry its file name
+// resolved to (setFileName), the load status (0 idle, 1 loading, 2 loaded),
+// and the size.
+void dumpWaveBank(u32 bank) {
+    if (gWrapper->mAudSystem == nullptr || gWrapper->mAudSystem->mSceneMgr == nullptr) {
+        std::fprintf(stderr, "no scene manager\n");
+        return;
+    }
+    JAUSectionHeap* heap = gWrapper->mAudSystem->mSceneMgr->mSectionHeap;
+    JASWaveBank* waveBank = heap->getWaveBankTable().getWaveBank(bank);
+    if (waveBank == nullptr) {
+        std::fprintf(stderr, "wave bank %u: not registered\n", bank);
+        return;
+    }
+    std::fprintf(stderr, "wave bank %u: %u arcs\n", bank, waveBank->getArcCount());
+    for (u32 i = 0; i < waveBank->getArcCount(); ++i) {
+        JASWaveArc* arc = waveBank->getWaveArc(i);
+        if (arc == nullptr) {
+            continue;
+        }
+        std::fprintf(stderr, "wave bank %u arc %u: entry %d status %d size %u\n", bank, i, arc->mEntryNum,
+                     static_cast<int>(arc->mStatus), arc->mFileLength);
+    }
+}
+
 void writeWav(const std::filesystem::path& path, std::uint32_t rate) {
     std::ofstream out(path, std::ios::binary);
     const std::uint32_t dataBytes = static_cast<std::uint32_t>(gCapture.size() * 2);
@@ -179,12 +216,9 @@ int main(int argc, char** argv) {
     // this test provides zeroed storage for both carrying only mLanguage,
     // set to what GameSystemObjHolder's constructor stores. Nothing else in
     // them is read on the audio path; a stray read would fault on a null.
-    alignas(16) static unsigned char gameSystemStorage[sizeof(GameSystem)] = {};
-    alignas(16) static unsigned char objHolderStorage[sizeof(GameSystemObjHolder)] = {};
-    GameSystem* gameSystem = reinterpret_cast<GameSystem*>(gameSystemStorage);
-    gameSystem->mObjHolder = reinterpret_cast<GameSystemObjHolder*>(objHolderStorage);
+    GameSystem* gameSystem = SingletonHolder< GameSystem >::get();
+    gameSystem->mObjHolder = reinterpret_cast<GameSystemObjHolder*>(gObjHolderStorage);
     gameSystem->mObjHolder->mLanguage = MR::getDecidedLanguageFromIPL();
-    SingletonHolder< GameSystem >::sInstance = gameSystem;
 
     HeapMemoryWatcher::createRootHeap();
     SingletonHolder< HeapMemoryWatcher >::init();
@@ -215,16 +249,24 @@ int main(int argc, char** argv) {
     check(initFrames >= 0, "createAudioSystem finishes and the system-init waves load (GameSystemInitializeAudio)");
     if (initFrames < 0) {
         std::fprintf(stderr, "created=%d\n", gCreated ? 1 : 0);
+        dumpWaveBank(7);
         return 1;
     }
     OSJoinThread(&thread, nullptr);
     std::printf("audio system initialised after %d frames; audio heap free %u of %u bytes\n", initFrames,
                 static_cast<unsigned>(audioHeap->getFreeSize()), static_cast<unsigned>(heapSize(audioHeap)));
-    check(audioHeap->getFreeSize() > 0, "the audio solid heap was large enough");
+    // JASKernel::setupRootHeap takes what AudNewAudSystem leaves of the solid
+    // heap, so 0 free here is normal; exhaustion would have panicked
+    // (HeapMemoryWatcher's error handler) during createAudioSystem.
 
     gWrapper->loadStaticWaveData();
     const int staticFrames = runFramesUntil([] { return gWrapper->isLoadDoneStaticWaveData(); }, 60 * 30);
     check(staticFrames >= 0, "static wave data loads");
+    if (staticFrames < 0) {
+        for (u32 bank : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 8u, 11u}) {
+            dumpWaveBank(bank);
+        }
+    }
     std::printf("static wave data loaded after %d more frames\n", staticFrames);
 
     const u32 subFrames = JASDriver::getSubFrameCounter() - subFramesBefore;

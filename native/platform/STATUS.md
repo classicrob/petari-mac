@@ -659,6 +659,40 @@ CMake wiring.
 
   Passes ASan (20 runs), TSan, and Release.
 
+### Allocation ownership and the audio boot smoke (tests)
+
+- `native/tests/platform_allocation_tests.cpp` (repository-root build only;
+  it needs the JKR heaps) runs the platform under the game's replacement
+  operator new/delete:
+  - a registered game thread with a child JKR heap current first-touches
+    every service;
+  - the host workers (DSP mails, async NAND, async DVD, GP tokens) then drain
+    and free what it queued, and the child heap must stay unchanged;
+  - the child heap is destroyed and poisoned, and everything runs again;
+  - an OS thread entry must still allocate from the game heap.
+
+  Rule it pins: host-owned containers are built and mutated under
+  `HostAllocationScope`, and scopes end before game callbacks or thread
+  entries run on game threads.
+- `native/tests/audio_boot_tests.cpp` is opt-in (`-DPETARI_AUDIO_BOOT_SMOKE=ON`,
+  repository-root build, extracted disc at build/game-data/RMGE01). It runs
+  the game's real audio start-up on the disc:
+  - HeapMemoryWatcher (the 3 MiB audio solid heap), FileRipper, JKRAram,
+    FileLoader;
+  - AudSystemWrapper::requestResourceForInitialize, and createAudioSystem on
+    a priority-14 OS thread;
+  - a movement() + VIWaitForRetrace frame loop until the system-init and
+    static waves load;
+  - one real SE through AudSystem::startSound.
+
+  The test itself acts as the audio device. It pulls 32000/60 frames per game
+  frame, checks that the SE is audible, and writes a WAV to $TMPDIR. The only
+  scaffold is language state: zeroed GameSystem/GameSystemObjHolder storage
+  carrying just `mLanguage` from `MR::getDecidedLanguageFromIPL()`, since the
+  real objects bring the scene graph. It found the JAudio2 `sendCmdMsg`
+  literal-size truncation that kept wave arc 7 at "loading", now fixed by the
+  library worker.
+
 ## Integration
 
 Add to the root `CMakeLists.txt` after `petari_native_config` is defined:

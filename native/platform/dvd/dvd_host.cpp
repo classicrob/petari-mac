@@ -208,7 +208,10 @@ struct Drive {
 // Intentionally never destroyed: the drive thread may outlive static
 // destruction when the game exits without calling shutdown().
 Drive& drive() {
-    static Drive* instance = new Drive;
+    static Drive* instance = [] {
+        PetariNative::HostAllocationScope hostAllocations;  // first use may be on a game thread
+        return new Drive;
+    }();
     return *instance;
 }
 
@@ -579,7 +582,8 @@ fs::path hostPathForEntry(s32 entryNum) {
 }
 
 void shutdown() {
-    PetariNative::HostAllocationScope hostAllocations;
+    // No HostAllocationScope: cancelled commands' game callbacks run below,
+    // and this only frees (routed by address) host-owned state.
     Drive& d = drive();
     requireNotDriveThread(d, "PetariNative::Platform::DVD::shutdown");
     if (OS::interruptsDisabled()) {

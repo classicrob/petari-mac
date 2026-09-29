@@ -2,6 +2,7 @@
 #include "JSystem/JAudio2/JASCalc.hpp"
 #include "JSystem/JAudio2/JASCriticalSection.hpp"
 #include "JSystem/JKernel/JKRSolidHeap.hpp"
+#include <cstddef>
 
 JASTaskThread::JASTaskThread(int priority, int msgCount, u32 stackSize) : JKRThread(JASDram, stackSize, msgCount, priority) {
     _84 = false;
@@ -22,7 +23,12 @@ JASTaskThread::~JASTaskThread() {
 
 void* JASTaskThread::allocCallStack(JASThreadCallback callback, const void* msg, u32 msgSize) {
     ThreadMemPool* heap;
+#ifdef PETARI_NATIVE
+    // Message data follows the callback and type fields (8 bytes on the Wii).
+    u32 size = offsetof(JASThreadCallStack, msg) + msgSize;
+#else
     u32 size = msgSize + 8;
+#endif
     JASThreadCallStack* callStack = (JASThreadCallStack*)JASKernel::getCommandHeap()->alloc(size);
     if (callStack == NULL) {
         return NULL;
@@ -36,7 +42,11 @@ void* JASTaskThread::allocCallStack(JASThreadCallback callback, const void* msg,
 
 void* JASTaskThread::allocCallStack(JASThreadCallback callback, void* msg) {
     JASThreadCallStack* callStack;
+#ifdef PETARI_NATIVE
+    callStack = (JASThreadCallStack*)JASKernel::getCommandHeap()->alloc(offsetof(JASThreadCallStack, msg) + sizeof(void*));
+#else
     callStack = (JASThreadCallStack*)JASKernel::getCommandHeap()->alloc(12);
+#endif
     if (callStack == NULL) {
         return NULL;
     }

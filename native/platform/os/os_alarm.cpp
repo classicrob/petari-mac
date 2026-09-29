@@ -32,7 +32,10 @@ OSContext IdleContext;
 bool gTimerStarted;
 
 std::condition_variable& timerCv() {
-    static auto* instance = new std::condition_variable;
+    static auto* instance = [] {
+        PetariNative::HostAllocationScope hostAllocations;  // first use may be on a game thread
+        return new std::condition_variable;
+    }();
     return *instance;
 }
 

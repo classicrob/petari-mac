@@ -47,7 +47,10 @@ struct Worker {
 };
 
 Worker& worker() {
-    static Worker* instance = new Worker;
+    static Worker* instance = [] {
+        PetariNative::HostAllocationScope hostAllocations;  // first use may be on a game thread
+        return new Worker;
+    }();
     return *instance;
 }
 
@@ -72,8 +75,14 @@ void* workerMain(void*) {
     }
 }
 
-s32 submit(std::function<void()> job) {
+// The job is built here, inside the host scope, from the caller's lambda: the
+// NAND worker destroys it. Callers capture only trivially copyable values
+// (paths as char arrays), so building the lambda on a game thread allocates
+// nothing; game callbacks never run inside the scope.
+template <class Job>
+s32 submit(Job&& lambda) {
     PetariNative::HostAllocationScope hostAllocations;
+    std::function<void()> job(std::forward<Job>(lambda));
     Worker& w = worker();
     std::lock_guard<std::mutex> guard(w.lock);
     if (!w.running) {
@@ -283,8 +292,7 @@ s32 NANDPrivateCreateAsync(const char* path, u8 perm, u8 attr, NANDCallback cb, 
     }
     char absPath[64] = "";
     nandGenerateAbsPath(absPath, path);
-    std::string target(absPath);
-    return submit([=] { completeIsfs(block, PNAND::createNode(target.c_str(), perm, attr, true, false)); });
+    return submit([=] { completeIsfs(block, PNAND::createNode(absPath, perm, attr, true, false)); });
 }
 
 s32 NANDPrivateCreateDirAsync(const char* path, u8 perm, u8 attr, NANDCallback cb, NANDCommandBlock* block) {
@@ -296,8 +304,7 @@ s32 NANDPrivateCreateDirAsync(const char* path, u8 perm, u8 attr, NANDCallback c
     }
     char absPath[64] = "";
     nandGenerateAbsPath(absPath, path);
-    std::string target(absPath);
-    return submit([=] { completeIsfs(block, PNAND::createNode(target.c_str(), perm, attr, true, true)); });
+    return submit([=] { completeIsfs(block, PNAND::createNode(absPath, perm, attr, true, true)); });
 }
 
 s32 NANDPrivateDeleteAsync(const char* path, NANDCallback cb, NANDCommandBlock* block) {
@@ -306,8 +313,7 @@ s32 NANDPrivateDeleteAsync(const char* path, NANDCallback cb, NANDCommandBlock* 
     }
     char absPath[64] = "";
     nandGenerateAbsPath(absPath, path);
-    std::string target(absPath);
-    return submit([=] { completeIsfs(block, PNAND::deleteNode(target.c_str(), true)); });
+    return submit([=] { completeIsfs(block, PNAND::deleteNode(absPath, true)); });
 }
 
 s32 NANDPrivateSafeOpenAsync(const char* path, NANDFileInfo* info, const u8 accType, void* buf, const u32 length, NANDCallback cb,

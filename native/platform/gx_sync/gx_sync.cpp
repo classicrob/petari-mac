@@ -89,7 +89,10 @@ struct State {
 };
 
 State& state() {
-    static State* instance = new State;
+    static State* instance = [] {
+        PetariNative::HostAllocationScope hostAllocations;  // first use may be on a game thread
+        return new State;
+    }();
     return *instance;
 }
 

@@ -207,7 +207,20 @@ if(BUILD_TESTING)
     # DSP device, AI) on the extracted disc, with output pulled
     # deterministically. Static libraries of the needed JSystem and game
     # audio sources; only referenced objects are linked.
-    if(NOT CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    # Allocation ownership under the game's replacement operator new/delete
+    # (repository-root build only: needs the JKR heaps; standalone subprojects
+    # such as native/input also add this directory).
+    if(CMAKE_SOURCE_DIR STREQUAL PETARI_REPO_ROOT)
+        add_executable(petari_platform_allocation_tests ${PETARI_REPO_ROOT}/native/tests/platform_allocation_tests.cpp
+            ${PETARI_REPO_ROOT}/native/tests/heap_diagnostics.cpp
+            ${PETARI_JAUDIO_DSP_SOURCES})
+        petari_encode_target_sources(petari_platform_allocation_tests)
+        target_link_libraries(petari_platform_allocation_tests PRIVATE petari_platform petari_heaps petari_boot)
+        add_test(NAME native_platform_allocation COMMAND petari_platform_allocation_tests)
+    endif()
+
+    option(PETARI_AUDIO_BOOT_SMOKE "Build and register the audio boot smoke test (work in progress)" OFF)
+    if(PETARI_AUDIO_BOOT_SMOKE AND CMAKE_SOURCE_DIR STREQUAL PETARI_REPO_ROOT)
         file(GLOB_RECURSE PETARI_AUDIO_BOOT_JSYSTEM CONFIGURE_DEPENDS
             ${PETARI_REPO_ROOT}/src/JSystem/*.cpp ${PETARI_REPO_ROOT}/src/nw4r/*.cpp)
         list(FILTER PETARI_AUDIO_BOOT_JSYSTEM EXCLUDE REGEX "/JSystem/(JKernel|JMath|J3DGraphBase|J3DGraphAnimator|J3DGraphLoader)/")
@@ -244,7 +257,10 @@ if(BUILD_TESTING)
         target_compile_options(petari_audio_boot_game PRIVATE -fno-rtti -w -Wno-inconsistent-missing-override)
         target_link_libraries(petari_audio_boot_game PUBLIC petari_audio_boot_jsystem petari_input petari_home_menu)
 
-        add_executable(petari_audio_boot_tests EXCLUDE_FROM_ALL ${PETARI_REPO_ROOT}/native/tests/audio_boot_tests.cpp)
+        # Private experiments only: sources linked ahead of the libraries.
+        set(PETARI_AUDIO_BOOT_EXTRA_SOURCES "" CACHE STRING "Extra sources linked into the audio boot smoke (local diagnosis)")
+        add_executable(petari_audio_boot_tests EXCLUDE_FROM_ALL ${PETARI_REPO_ROOT}/native/tests/audio_boot_tests.cpp
+            ${PETARI_AUDIO_BOOT_EXTRA_SOURCES})
         petari_encode_target_sources(petari_audio_boot_tests)
         target_include_directories(petari_audio_boot_tests PRIVATE ${PETARI_REPO_ROOT})
         target_compile_options(petari_audio_boot_tests PRIVATE -fno-rtti)

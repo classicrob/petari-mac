@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "os_internal.hpp"
+#include "petari/host_allocation.hpp"
 
 namespace PetariNative::Platform::OS {
 namespace {
@@ -28,7 +29,10 @@ void enable() {
 
 std::mutex& interruptMutex() {
     // Never destroyed: interrupt sources may still run during static destruction.
-    static std::mutex* instance = new std::mutex;
+    static std::mutex* instance = [] {
+        PetariNative::HostAllocationScope hostAllocations;  // first use may be on a game thread
+        return new std::mutex;
+    }();
     return *instance;
 }
 

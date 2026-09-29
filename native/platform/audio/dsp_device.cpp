@@ -97,7 +97,10 @@ struct Device {
 };
 
 Device& device() {
-    static Device* instance = new Device;
+    static Device* instance = [] {
+        PetariNative::HostAllocationScope hostAllocations;  // first use may be on a game thread
+        return new Device;
+    }();
     return *instance;
 }
 
@@ -114,6 +117,7 @@ void* resolve(Device& d, std::uint32_t handle) {
 // them back to back.
 void pushMails(Device& d, std::initializer_list<std::uint32_t> mails, int interrupts) {
     {
+        PetariNative::HostAllocationScope hostAllocations;
         std::lock_guard<std::mutex> guard(d.lock);
         for (std::uint32_t m : mails) {
             d.fromDsp.push_back(m);
@@ -429,6 +433,8 @@ u32 DSPCheckMailToDSP(void) {
 void DSPSendMailToDSP(u32 mail) {
     Device& d = device();
     {
+        // Game thread; the DSP worker frees the deque's blocks.
+        PetariNative::HostAllocationScope hostAllocations;
         std::lock_guard<std::mutex> guard(d.lock);
         d.toDsp.push_back(mail);
     }
