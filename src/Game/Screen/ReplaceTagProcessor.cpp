@@ -124,17 +124,31 @@ namespace ReplaceTagProcessor {
         }
 
         *pDst++ = 0x1A;
+#ifdef PETARI_NATIVE
+        // Host-order code units: (size << 8 | group), then the tag (MessageEditorMessageTag).
+        pDst[0] = static_cast< wchar_t >(tag.mLength << 8 | tag.mGroup);
+        pDst[1] = static_cast< wchar_t >(tag.mTag);
+#else
         MR::copyMemory(pDst, &tag, rTag.getTagLength());
+#endif
         return rTag.getTagLength() / 2 + 1;
     }
 
     u32 exeStringGroup(wchar_t* pDst, const MessageEditorMessageTag& rTag, va_list args) {
         va_list copy;
         const wchar_t* pString = nullptr;
+#ifdef PETARI_NATIVE
+        // Host va_list may be a plain pointer (Apple arm64), so copy it with va_copy.
+        va_copy(copy, args);
+#else
         *copy = *args;
+#endif
         for (u32 i = 0; i <= rTag.getParam32(1); i++) {
             pString = va_arg(copy, const wchar_t*);
         }
+#ifdef PETARI_NATIVE
+        va_end(copy);
+#endif
 
         return swprintf(pDst, 0x100, L"%ls", pString);
     }
@@ -142,10 +156,17 @@ namespace ReplaceTagProcessor {
     u32 exeNumberGroup(wchar_t* pDst, const MessageEditorMessageTag& rTag, va_list args) {
         va_list copy;
         int number = 0;
+#ifdef PETARI_NATIVE
+        va_copy(copy, args);
+#else
         *copy = *args;
+#endif
         for (u32 i = 0; i <= rTag.getParam32(1); i++) {
             number = va_arg(copy, int);
         }
+#ifdef PETARI_NATIVE
+        va_end(copy);
+#endif
 
         switch (rTag.getTag()) {
         case 5:

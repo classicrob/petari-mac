@@ -1,4 +1,5 @@
 #include "Game/Util/StringUtil.hpp"
+#include "Game/Screen/MessageTagSkipTagProcessor.hpp"
 #include "Game/Screen/ReplaceTagProcessor.hpp"
 #include "Game/Util/EventUtil.hpp"
 #include "Game/Util/MessageUtil.hpp"
@@ -6,6 +7,7 @@
 #include <cstdarg>
 #include <cstdio>
 #ifdef PETARI_NATIVE
+#include <revolution/os.h>
 #include <cstring>
 #include <cwchar>
 #else
@@ -291,6 +293,42 @@ namespace MR {
         return pStr == nullptr || MR::isEqualString(pStr, "");
     }
 
+#ifdef PETARI_NATIVE
+    // Natively message text is host-order UTF-16 code units (MessageData), so a tag's packed
+    // size/group bytes share one unit; MessageEditorMessageTag decodes them.
+    bool isMessageEditorNextTag(const wchar_t* pStr) {
+        return MessageEditorMessageTag(pStr + 1).isGroupTagId(1, 1);
+    }
+
+    int getStringLengthWithMessageTag(const wchar_t* pMessage) {
+        int length = 0;
+
+        while (*pMessage != '\0') {
+            if (*pMessage == 0x1A) {
+                // The size byte counts the whole tag: the 0x1A unit, the size/group unit and
+                // the tag ID unit (6 bytes) plus parameters, in whole code units. Anything else
+                // is malformed; the Wii walker would stall on a size below 2.
+                u32 tagSize = MessageEditorMessageTag(pMessage + 1).getTagLength() + 2;
+                if (tagSize < 6 || (tagSize & 1) != 0) {
+                    OSPanic(__FILE__, __LINE__, "Malformed message tag (size %u)", tagSize);
+                }
+
+                if (isMessageEditorNextTag(pMessage)) {
+                    break;
+                }
+
+                pMessage += tagSize / sizeof(u16);
+                length += tagSize / sizeof(u16);
+                continue;
+            }
+
+            pMessage++;
+            length++;
+        }
+
+        return length;
+    }
+#else
     bool isMessageEditorNextTag(const wchar_t* pStr) {
         const Tag* pTag = reinterpret_cast< const Tag* >(pStr);
         u8 v1 = pTag->_3;
@@ -322,6 +360,7 @@ namespace MR {
 
         return length;
     }
+#endif
 
     void scan32(const char* pSrc, const char* pSubStr, s32* pDst) {
         if (strstr(pSrc, pSubStr) == nullptr) {

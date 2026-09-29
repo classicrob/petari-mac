@@ -1,8 +1,9 @@
 // BMG message tests for the native build.
 //
 // Links: src/Game/System/MessageHolder.cpp, src/Game/Screen/MessageEditorMessageTagNative.cpp,
-// src/Game/NPC/TalkMessageInfo.cpp, src/Game/Util/JMapInfo.cpp,
-// src/JSystem/JGadget/hashcode.cpp, petari_resources, petari_platform_os (OSPanic).
+// src/Game/NPC/TalkMessageInfo.cpp, src/Game/Util/JMapInfo.cpp, src/Game/Util/StringUtil.cpp,
+// src/Game/Screen/ReplaceTagProcessor.cpp, src/JSystem/JGadget/hashcode.cpp, petari_resources,
+// petari_platform_os (OSPanic).
 // MessageHolder.cpp also holds the archive-mounting entry points, which need the game
 // system; this file defines those as aborting stubs because the tests never reach them.
 //
@@ -12,8 +13,10 @@
 #include "Game/NPC/TalkMessageInfo.hpp"
 #include "Game/NPC/TalkNodeCtrl.hpp"
 #include "Game/Screen/MessageTagSkipTagProcessor.hpp"
+#include "Game/Screen/ReplaceTagProcessor.hpp"
 #include "Game/System/MessageHolder.hpp"
 #include "Game/Util/JMapInfo.hpp"
+#include "Game/Util/StringUtil.hpp"
 #include <JSystem/JGadget/hashcode.hpp>
 #include <petari/endian.hpp>
 #include <strings.h>
@@ -32,10 +35,6 @@ class JKRHeap;
 class JKRMemArchive;
 
 namespace MR {
-    bool isEqualStringCase(const char* pStr1, const char* pStr2) {
-        return strcasecmp(pStr1, pStr2) == 0;
-    }
-
     [[noreturn]] static void unreachable(const char* pName) {
         std::fprintf(stderr, "message_tests: unexpected call to %s\n", pName);
         std::abort();
@@ -51,6 +50,28 @@ namespace MR {
 
     JKRMemArchive* mountArchive(const char*, JKRHeap*) {
         unreachable("MR::mountArchive");
+    }
+
+    // StringUtil / ReplaceTagProcessor dependencies (player, race and message lookups are not
+    // reached by these tests; the picture tag test runs as Mario).
+    bool isPlayerLuigi() {
+        return false;
+    }
+
+    u32 getRaceBestTime(int) {
+        unreachable("MR::getRaceBestTime");
+    }
+
+    u32 getRaceCurrentTime() {
+        unreachable("MR::getRaceCurrentTime");
+    }
+
+    const char16_t* getGameMessageDirect(const char*) {
+        unreachable("MR::getGameMessageDirect");
+    }
+
+    void copyMemory(void* pDst, const void* pSrc, u32 size) {
+        std::memcpy(pDst, pSrc, size);
     }
 }  // namespace MR
 
@@ -350,6 +371,32 @@ static void testSynthetic() {
     check(synthetic.mBmg == bmgBefore, "resource bytes left unmodified");
 }
 
+// Message tag helpers on host-order text: the walker, the next-page test and the replace
+// functions (picture tag rewrite, number and string arguments).
+static void testTagFunctions() {
+    const char16_t cNumberTag[] = {u'A', 0x1A, 14 << 8 | 6, 0, 0, 0, 0, 1, u'B', 0};
+    const char16_t cStringTag[] = {u'<', 0x1A, 14 << 8 | 7, 0, 0, 0, 0, 0, u'>', 0};
+    const char16_t cPageBreak[] = {u'x', 0x1A, 6 << 8 | 1, 1, u'y', 0};
+    const char16_t cPictureTags[] = {0x1A, 6 << 8 | 3, 0x05, 0x1A, 6 << 8 | 3, 0x5B - 0x30, u'!', 0};
+
+    check(MR::getStringLengthWithMessageTag(cNumberTag) == 9, "tag walker counts a tag as its size in units");
+    check(MR::getStringLengthWithMessageTag(cPageBreak) == 1 && MR::isMessageEditorNextTag(&cPageBreak[1]) &&
+              !MR::isMessageEditorNextTag(&cNumberTag[1]),
+          "next-page tag (group 1, tag 1) ends the walk");
+
+    char16_t buffer[64] = {};
+    ReplaceTagFunction::ReplaceArgs(buffer, 64, cNumberTag, 11, 42);
+    check(std::u16string(buffer) == u"A42B", "number argument tag takes the argument its parameter names (va_copy)");
+    ReplaceTagFunction::ReplaceArgs(buffer, 64, cStringTag, u"xyz");
+    check(std::u16string(buffer) == u"<xyz>", "string argument tag");
+
+    // A picture tag is rewritten in place; 0x5B - 0x30 is the player icon, which becomes 0x12 for Mario.
+    const u32 length = ReplaceTagProcessor::Replace(buffer, cPictureTags);
+    const char16_t cExpected[] = {0x1A, 6 << 8 | 3, 0x05, 0x1A, 6 << 8 | 3, 0x12, u'!', 0};
+    check(length == 7 && std::memcmp(buffer, cExpected, sizeof(cExpected)) == 0 && MR::getStringLengthWithMessageTag(buffer) == 7,
+          "picture tags are rewritten as host-order code units");
+}
+
 static bool readFile(const std::filesystem::path& path, Buffer* pOut) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
@@ -388,7 +435,7 @@ static void smokeMessageArchive(const std::filesystem::path& path) {
     MessageData data(bmg.data(), table.data());
     const JMapInfo* pIds = data.mIDTable;
     const u32 itemCount = data.mInfoBlock->mItemCount;
-    std::size_t messages = 0, tags = 0, units = 0, asciiUnits = 0, argTags = 0;
+    std::size_t messages = 0, tags = 0, units = 0, asciiUnits = 0, argTags = 0, nextPageTags = 0;
     int failures = 0;
 
     for (int entry = 0; entry < pIds->getNumEntries() && failures < 5; entry++) {
@@ -405,6 +452,31 @@ static void smokeMessageArchive(const std::filesystem::path& path) {
         const char16_t* pBegin = reinterpret_cast< const char16_t* >(data.mText);
         const char16_t* pEnd = pBegin + data.mTextUnitCount;
         const char16_t* pText = reinterpret_cast< const char16_t* >(info._0);
+
+        // The game's tag walker (MR::getStringLengthWithMessageTag, which the text box setup
+        // uses) against a reference on the serialized big-endian bytes of the same message:
+        // a tag is u16 0x1A, u8 size (whole tag), u8 group, u16 tag; group 1 tag 1 ends a page.
+        const u8* pRaw = reinterpret_cast< const u8* >(data.mDataBlock + 1) + (pText - pBegin) * 2;
+        const u8* pRawEnd = reinterpret_cast< const u8* >(data.mDataBlock + 1) + data.mTextUnitCount * 2;
+        int expectedLength = 0;
+        for (const u8* p = pRaw; p + 1 < pRawEnd && PetariNative::readU16BE(p) != 0;) {
+            if (PetariNative::readU16BE(p) == 0x1A) {
+                if (p[3] == 1 && PetariNative::readU16BE(p + 4) == 1) {
+                    nextPageTags++;
+                    break;
+                }
+                expectedLength += p[2] / 2;
+                p += p[2];
+            } else {
+                expectedLength++;
+                p += 2;
+            }
+        }
+        if (MR::getStringLengthWithMessageTag(pText) != expectedLength) {
+            std::fprintf(stderr, "FAIL: %s: '%s' tag walker length %d, expected %d\n", path.filename().c_str(), pId,
+                         MR::getStringLengthWithMessageTag(pText), expectedLength);
+            ++failures;
+        }
         while (pText < pEnd && *pText != 0) {
             if (*pText == 0x1A) {
                 MessageEditorMessageTag tag(pText + 1);
@@ -467,8 +539,13 @@ static void smokeMessageArchive(const std::filesystem::path& path) {
     }
 
     sFailures += failures;
-    std::printf("%s: %zu messages, %zu tags (%zu argument tags), %zu text units, %u flow nodes\n", path.parent_path().parent_path().filename().c_str(),
-                messages, tags, argTags, units, data.mFlowBlock != nullptr ? static_cast< u32 >(data.mFlowBlock->mNodeCount) : 0);
+    if (nextPageTags == 0) {
+        std::fprintf(stderr, "FAIL: %s: no next-page tag found by the reference walker\n", path.filename().c_str());
+        ++failures;
+    }
+    std::printf("%s: %zu messages, %zu tags (%zu argument tags, %zu page breaks), %zu text units, %u flow nodes\n",
+                path.parent_path().parent_path().filename().c_str(), messages, tags, argTags, nextPageTags, units,
+                data.mFlowBlock != nullptr ? static_cast< u32 >(data.mFlowBlock->mNodeCount) : 0);
 }
 
 static void testAssets(const std::filesystem::path& filesRoot) {
@@ -490,6 +567,7 @@ static void testAssets(const std::filesystem::path& filesRoot) {
 }
 
 int main(int argc, char** argv) {
+    testTagFunctions();
     testSynthetic();
 
     if (argc == 3 && std::strcmp(argv[1], "--assets") == 0) {

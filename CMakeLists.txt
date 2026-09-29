@@ -156,9 +156,11 @@ if(BUILD_TESTING)
     add_test(NAME native_jmap COMMAND petari_jmap_tests)
     add_executable(petari_message_tests native/tests/message_tests.cpp
         src/Game/System/MessageHolder.cpp src/Game/Screen/MessageEditorMessageTagNative.cpp
+        src/Game/Util/StringUtil.cpp src/Game/Screen/ReplaceTagProcessor.cpp
         src/Game/NPC/TalkMessageInfo.cpp src/Game/Util/JMapInfo.cpp src/JSystem/JGadget/hashcode.cpp)
     petari_encode_target_sources(petari_message_tests)
     target_link_libraries(petari_message_tests PRIVATE petari_resources petari_platform_os)
+    target_link_options(petari_message_tests PRIVATE -Wl,-dead_strip)
     add_test(NAME native_messages COMMAND petari_message_tests)
     if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
         add_test(NAME native_jkr_disc COMMAND petari_jkr_archive_tests --disc "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01")

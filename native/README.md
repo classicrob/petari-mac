@@ -11,8 +11,9 @@ services, and original game entry point. The original frame loop runs at about
 60 Hz, audio initialization and stationed-resource loading complete, and the fresh
 save check finishes. The full title smoke accepts A+B, reaches selectable save
 slots, and exits through the game's normal power-off path with status 0. Gameplay
-remains unverified: the first playable smoke selected an empty slot through the
-real pointer, then stalled when the create-file prompt appeared. A separate audio boot test plays a real coin
+remains unverified. The extended smoke selects an empty slot and confirms file
+creation through the real pointer; the game writes GameData.bin and banner.bin
+and completes the save successfully. A separate audio boot test plays a real coin
 sound and the title music through JAudio and the native DSP/AI path, including
 50 seconds of streaming through a loop, and the transition to file-select music
 with its chord table. Focused
@@ -253,8 +254,8 @@ object target, not a game executable.
 
 ## Work still required for a playable port
 
-1. Create a file and enter playable gameplay. The title smoke and normal shutdown
-   pass; the extended smoke currently stalls at the create-file prompt.
+1. Complete icon selection and the prologue, then verify playable movement. The
+   title smoke, file creation, save writes and normal shutdown pass.
 2. Continue serialized resource runtime validation. Archive, BCSV,
    BMG, KCL, models, layouts, fonts and TPL conversions have real-disc tests.
    All 1,761 disc model/material images construct real J3DModelData successfully.
