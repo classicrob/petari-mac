@@ -73,6 +73,19 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME native_app_seam COMMAND petari_app_seam_tests)
 
+    # Physical input is counted separately from the smoke driver's injected input.
+    add_executable(petari_app_input_events_tests ${PETARI_REPO_ROOT}/native/tests/app_input_events_tests.cpp
+        input_events.cpp ${PETARI_REPO_ROOT}/native/input/bindings.cpp)
+    target_include_directories(petari_app_input_events_tests PRIVATE ${PETARI_REPO_ROOT}/native/include
+        ${PETARI_REPO_ROOT}/native/input/include)
+    if(_petari_app_standalone)
+        target_include_directories(petari_app_input_events_tests PRIVATE ${PETARI_SDL3_INCLUDE_DIR})
+    else()
+        target_include_directories(petari_app_input_events_tests PRIVATE
+            $<TARGET_PROPERTY:aurora::core,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    add_test(NAME native_app_input_events COMMAND petari_app_input_events_tests)
+
     # The smoke script's decisions and the milestone history, without the game.
     add_executable(petari_app_smoke_tests ${PETARI_REPO_ROOT}/native/tests/app_smoke_tests.cpp)
     target_include_directories(petari_app_smoke_tests PRIVATE ${PETARI_REPO_ROOT}/native/include)
