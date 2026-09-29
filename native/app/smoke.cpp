@@ -63,13 +63,14 @@ constexpr unsigned long kResumeSettle = 60;
 constexpr unsigned long kCalibrateHold = 20;
 constexpr float kCalibrateMinimum = 10.0f;
 // Arrival radii per segment. Segment 0's town road is open (proven in real
-// runs with 600). Segment 1's points are about 800 apart along a
-// collision-derived path past a basin and crystal cages, so a wide radius
-// would cut corners into them. The last waypoint lies inside the movie's
+// runs with 600). Segment 1's points are about 500 apart on a path with 100
+// units of clearance: turning for the next point from up to 100 away keeps
+// Mario within that clearance (a wider radius cut corners into a curb and a
+// building in story-3 and story-6). The last waypoint lies inside the movie's
 // trigger area: walk right up to it, or Mario can stop outside the area (the
-// castle waypoint is about 190 units inside its box).
-constexpr float kWaypointRadius[2] = {600.0f, 200.0f};
-constexpr float kFinalWaypointRadius[2] = {200.0f, 150.0f};
+// castle waypoint is 92 units inside its box).
+constexpr float kWaypointRadius[2] = {600.0f, 100.0f};
+constexpr float kFinalWaypointRadius[2] = {200.0f, 80.0f};
 constexpr float kProgressStep = 50.0f;
 constexpr unsigned long kStuckFrames = 180;
 constexpr int kMaxRecoveries = 4;
@@ -104,15 +105,20 @@ const std::vector<PetariNative::App::Smoke::Waypoint> kRoutes[2] = {
     // After PrologueA and the attack (switch 1), from the restart point
     // (-500, 260, 6250): a walk found by the game worker on the stage's own
     // collision (PeachCastleGardenPlanet, PeachCastleTownAfterAttack and the 14
-    // CrystalCageS placements; step up at most 70 per 100 units, drop at most
-    // 400). It stays north of the sunken area at y 140 around (-3000, 2500)
-    // and passes the cages on their north/west sides; the last point is inside
-    // the castle trigger box. Static geometry only: meteors, ships and Toads
-    // may still block or knock Mario about.
-    {{-1300.0f, 6000.0f}, {-2100.0f, 5200.0f}, {-2900.0f, 4400.0f}, {-3500.0f, 3600.0f}, {-4100.0f, 2900.0f},
-     {-4700.0f, 2100.0f}, {-5300.0f, 1600.0f}, {-5800.0f, 800.0f}, {-5800.0f, 0.0f}, {-5800.0f, -800.0f},
-     {-5800.0f, -1600.0f}, {-6000.0f, -2400.0f}, {-6300.0f, -3200.0f}, {-6300.0f, -4000.0f}, {-6300.0f, -4800.0f},
-     {-6400.0f, -5600.0f}, {-7200.0f, -6400.0f}, {-7400.0f, -6600.0f}},
+    // CrystalCageS placements): steps up at most 50 per 100 units, and floor
+    // within 120 of the path's height everywhere within 100 units of it. It
+    // stays north of a 70-80 unit curb (x -4836..-3450, z 2270..2380, where
+    // Mario stalled in story-3 and story-6) and comes down the x -5800/-5900
+    // corridor west of a building (x -5705..-5105, z 810..1060); the last
+    // point is inside the castle trigger box. Static geometry only: meteors,
+    // ships and Toads may still block or knock Mario about.
+    {{-1000.0f, 6300.0f}, {-1500.0f, 5900.0f}, {-2000.0f, 5600.0f}, {-2500.0f, 5100.0f}, {-3000.0f, 5000.0f},
+     {-3500.0f, 4800.0f}, {-4000.0f, 4600.0f}, {-4500.0f, 4600.0f}, {-5000.0f, 4200.0f}, {-5500.0f, 3700.0f},
+     {-5800.0f, 3200.0f}, {-5800.0f, 2700.0f}, {-5800.0f, 2200.0f}, {-5800.0f, 1700.0f}, {-5800.0f, 1200.0f},
+     {-5900.0f, 700.0f}, {-5900.0f, 200.0f}, {-5900.0f, -300.0f}, {-5900.0f, -800.0f}, {-5900.0f, -1300.0f},
+     {-5900.0f, -1800.0f}, {-6100.0f, -2300.0f}, {-6400.0f, -2800.0f}, {-6400.0f, -3300.0f}, {-6400.0f, -3800.0f},
+     {-6400.0f, -4300.0f}, {-6400.0f, -4800.0f}, {-6400.0f, -5300.0f}, {-6800.0f, -5800.0f}, {-7300.0f, -6300.0f},
+     {-7500.0f, -6500.0f}},
 };
 const char* const kMovieStart[2] = {"Movie.PrologueA.Start", "Movie.PrologueB.Start"};
 const char* const kMovieEnd[2] = {"Movie.PrologueA.End", "Movie.PrologueB.End"};
@@ -167,6 +173,8 @@ int exitStatus(Result result) {
         return 1;
     case Result::Blocked:
         return 2;
+    case Result::Assisted:
+        return 3;
     case Result::Running:
         break;
     }
@@ -183,8 +191,14 @@ const char* resultName(Result result) {
         return "FAIL";
     case Result::Blocked:
         return "BLOCKED";
+    case Result::Assisted:
+        return "ASSISTED";
     }
     return "?";
+}
+
+const std::vector<Waypoint>& storyRoute(int segment) {
+    return kRoutes[segment == 0 ? 0 : 1];
 }
 
 StickKeys stickKeysFor(float x, float y) {
@@ -953,9 +967,65 @@ void Driver::finish(Result result, const std::string& reason, Step& step) {
     steer(StickKeys{}, step);
     mResult = result;
     mReason = reason;
+    if (mAssistInputs > 0) {
+        const std::string assisted = std::to_string(mAssistInputs) + " physical gameplay input" +
+                                     (mAssistInputs == 1 ? "" : "s") + ", first " + mFirstAssist;
+        if (result == Result::Pass) {
+            mResult = Result::Assisted;
+            mReason = reason + "; ASSISTED, not unattended: " + assisted;
+        } else {
+            mReason = reason + " (also assisted: " + assisted + ")";
+        }
+    } else if (result == Result::Pass && (mPointerInputs > 0 || mFocusInputs > 0)) {
+        mReason = reason + " (no physical gameplay input; the pointer moved " + std::to_string(mPointerInputs) +
+                  " times and focus changed " + std::to_string(mFocusInputs) + " times, which this check does not "
+                  "count as assistance)";
+    }
     mPhase = Phase::Done;
     step.requestQuit = true;
-    note(std::string(resultName(result)) + ": " + reason);
+    note(std::string(resultName(mResult)) + ": " + mReason);
+}
+
+void Driver::notePhysical(const Observation& observation) {
+    const PhysicalInputs& now = observation.physical;
+    if (!mPhysicalBaseSet) {
+        // Input before the script's first frame is not the run's.
+        mPhysicalSeen = now;
+        mPhysicalBaseSet = true;
+        return;
+    }
+    constexpr unsigned long kLoggedInputs = 20;
+    if (now.gameplay > mPhysicalSeen.gameplay) {
+        const unsigned long added = now.gameplay - mPhysicalSeen.gameplay;
+        std::string where = observation.playerValid
+                                ? " at (" + std::to_string(observation.playerX) + ", " +
+                                      std::to_string(observation.playerY) + ", " + std::to_string(observation.playerZ) + ")"
+                                : std::string();
+        const std::string last(now.last, strnlen(now.last, sizeof(now.last)));
+        // Only the latest event between two frames is known, so a batch is
+        // reported by its frame and its latest input, not its first key edge.
+        const std::string batch = std::to_string(added) + " new, latest " + last;
+        if (mAssistInputs == 0) {
+            mFirstAssist = "seen at frame " + std::to_string(mFrame) + " while " + phase() + where + " (" + batch + ")";
+        }
+        if (mAssistInputs < kLoggedInputs) {
+            note("physical input: " + batch + ", while " + phase() + where);
+        } else if (mAssistInputs < kLoggedInputs + added) {
+            note("physical input: further inputs are counted, not logged");
+        }
+        mAssistInputs += added;
+    }
+    if (now.pointer > mPhysicalSeen.pointer) {
+        if (mPointerInputs == 0) {
+            note(std::string("physical pointer motion while ") + phase() + " (not counted as assistance)");
+        }
+        mPointerInputs += now.pointer - mPhysicalSeen.pointer;
+    }
+    if (now.focus > mPhysicalSeen.focus) {
+        note(std::string("window focus changed while ") + phase());
+        mFocusInputs += now.focus - mPhysicalSeen.focus;
+    }
+    mPhysicalSeen = now;
 }
 
 Step Driver::step(const Observation& observation) {
@@ -976,6 +1046,7 @@ Step Driver::step(const Observation& observation) {
     if (mResult != Result::Running) {
         return step;
     }
+    notePhysical(observation);
 
     // What changed on screen.
     if (observation.scene != mLastScene || observation.stage != mLastStage) {

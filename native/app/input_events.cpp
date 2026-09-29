@@ -1,5 +1,8 @@
 // Window events and remapped controls for the native input layer.
 
+#include <SDL3/SDL_events.h>
+#include <SDL3/SDL_scancode.h>
+
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -32,8 +35,88 @@ bool loadControls(const std::filesystem::path& file, std::string* error) {
     return true;
 }
 
+namespace {
+
+Smoke::PhysicalInputs gPhysical;
+
+// The first game action the input is bound to, or null.
+const char* boundAction(const Input::Binding& input) {
+    const Input::Bindings bindings = Input::bindings();
+    for (int a = 0; a < static_cast<int>(Input::Action::Count); ++a) {
+        const Input::Action action = static_cast<Input::Action>(a);
+        for (const Input::Binding& bound : bindings.inputs(action)) {
+            if (bound == input) {
+                return Input::actionName(action);
+            }
+        }
+    }
+    return nullptr;
+}
+
+void countGameplay(const char* device, const char* name, const char* action, bool down) {
+    ++gPhysical.gameplay;
+    std::snprintf(gPhysical.last, sizeof(gPhysical.last), "%s %s (%s) %s", device, name, action,
+                  down ? "down" : "up");
+}
+
+void countPhysical(const SDL_Event& event) {
+    switch (event.type) {
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP: {
+        if (event.key.repeat) {
+            return;
+        }
+        const char* action = boundAction(Input::Binding::key(static_cast<Input::KeyCode>(event.key.scancode)));
+        if (action != nullptr) {
+            const char* name = SDL_GetScancodeName(event.key.scancode);
+            countGameplay("key", name != nullptr && name[0] != '\0' ? name : "?", action, event.key.down);
+        }
+        return;
+    }
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP: {
+        // The buttons Input::SDL3::handleEvent maps.
+        static const struct {
+            Uint8 sdl;
+            Input::MouseButton button;
+            const char* name;
+        } kButtons[] = {{SDL_BUTTON_LEFT, Input::MouseButton::Left, "Left"},
+                        {SDL_BUTTON_MIDDLE, Input::MouseButton::Middle, "Middle"},
+                        {SDL_BUTTON_RIGHT, Input::MouseButton::Right, "Right"},
+                        {SDL_BUTTON_X1, Input::MouseButton::X1, "X1"},
+                        {SDL_BUTTON_X2, Input::MouseButton::X2, "X2"}};
+        for (const auto& b : kButtons) {
+            if (b.sdl == event.button.button) {
+                const char* action = boundAction(Input::Binding::mouse(b.button));
+                if (action != nullptr) {
+                    countGameplay("mouse", b.name, action, event.button.down);
+                }
+                return;
+            }
+        }
+        return;
+    }
+    case SDL_EVENT_MOUSE_MOTION:
+        ++gPhysical.pointer;
+        return;
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        ++gPhysical.focus;
+        return;
+    default:
+        return;
+    }
+}
+
+}  // namespace
+
 bool input(const SDL_Event& event) {
+    countPhysical(event);
     return Input::SDL3::handleEvent(event);
+}
+
+Smoke::PhysicalInputs physicalInputs() {
+    return gPhysical;
 }
 
 void setImage(const Rect& image, float windowWidth, float windowHeight) {

@@ -188,3 +188,23 @@ while two stale TSan test processes were consuming CPU. Those processes were
 stopped; do not use those magnitudes as clean-machine benchmarks.
 
 See `RELIABILITY.md` for the expanding story-route coverage and open findings.
+
+### Manual assistance in automated runs
+
+Physical presses and releases of keys or mouse buttons bound to game controls
+are now recorded separately from the driver's injected input. A completed run
+with such input reports `ASSISTED` and exits 3; it is not an unattended PASS.
+Failures and blocked runs retain exit 1 and 2 and note any assistance. The log
+records the frame, phase, position, event count and latest event in the first
+observed input batch. Pointer motion and focus changes are logged separately;
+they do not steer the story route and do not alone change its result.
+
+The user reported supplying a jump and steering around a wall in story run 6
+(`Downloads/IMG_2242.mov`). That run establishes HeavensDoorGalaxy loading and
+heap headroom, but not autonomous traversal. The revised castle route avoids
+the curb and building using a collision-derived path with stricter step and
+clearance limits. Story run 7 then completed the revised route with no physical gameplay input,
+reached HeavensDoorGalaxy for 60 consecutive ready frames at frame 21006, and
+exited 0. It recorded 64 pointer movements and 10 focus changes. Three automatic
+sidestep recoveries succeeded; no manual jump or steering was needed. Both NAND
+files remained byte-identical to the isolated fixture before the runs.

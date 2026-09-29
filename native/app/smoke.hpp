@@ -86,15 +86,26 @@
 // calibration (stick up, then right, 20 frames each) that learns how the
 // camera axes relate to the stick, then steers each frame toward the next
 // waypoint with 8-way keys relative to the camera. A waypoint counts within
-// 600 units on the town road and 200 on the castle walk, a segment's last one
-// (inside the movie trigger) within 200 and 150. Stuck (less than 50 units
-// closer in 180 frames): a sidestep,
+// 600 units on the town road and 100 on the castle walk (its clearance), a
+// segment's last one (inside the movie trigger) within 200 and 80. Stuck (less
+// than 50 units closer in 180 frames): a sidestep,
 // then a jump; the fifth time on one waypoint FAILs. FAIL also on any prompt,
 // an open talk, an unexpected scene or stage, or a segment/movie timeout.
 // Mario's position is needed only while walking: during the movies and the
 // stage load he may be absent (the scene is torn down after PrologueB), and
 // no input is sent. PASS needs HeavensDoorGalaxy ready for 60 frames in a row
 // (so it has updated and drawn), within 3600 frames of PrologueB's end.
+//
+// Assisted runs (every script): physical keyboard and mouse input still works
+// during a smoke run. A press or release (not a key repeat) of a key or mouse
+// button bound to a game action, from the driver's first frame on, is logged
+// with its phase and position, and a run that would PASS ends ASSISTED (exit
+// status 3) instead: someone helped. The first frame on which such input was
+// seen is reported, with the latest input of that frame. FAIL and BLOCKED keep their status and
+// name the assistance. The driver's own presses go to the input layer directly
+// and never count. Pointer motion and focus changes are logged but do not make
+// a run assisted: no story phase uses the pointer, but a PASS then reports
+// them rather than claiming the run was untouched.
 // Steering and distances use the plane perpendicular to the observed gravity
 // field at Mario. Non-finite or degenerate gravity/camera axes FAIL. So does
 // gravity tilted beyond 60 degrees from the stage's down: a limitation of this
@@ -104,6 +115,17 @@
 #include <vector>
 
 namespace PetariNative::App::Smoke {
+
+// Physical (hardware) input since launch, counted by the app's event handler
+// (Events::input) and copied into each Observation by the seam. Fixed size: it
+// is written on the event path without allocating.
+struct PhysicalInputs {
+    unsigned long gameplay = 0;  // presses and releases of keys/mouse buttons bound to a game action (no repeats)
+    unsigned long pointer = 0;   // pointer motion events
+    unsigned long focus = 0;     // window focus changes
+    char last[64] = {};          // the latest gameplay input, e.g. "key W (StickUp) down"; the driver
+                                 // sees one per frame, so it reports frames, not first key edges
+};
 
 struct Observation {
     std::string scene;          // current SceneControlInfo scene ("" before the first)
@@ -143,6 +165,7 @@ struct Observation {
     float camZx = 0.0f, camZy = 0.0f, camZz = 1.0f;
     bool talkActive = false;  // MR::isSystemTalking: a talk window is open (story route FAILs)
     bool playerDead = false;  // MR::isPlayerDead
+    PhysicalInputs physical;  // filled by the seam (Events::physicalInputs)
 };
 
 // A point on the story route, on the ground plane (gravity is -y there).
@@ -156,6 +179,8 @@ struct StickKeys {
     bool up = false, down = false, left = false, right = false;
 };
 StickKeys stickKeysFor(float x, float y);
+// The story script's waypoints: segment 0 to the plaza, 1 to the castle.
+const std::vector<Waypoint>& storyRoute(int segment);
 
 // Target flags (petari/ui_observe.hpp).
 constexpr unsigned kTargetPointing = 1u;
@@ -180,9 +205,11 @@ struct Step {
     bool requestQuit = false;  // press the power button (once, when the result is decided)
 };
 
-enum class Result { Running, Pass, Fail, Blocked };
+// Assisted: the script's goal was reached, but with physical gameplay input
+// (see "Assisted runs" above), so it is not an unattended PASS.
+enum class Result { Running, Pass, Fail, Blocked, Assisted };
 
-// Process exit status for a result: 0 pass, 1 fail, 2 blocked.
+// Process exit status for a result: 0 pass, 1 fail, 2 blocked, 3 assisted.
 int exitStatus(Result result);
 const char* resultName(Result result);
 
@@ -293,6 +320,13 @@ private:
     float mBestDistance = 0.0f;          // closest to the waypoint in the stuck window
     unsigned long mStuckFrames = 0;
     unsigned long mStageReadyFrames = 0;  // consecutive frames HeavensDoorGalaxy is ready
+    // physical input
+    bool mPhysicalBaseSet = false;
+    PhysicalInputs mPhysicalSeen;        // counts at the last frame
+    unsigned long mAssistInputs = 0;     // gameplay inputs since the driver's first frame
+    unsigned long mPointerInputs = 0, mFocusInputs = 0;
+    std::string mFirstAssist;            // the first one: input, frame, phase, position
+    void notePhysical(const Observation& observation);
     int mRecoveries = 0;
     unsigned long mRecoverUntil = 0;
     unsigned long mSegmentFrames = 0;

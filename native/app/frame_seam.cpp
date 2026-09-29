@@ -81,7 +81,8 @@ void startSmoke() {
 // Game state is read here, before the seam releases the CPU, while this
 // thread owns the game.
 void runSmoke() {
-    const Smoke::Observation observation = Smoke::observeGame(gSmoke->wantsPlayer());
+    Smoke::Observation observation = Smoke::observeGame(gSmoke->wantsPlayer());
+    observation.physical = Events::physicalInputs();
     const Smoke::Step step = gSmoke->step(observation);
     for (const std::string& line : gSmoke->log()) {
         std::fprintf(stderr, "PETARI SMOKE [frame %lu]: %s\n", gSmoke->frame(), line.c_str());

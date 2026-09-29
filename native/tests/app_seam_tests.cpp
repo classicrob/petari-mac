@@ -127,6 +127,9 @@ void forceQuit() {
 }  // namespace PetariNative::App::Host
 
 namespace PetariNative::App::Events {
+Smoke::PhysicalInputs physicalInputs() {
+    return {};
+}
 bool input(const SDL_Event& event) {
     inputEvents.push_back(static_cast<SDL_EventType>(event.type));
     return true;

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "petari/app.hpp"
+#include "smoke.hpp"
 
 union SDL_Event;
 struct SDL_Window;
@@ -42,8 +43,14 @@ namespace Events {
 // Loads remapped controls from a file written by Input::Bindings::serialize,
 // if it exists. Before the game starts.
 bool loadControls(const std::filesystem::path& file, std::string* error);
-// SDL events for the input layer. Returns true if consumed.
+// SDL events for the input layer. Returns true if consumed. Also counts them
+// as physical input (below); every event is still delivered unchanged.
 bool input(const SDL_Event& event);
+// Physical input since launch, for the smoke's assisted-run check: presses and
+// releases of keys and mouse buttons bound to a game action (key repeats and
+// unbound keys do not count), pointer motion and focus changes. The smoke's own
+// presses (pressButton) never pass through here.
+Smoke::PhysicalInputs physicalInputs();
 // Where the game image is, for the pointer. Window points.
 void setImage(const Rect& image, float windowWidth, float windowHeight);
 // Smoke run only (smoke.hpp): press or release the input bound to a Wii

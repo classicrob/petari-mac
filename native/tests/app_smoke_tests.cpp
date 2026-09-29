@@ -975,6 +975,42 @@ void testReleaseOnFailure() {
     check(run.driver.result() == Result::Fail && released, "a failure releases the held stick at once");
 }
 
+// After PrologueA, from the game worker's collision grid: the 70-80 unit curb
+// north of story-3/6's first stall and the building north of the second.
+struct Box {
+    float x0, x1, z0, z1;
+};
+const Box kTownObstacles[] = {{-4836.0f, -3450.0f, 2270.0f, 2380.0f}, {-5705.0f, -5105.0f, 810.0f, 1060.0f}};
+
+bool inTownObstacle(float x, float z) {
+    for (const Box& b : kTownObstacles) {
+        if (x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Closest approach of a walk through the points to the obstacles (sampled
+// every 10 units).
+float townClearance(const std::vector<Smoke::Waypoint>& points) {
+    float best = 1e30f;
+    for (size_t i = 0; i + 1 < points.size(); i++) {
+        const Smoke::Waypoint a = points[i], b = points[i + 1];
+        const int steps = std::max(1, static_cast<int>(std::hypot(b.x - a.x, b.z - a.z) / 10.0f));
+        for (int s = 0; s <= steps; s++) {
+            const float t = static_cast<float>(s) / steps;
+            const float x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
+            for (const Box& box : kTownObstacles) {
+                const float ox = std::max({box.x0 - x, 0.0f, x - box.x1});
+                const float oz = std::max({box.z0 - z, 0.0f, z - box.z1});
+                best = std::min(best, std::hypot(ox, oz));
+            }
+        }
+    }
+    return best;
+}
+
 // A simulated PeachCastleGarden for the story route: Mario moves at 15 units
 // per frame relative to a slowly turning camera, whose reported axes may have
 // either sign; the plaza area starts PrologueA, which leaves him at the
@@ -1009,6 +1045,13 @@ struct StorySim {
     int afterLoad = -1;
     int flickerEvery = 0, flickerUntil = 0;
     int pressesWhileWaiting = 0;  // key downs during a movie or the stage load
+    bool townObstacles = true;    // after PrologueA: the curb and the building Mario stalled at
+    // Physical input, as the seam reports it: gameplay inputs appear when
+    // Mario passes x < assistBelowX (after PrologueA), pointer motion from
+    // the start if pointerMoving.
+    Smoke::PhysicalInputs physical;
+    float assistBelowX = -1e30f;  // never
+    bool pointerMoving = false;
 
     bool stageReady() const {
         if (!heavensDoor || stageLoad > 0) {
@@ -1019,6 +1062,14 @@ struct StorySim {
 
     Observation observe() {
         Observation o;
+        if (afterMovie >= 0 && x < assistBelowX && physical.gameplay == 0) {
+            physical.gameplay = 2;
+            std::snprintf(physical.last, sizeof(physical.last), "key Space (A) up");
+        }
+        if (pointerMoving) {
+            ++physical.pointer;
+        }
+        o.physical = physical;
         o.scene = "Game";
         o.stage = heavensDoor ? "HeavensDoorGalaxy" : "PeachCastleGardenGalaxy";
         o.sceneReady = true;
@@ -1130,8 +1181,11 @@ struct StorySim {
         if (held[6]) { dx -= rx; dz -= rz; }
         const float n = std::sqrt(dx * dx + dz * dz);
         if (n > 0.0f && !(wall && x < 12200.0f)) {
-            x += dx / n * speed;
-            z += dz / n * speed;
+            const float nx = x + dx / n * speed, nz = z + dz / n * speed;
+            if (!(afterMovie >= 0 && townObstacles && inTownObstacle(nx, nz))) {
+                x = nx;
+                z = nz;
+            }
         }
         pressedA = false;
         const bool plaza = afterMovie < 0 && std::hypot(x + 650.0f, z - 4350.0f) < 700.0f;
@@ -1215,13 +1269,31 @@ void testStoryRoute() {
         // The movies start as Mario enters their trigger areas, which can be
         // before the last waypoint.
         check(run.logged("calibration: stick up moves along") && run.logged("segment 0 waypoint 6 reached") &&
-                  run.logged("segment 1 waypoint 16 reached"),
+                  run.logged("segment 1 waypoint 29 reached"),
               "calibrated and walked both routes" + label);
+        check(!run.logged("stuck:"), "the castle walk goes round the curb and the building, no recovery" + label);
         check(run.logged("Movie.PrologueA.Start at") && run.logged("Movie.PrologueA.End after") &&
                   run.logged("units from the restart point") && run.logged("Movie.PrologueB.End after"),
               "both movies and the restart point logged" + label);
         check(allKeysReleased(run), "every key released" + label);
     }
+    // The castle walk keeps its 100-unit clearance from the curb and the
+    // building, from the restart point on (turning for the next point from
+    // up to 100 away cannot reach them); the story-3/6 chain ran into both.
+    std::vector<Smoke::Waypoint> walk{{-500.0f, 6250.0f}};
+    for (const Smoke::Waypoint& w : Smoke::storyRoute(1)) {
+        walk.push_back(w);
+    }
+    check(townClearance(walk) >= 100.0f, "the castle walk clears the obstacles by 100 units: " +
+                                             std::to_string(townClearance(walk)));
+    const std::vector<Smoke::Waypoint> oldWalk{{-500.0f, 6250.0f}, {-1300.0f, 6000.0f}, {-2100.0f, 5200.0f},
+                                               {-2900.0f, 4400.0f}, {-3500.0f, 3600.0f}, {-4100.0f, 2900.0f},
+                                               {-4700.0f, 2100.0f}, {-5300.0f, 1600.0f}, {-5800.0f, 800.0f}};
+    check(townClearance(oldWalk) == 0.0f, "the story-3/6 chain crosses them (the check can fail)");
+    const Smoke::Waypoint last = Smoke::storyRoute(1).back();
+    check(last.x - 80.0f >= -7650.0f && last.x + 80.0f < -6350.0f && last.z + 80.0f < -6408.0f,
+          "within 80 of the last castle point is inside the trigger box");
+
     // Tilted gravity on the hill (the story-1 failure) is walked through.
     for (int signs = 0; signs < 2; signs++) {
         Run hill(10000000, Smoke::Script::Story);
@@ -1335,6 +1407,69 @@ void testStoryRoute() {
     check(created.driver.result() == Result::Fail, "the story route never creates a file");
 }
 
+void testAssisted() {
+    check(Smoke::exitStatus(Result::Assisted) == 3 && std::string(Smoke::resultName(Result::Assisted)) == "ASSISTED",
+          "ASSISTED exits 3");
+
+    // Physical gameplay input during the castle walk: the goal is reached,
+    // but the result is ASSISTED with the first input's frame and phase.
+    Run helped(10000000, Smoke::Script::Story);
+    toStoryStart(helped);
+    StorySim hand;
+    hand.assistBelowX = -4000.0f;
+    simulateStory(helped, hand, 40000);
+    check(helped.driver.result() == Result::Assisted &&
+              helped.driver.reason().find("story route reached HeavensDoorGalaxy") == 0 &&
+              helped.driver.reason().find("ASSISTED, not unattended: 2 physical gameplay inputs, first seen at frame ") !=
+                  std::string::npos &&
+              helped.driver.reason().find("while walking the story route at (-4") != std::string::npos &&
+              helped.driver.reason().find("(2 new, latest key Space (A) up)") != std::string::npos,
+          "a helped run ends ASSISTED with its first input: " + helped.driver.reason());
+    check(helped.logged("physical input: 2 new, latest key Space (A) up, while walking the story route"),
+          "physical inputs are logged as they arrive");
+    check(allKeysReleased(helped), "keys released after an assisted run");
+
+    // Helped, then failed: FAIL stays FAIL and names the help.
+    Run helpedFail(10000000, Smoke::Script::Story);
+    toStoryStart(helpedFail);
+    StorySim noCastle;
+    noCastle.assistBelowX = -1000.0f;
+    noCastle.noEndB = true;
+    noCastle.movieLength[1] = 100000;  // PrologueB never ends
+    simulateStory(helpedFail, noCastle, 40000);
+    check(helpedFail.driver.result() == Result::Fail &&
+              helpedFail.driver.reason().find("no Movie.PrologueB.End within") == 0 &&
+              helpedFail.driver.reason().find("(also assisted: 2 physical gameplay inputs") != std::string::npos,
+          "a helped FAIL stays FAIL: " + helpedFail.driver.reason());
+
+    // Pointer motion alone: PASS, reported rather than hidden.
+    Run pointed(10000000, Smoke::Script::Story);
+    toStoryStart(pointed);
+    StorySim mouse;
+    mouse.pointerMoving = true;
+    simulateStory(pointed, mouse, 40000);
+    check(pointed.driver.result() == Result::Pass &&
+              pointed.driver.reason().find("no physical gameplay input; the pointer moved") != std::string::npos &&
+              pointed.logged("physical pointer motion while"),
+          "pointer motion alone is reported, not assistance: " + pointed.driver.reason());
+
+    // Input before the driver's first frame is not the run's; after it, it is.
+    Run baseline(100000);
+    Observation before;
+    before.physical.gameplay = 7;
+    before.physical.focus = 1;
+    baseline.frames(before, 5);
+    check(!baseline.logged("physical input") && !baseline.logged("window focus"), "earlier input is the baseline");
+    Observation pressed = before;
+    pressed.physical.gameplay = 8;
+    std::snprintf(pressed.physical.last, sizeof(pressed.physical.last), "mouse Left (A) down");
+    pressed.physical.focus = 2;
+    baseline.frames(pressed, 1);
+    check(baseline.logged("physical input: 1 new, latest mouse Left (A) down, while") &&
+              baseline.logged("window focus changed while"),
+          "a new press and a focus change are logged");
+}
+
 void testStoryFaults() {
     auto runWith = [](void (*fault)(StorySim&)) {
         auto run = std::make_unique<Run>(10000000, Smoke::Script::Story);
@@ -1439,6 +1574,7 @@ int main() {
     testStickKeys();
     testStoryRoute();
     testStoryFaults();
+    testAssisted();
     testPlayableGuards();
     testMilestones();
     std::printf("native app smoke tests passed (%d checks)\n", checks);
