@@ -195,6 +195,16 @@ if(BUILD_TESTING)
     target_link_libraries(petari_platform_audio_tests PRIVATE petari_platform)
     add_test(NAME native_platform_audio COMMAND petari_platform_audio_tests)
 
+    # PETARI_BATON_DIAG preemption-latency diagnostic.
+    add_executable(petari_platform_baton_diag_tests ${PETARI_REPO_ROOT}/native/tests/platform_baton_diag_tests.cpp)
+    target_link_libraries(petari_platform_baton_diag_tests PRIVATE petari_platform)
+    add_test(NAME native_platform_baton_diag COMMAND petari_platform_baton_diag_tests)
+
+    # Host audio device pacing (native/audio/paced_ring.hpp) against the real AI.
+    add_executable(petari_audio_pacing_tests ${PETARI_REPO_ROOT}/native/tests/audio_pacing_tests.cpp)
+    target_link_libraries(petari_audio_pacing_tests PRIVATE petari_platform)
+    add_test(NAME native_audio_pacing COMMAND petari_audio_pacing_tests)
+
     # JAudio2's own DSP host code driving the native DSP device.
     set(PETARI_JAUDIO_DSP_SOURCES
         ${PETARI_REPO_ROOT}/src/JSystem/JAudio2/dsptask.cpp

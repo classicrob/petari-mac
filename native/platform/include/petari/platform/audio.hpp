@@ -31,6 +31,12 @@ std::uint32_t outputRate();
 // Realtime-safe. Returns the number of frames written (always frames).
 std::size_t pull(std::int16_t* interleaved, std::size_t frames);
 
+// Puts the calling host thread under Mach time-constraint (real-time)
+// scheduling suited to audio work: wakes within about a millisecond, runs
+// briefly. For the AI interrupt thread and an audio backend's producer.
+// Returns false if the kernel refused (the thread keeps its old policy).
+bool setRealtimeAudioThread();
+
 // Backend notification: called when the game first starts AI DMA (so the
 // device can open at outputRate()) and when AI is shut down. Both run on the
 // game thread; neither may call pull().
@@ -40,6 +46,16 @@ struct Sink {
     void* user = nullptr;
 };
 void setSink(const Sink& sink);
+
+// Diagnostic: block starts at which no new block had been registered since
+// the previous start, so the hardware replayed a block. JAudio2 registers a
+// fresh buffer on every DMA interrupt, so a nonzero count there means its
+// audio thread ran late (audible as a repeated ~17 ms fragment).
+std::uint64_t replayedBlocks();
+
+// Diagnostic: the longest time from a DMA interrupt being raised (block
+// start) to its delivery to the game, since the previous call.
+std::uint32_t takeWorstInterruptLatencyMicroseconds();
 
 // DMA interrupts raised by pull() and not yet delivered to the game.
 std::uint32_t pendingInterrupts();

@@ -343,6 +343,7 @@ void testAi() {
     PAudio::pull(out.data(), kFrames * 2);  // B repeats while no new block is registered
     PAudio::drainInterrupts();
     check(gDmaInterrupts == 4 && PAudio::pendingInterrupts() == 0, "a block repeats and interrupts once per start");
+    check(PAudio::replayedBlocks() == 2, "block starts without a new AIInitDMA are counted (B played 3 times)");
 
     AIStopDMA();
     PAudio::pull(out.data(), 50);

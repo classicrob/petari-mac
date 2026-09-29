@@ -24,10 +24,20 @@
 // is not executed on. The default thread has no game stack; its stackBase and
 // stackEnd are null.
 
+#include <dlfcn.h>
+#include <mach/mach.h>
+#include <mach/thread_act.h>
 #include <pthread.h>
+#include <pthread/qos.h>
 
 #include <algorithm>
 #include <atomic>
+#include <thread>
+#include <string>
+#include <mutex>
+#include <cstdlib>
+#include <cstdio>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <unordered_map>
@@ -49,6 +59,8 @@ constexpr std::size_t kMinHostStack = 2 * 1024 * 1024;
 
 struct HostThread {
     OSThread* thread = nullptr;
+    mach_port_t machThread = MACH_PORT_NULL;  // for the preemption diagnostic's PC sample
+    std::uintptr_t stackLow = 0, stackHigh = 0; // host stack bounds, for its bounded frame walk
     std::condition_variable cv;
     bool terminated = false;
     void* (*func)(void*) = nullptr;
@@ -64,6 +76,79 @@ OSThread DefaultThread;
 bool gInitialized;
 std::atomic<OSThread*> gCurrent{nullptr};
 bool gPreemptPending;
+// True once the baton holder's host thread is actually executing (it returned
+// from waitForCpu, or gave the baton to itself). A holder that was assigned
+// the baton but whose host thread has not woken yet has run nothing since its
+// dispatch, so a higher-priority thread readied meanwhile may take the baton
+// from it directly (see interruptReschedule).
+bool gCurrentRunning;
+
+// ---- Preemption-latency diagnostic (PETARI_BATON_DIAG=1) ----
+// An episode starts when an interrupt makes a thread ready that outranks the
+// baton holder (interruptReschedule) and ends when the baton changes hands.
+// Its length is how long the higher-priority thread (for example JAudio2's
+// audio thread) waited, which is long only while the holder runs host code
+// or code without OS calls. A reporter thread prints the worst wait once a
+// second and, for waits over 10 ms, samples where the holder is: it suspends
+// the holder briefly, reads its PC, LR and FP, and walks at most 12 frame
+// records on the holder's own (suspended) stack, each checked to lie inside
+// that thread's stack bounds, aligned, and moving toward the stack base.
+bool gBatonDiag = false;
+// The open episode. Written under the interrupt lock and episodeLock(); the
+// reporter snapshots it under episodeLock() only (never while a thread is
+// suspended).
+struct BatonEpisode {
+    std::uint64_t id = 0;            // 0 = none open
+    std::int64_t start = 0;          // steady_clock ticks
+    OSThread* holder = nullptr;
+    int holderPriority = 0, waiterPriority = 0;
+    mach_port_t holderPort = MACH_PORT_NULL;
+    std::uintptr_t stackLow = 0, stackHigh = 0;
+    std::uint64_t sampleId = 0;      // episode the sample below belongs to
+    std::uint64_t sample[12] = {};   // pc, lr, then return addresses
+};
+// Never destroyed: the detached reporter thread keeps using it while exit()
+// runs static destructors.
+std::mutex& episodeLock() {
+    static std::mutex* lock = [] {
+        PetariNative::HostAllocationScope hostAllocations;
+        return new std::mutex;
+    }();
+    return *lock;
+}
+BatonEpisode gEpisode;
+std::atomic<std::uint64_t> gEpisodeId{0};    // id of the open episode, 0 if none (lock-free check)
+std::uint64_t gNextEpisodeId = 1;
+struct BatonStats {
+    std::mutex lock;
+    double worstMs = 0;
+    int over10 = 0;
+    OSThread* holder = nullptr;
+    int holderPriority = 0, waiterPriority = 0;
+    std::uint64_t frames[12] = {};   // sample of the longest sampled episode
+    double sampledWaitMs = 0;
+};
+BatonStats& batonStats() {
+    static BatonStats* stats = [] {
+        PetariNative::HostAllocationScope hostAllocations;
+        return new BatonStats;
+    }();
+    return *stats;
+}
+
+// Unset, empty, or starting with '0' means off.
+bool envEnabled(const char* name) {
+    const char* value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+std::int64_t nowTicks() {
+    return std::chrono::steady_clock::now().time_since_epoch().count();
+}
+
+// Interrupt lock held.
+void openEpisode(OSThread* holder, int waiterPriority);
+void closeEpisode();
 
 std::unordered_map<OSThread*, std::shared_ptr<HostThread>>& hosts() {
     static auto* instance = [] {
@@ -243,8 +328,12 @@ void updatePriority(OSThread* thread) {
 // ---- Baton ----
 
 void giveCpu(OSThread* next) {
+    if (gBatonDiag) {
+        closeEpisode();
+    }
     next->queue = nullptr;
     next->state = kStateRunning;
+    gCurrentRunning = next == tBound;  // giving the baton to itself: already executing
     gCurrent.store(next, std::memory_order_release);
     auto found = hosts().find(next);
     if (found != hosts().end()) {
@@ -285,6 +374,7 @@ void waitForCpu(OSThread* self) {
     if (host->terminated) {
         terminateHostThread();
     }
+    gCurrentRunning = true;  // interrupt lock held (hostWait returns with it)
 }
 
 // Scheduling request from interrupt context, or from an OS thread that does
@@ -299,8 +389,23 @@ void interruptReschedule() {
         }
         return;
     }
+    if (!gCurrentRunning && current->state == kStateRunning && RunQueueBits != 0 && highestReadyPriority() < current->priority) {
+        // The holder was dispatched but its host thread has not woken yet, so
+        // it has executed nothing: dispatch the higher-priority thread instead
+        // and return the holder to the run queue, as the Wii's scheduler would
+        // have if both had been ready together. Waiting for the holder to wake
+        // just to be preempted cost 5-35 ms (PETARI_BATON_DIAG, boot logs).
+        current->state = kStateReady;
+        setRun(current);
+        RunQueueHint = FALSE;
+        giveCpu(popHighestReady());
+        return;
+    }
     if (current->state != kStateRunning || highestReadyPriority() < current->priority) {
         gPreemptPending = true;
+        if (gBatonDiag && current->state == kStateRunning) {
+            openEpisode(current, highestReadyPriority());
+        }
     }
 }
 
@@ -326,6 +431,9 @@ void selectThread(BOOL yield) {
     RunQueueHint = FALSE;
     gPreemptPending = false;
     if (RunQueueBits == 0) {
+        if (gBatonDiag) {
+            closeEpisode();
+        }
         gCurrent.store(nullptr, std::memory_order_release);
     } else {
         OSThread* next = popHighestReady();
@@ -360,16 +468,177 @@ void* hostEntry(void* arg) {
         delete static_cast<std::shared_ptr<HostThread>*>(arg);
     }
     tBound = tHost->thread;
+    tHost->machThread = pthread_mach_thread_np(pthread_self());
+    tHost->stackHigh = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(pthread_self()));
+    tHost->stackLow = tHost->stackHigh - pthread_get_stacksize_np(pthread_self());
     // An OS thread runs game code: plain new/delete follow the current JKR heap
     // (outside HostAllocationScope), as on the Wii. Host threads keep malloc.
     PetariNative::setGameAllocationThread(true);
     OSDisableInterrupts();
+    // Host wake-up latency for high-priority game threads (JAudio2's audio
+    // and DVD threads run at priority 2 and 5): they have per-block audio
+    // deadlines. Scheduling order among OS threads is still the baton's.
+    // (base is read under the interrupt lock.)
+    if (tBound->base <= 8) {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    }
     waitForCpu(tBound);
     // Threads start with interrupts enabled (OSInitContext sets MSR[EE]).
     OSEnableInterrupts();
     void* result = tHost->func(tHost->param);
     OSExitThread(result);
     return nullptr;  // not reached
+}
+
+void openEpisode(OSThread* holder, int waiterPriority) {
+    std::lock_guard<std::mutex> guard(episodeLock());
+    if (gEpisode.id != 0) {
+        return;  // already waiting on this holder
+    }
+    auto found = hosts().find(holder);
+    gEpisode = BatonEpisode{};
+    gEpisode.id = gNextEpisodeId++;
+    gEpisode.start = nowTicks();
+    gEpisode.holder = holder;
+    gEpisode.holderPriority = holder->priority;
+    gEpisode.waiterPriority = waiterPriority;
+    if (found != hosts().end()) {
+        gEpisode.holderPort = found->second->machThread;
+        gEpisode.stackLow = found->second->stackLow;
+        gEpisode.stackHigh = found->second->stackHigh;
+    }
+    gEpisodeId.store(gEpisode.id, std::memory_order_release);
+}
+
+void closeEpisode() {
+    BatonEpisode closed;
+    {
+        std::lock_guard<std::mutex> guard(episodeLock());
+        if (gEpisode.id == 0) {
+            return;
+        }
+        closed = gEpisode;
+        gEpisode.id = 0;
+        gEpisodeId.store(0, std::memory_order_release);
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::duration(nowTicks() - closed.start)).count();
+    BatonStats& st = batonStats();
+    std::lock_guard<std::mutex> guard(st.lock);
+    if (ms > 10.0) {
+        ++st.over10;
+    }
+    if (ms > st.worstMs) {
+        st.worstMs = ms;
+        st.holder = closed.holder;
+        st.holderPriority = closed.holderPriority;
+        st.waiterPriority = closed.waiterPriority;
+    }
+    if (closed.sampleId == closed.id && ms >= st.sampledWaitMs) {
+        st.sampledWaitMs = ms;
+        std::copy(std::begin(closed.sample), std::end(closed.sample), st.frames);
+    }
+}
+
+std::string describe(std::uint64_t address) {
+    Dl_info info{};
+    if (address != 0 && dladdr(reinterpret_cast<void*>(address), &info) && info.dli_sname != nullptr) {
+        char buffer[512];
+        std::snprintf(buffer, sizeof(buffer), "%s+%llu", info.dli_sname,
+                      static_cast<unsigned long long>(address - reinterpret_cast<std::uint64_t>(info.dli_saddr)));
+        return buffer;
+    }
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "0x%llx", static_cast<unsigned long long>(address));
+    return buffer;
+}
+
+// Host thread: samples long episodes, reports once a second.
+void* batonReporter(void*) {
+    PetariNative::HostAllocationScope hostAllocations;
+    using namespace std::chrono;
+    constexpr double kSampleAfterMs = 10.0;
+    auto nextReport = steady_clock::now() + seconds(1);
+    while (true) {
+        std::this_thread::sleep_for(milliseconds(2));
+        BatonEpisode snapshot;
+        {
+            std::lock_guard<std::mutex> guard(episodeLock());
+            snapshot = gEpisode;
+        }
+        if (snapshot.id != 0 && snapshot.sampleId != snapshot.id && snapshot.holderPort != MACH_PORT_NULL &&
+            duration<double, std::milli>(steady_clock::duration(nowTicks() - snapshot.start)).count() > kSampleAfterMs &&
+            thread_suspend(snapshot.holderPort) == KERN_SUCCESS) {
+            // No lock is held while the holder is suspended (it may hold any).
+            std::uint64_t sample[12] = {};
+            bool valid = gEpisodeId.load(std::memory_order_acquire) == snapshot.id;  // still the same wait
+            arm_thread_state64_t state;
+            mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+            if (valid && thread_get_state(snapshot.holderPort, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &count) ==
+                             KERN_SUCCESS) {
+                sample[0] = arm_thread_state64_get_pc(state);
+                sample[1] = arm_thread_state64_get_lr(state);
+                // Frame-pointer walk of the suspended thread's own stack: every
+                // frame must lie inside its stack bounds, be aligned, and move
+                // toward the stack base.
+                std::uintptr_t fp = arm_thread_state64_get_fp(state);
+                for (int i = 2; i < 12 && snapshot.stackLow != 0; ++i) {
+                    if (fp < snapshot.stackLow || fp + 16 > snapshot.stackHigh || (fp & 7) != 0) {
+                        break;
+                    }
+                    const std::uintptr_t* frame = reinterpret_cast<const std::uintptr_t*>(fp);
+                    const std::uintptr_t next = frame[0];
+                    sample[i] = frame[1] & 0x0000FFFFFFFFFFFFull;  // strip pointer authentication
+                    if (next <= fp) {
+                        break;
+                    }
+                    fp = next;
+                }
+            } else {
+                valid = false;
+            }
+            thread_resume(snapshot.holderPort);
+            if (valid) {
+                std::lock_guard<std::mutex> guard(episodeLock());
+                if (gEpisode.id == snapshot.id) {  // attach only to the episode it was taken in
+                    gEpisode.sampleId = snapshot.id;
+                    std::copy(std::begin(sample), std::end(sample), gEpisode.sample);
+                }
+            }
+        }
+        if (steady_clock::now() >= nextReport) {
+            nextReport += seconds(1);
+            BatonStats& st = batonStats();
+            double worst, sampledWait;
+            int over10, holderPriority, waiterPriority;
+            OSThread* holder;
+            std::uint64_t frames[12];
+            {
+                std::lock_guard<std::mutex> guard(st.lock);
+                worst = st.worstMs;
+                over10 = st.over10;
+                holder = st.holder;
+                holderPriority = st.holderPriority;
+                waiterPriority = st.waiterPriority;
+                std::copy(std::begin(st.frames), std::end(st.frames), frames);
+                sampledWait = st.sampledWaitMs;
+                st.worstMs = st.sampledWaitMs = 0;
+                st.over10 = 0;
+                std::fill(std::begin(st.frames), std::end(st.frames), 0);
+            }
+            if (worst > 5.0) {
+                std::fprintf(stderr, "[baton] worst preemption wait %.1f ms (priority-%d thread waited on OS thread %p, priority %d); %d waits over 10 ms",
+                             worst, waiterPriority, static_cast<void*>(holder), holderPriority, over10);
+                if (frames[0] != 0) {
+                    std::fprintf(stderr, "; holder at %s", describe(frames[0]).c_str());
+                    for (int i = 1; i < 12 && frames[i] != 0; ++i) {
+                        std::fprintf(stderr, " <- %s", describe(frames[i]).c_str());
+                    }
+                    std::fprintf(stderr, " (%.1f ms wait)", sampledWait);
+                }
+                std::fputc('\n', stderr);
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -436,11 +705,23 @@ void __OSThreadInit(void) {
         PetariNative::HostAllocationScope hostAllocations;
         auto host = std::make_shared<HostThread>();
         host->thread = thread;
+        host->machThread = pthread_mach_thread_np(pthread_self());
+        host->stackHigh = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(pthread_self()));
+        host->stackLow = host->stackHigh - pthread_get_stacksize_np(pthread_self());
         hosts()[thread] = host;
         tHost = host;
     }
     tBound = thread;
     PetariNative::setGameAllocationThread(true);  // the default thread runs game code
+    if (envEnabled("PETARI_BATON_DIAG") && !gBatonDiag) {
+        gBatonDiag = true;
+        pthread_t reporter;
+        PetariNative::HostAllocationScope hostAllocations;
+        if (pthread_create(&reporter, nullptr, batonReporter, nullptr) == 0) {
+            pthread_detach(reporter);
+        }
+    }
+    gCurrentRunning = true;
     gCurrent.store(thread, std::memory_order_release);
     OSRestoreInterrupts(enabled);
 }
@@ -816,6 +1097,9 @@ void petari_os_begin_host_blocking(void) {
     RunQueueHint = FALSE;
     gPreemptPending = false;
     if (RunQueueBits == 0) {
+        if (gBatonDiag) {
+            closeEpisode();
+        }
         gCurrent.store(nullptr, std::memory_order_release);
     } else {
         giveCpu(popHighestReady());

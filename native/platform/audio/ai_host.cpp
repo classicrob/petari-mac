@@ -13,8 +13,13 @@
 
 #include <dispatch/dispatch.h>
 #include <pthread.h>
+#include <pthread/qos.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 
 #include "os_internal.hpp"
@@ -41,6 +46,7 @@ private:
 struct Block {
     const std::int16_t* samples = nullptr;  // interleaved stereo
     std::uint32_t frames = 0;
+    std::uint64_t generation = 0;           // AIInitDMA count when registered
 };
 
 SpinLock gRegisterLock;
@@ -49,6 +55,13 @@ Block gPlaying;          // DMA engine state (pull thread only)
 std::uint32_t gPosition; // frames played in gPlaying (pull thread only)
 std::atomic<bool> gRunning{false};
 std::atomic<std::uint32_t> gRate{32000};
+std::uint64_t gGeneration = 0;                 // under gRegisterLock
+std::atomic<std::uint64_t> gReplayed{0};       // block starts without a new AIInitDMA
+// Raise times of recent interrupts (steady_clock ticks), for the delivery
+// latency diagnostic. Indexed by raise count.
+constexpr std::uint32_t kRaiseStamps = 64;
+std::atomic<std::int64_t> gRaisedAt[kRaiseStamps];
+std::atomic<std::int64_t> gWorstLatency{0};
 
 std::atomic<AIDCallback> gCallback{nullptr};
 std::atomic<std::uint32_t> gRaised{0};
@@ -65,12 +78,25 @@ bool gSinkStarted;
 // signals: a signal only wakes the thread, so extra or stale wake-ups deliver
 // nothing and every raised interrupt is delivered exactly once.
 void* interruptThreadMain(void*) {
+    // Audio deadline: the game must see each DMA interrupt well within a
+    // block. Ordinary (even user-interactive) threads were measured waking
+    // 2-14 ms after the signal; Mach time-constraint (real-time) scheduling,
+    // as audio threads use, wakes promptly.
+    PAudio::setRealtimeAudioThread();
     while (true) {
         dispatch_semaphore_wait(gInterruptSignal, DISPATCH_TIME_FOREVER);
         while (!gStopThread.load(std::memory_order_acquire) &&
                gDelivered.load(std::memory_order_acquire) != gRaised.load(std::memory_order_acquire)) {
             // One AI DMA interrupt, delivered as the hardware would.
             BOOL enabled = OSDisableInterrupts();
+            {
+                const std::uint32_t n = gDelivered.load(std::memory_order_relaxed);
+                const std::int64_t lag = std::chrono::steady_clock::now().time_since_epoch().count() -
+                                         gRaisedAt[n % kRaiseStamps].load(std::memory_order_relaxed);
+                std::int64_t worst = gWorstLatency.load(std::memory_order_relaxed);
+                while (lag > worst && !gWorstLatency.compare_exchange_weak(worst, lag, std::memory_order_relaxed)) {
+                }
+            }
             AIDCallback callback = gCallback.load(std::memory_order_acquire);
             if (callback) {
                 callback();
@@ -85,6 +111,8 @@ void* interruptThreadMain(void*) {
 }
 
 void raiseInterrupt() {
+    const std::uint32_t n = gRaised.load(std::memory_order_relaxed);
+    gRaisedAt[n % kRaiseStamps].store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_relaxed);
     gRaised.fetch_add(1, std::memory_order_acq_rel);
     dispatch_semaphore_signal(gInterruptSignal);
 }
@@ -108,8 +136,14 @@ std::size_t pull(std::int16_t* out, std::size_t frames) {
         }
         if (gPlaying.samples == nullptr || gPosition >= gPlaying.frames) {
             gRegisterLock.lock();
+            const std::uint64_t previous = gPlaying.samples != nullptr ? gPlaying.generation : 0;
             gPlaying = gRegistered;
             gRegisterLock.unlock();
+            if (previous != 0 && gPlaying.generation == previous) {
+                // The hardware replays the block: the game did not register
+                // the next one in time (for JAudio2, a late audio thread).
+                gReplayed.fetch_add(1, std::memory_order_relaxed);
+            }
             gPosition = 0;
             if (gPlaying.samples == nullptr || gPlaying.frames == 0) {
                 std::memset(out + written * 2, 0, (frames - written) * 2 * sizeof(std::int16_t));
@@ -138,6 +172,28 @@ std::size_t pull(std::int16_t* out, std::size_t frames) {
 void setSink(const Sink& sink) {
     OS::InterruptGuard guard;
     gSink = sink;
+}
+
+bool setRealtimeAudioThread() {
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+    const auto ticks = [&](double ms) { return static_cast<std::uint32_t>(ms * 1e6 * timebase.denom / timebase.numer); };
+    thread_time_constraint_policy_data_t policy;
+    policy.period = 0;                 // event driven
+    policy.computation = ticks(0.5);   // per wake-up
+    policy.constraint = ticks(2.0);    // done within 2 ms of waking
+    policy.preemptible = TRUE;
+    return thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY,
+                             reinterpret_cast<thread_policy_t>(&policy), THREAD_TIME_CONSTRAINT_POLICY_COUNT) == KERN_SUCCESS;
+}
+
+std::uint32_t takeWorstInterruptLatencyMicroseconds() {
+    const std::int64_t ticks = gWorstLatency.exchange(0, std::memory_order_relaxed);
+    return static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::duration(ticks)).count());
+}
+
+std::uint64_t replayedBlocks() {
+    return gReplayed.load(std::memory_order_relaxed);
 }
 
 std::uint32_t pendingInterrupts() {
@@ -189,6 +245,7 @@ void shutdown() {
     gRegisterLock.lock();
     gRegistered = Block{};
     gRegisterLock.unlock();
+    gReplayed.store(0);
     gPlaying = Block{};
     gPosition = 0;
     gCallback.store(nullptr);
@@ -226,6 +283,7 @@ void AIInitDMA(uintptr_t start, u32 length) {
     gRegisterLock.lock();
     gRegistered.samples = reinterpret_cast<const std::int16_t*>(start);
     gRegistered.frames = length / 4;
+    gRegistered.generation = ++gGeneration;
     gRegisterLock.unlock();
 }
 

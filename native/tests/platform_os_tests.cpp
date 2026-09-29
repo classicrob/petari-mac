@@ -670,6 +670,65 @@ void* hostBlockWaiter(void* queue) {
     return nullptr;
 }
 
+// A thread that was dispatched (given the baton) but whose host thread has
+// not woken yet has executed nothing, so a higher-priority thread readied
+// before it wakes must run first, as on the Wii. Deterministic: an interrupt
+// (host thread holding the interrupt lock) readies the low thread, which is
+// dispatched to the idle CPU but cannot run yet, then the high one.
+std::atomic<int> gDispatchOrder{0};
+std::atomic<int> gLowRanAt{0}, gHighRanAt{0};
+void* dispatchLow(void* queue) {
+    OSReceiveMessage(static_cast<OSMessageQueue*>(queue), nullptr, OS_MESSAGE_BLOCK);
+    gLowRanAt = ++gDispatchOrder;
+    return nullptr;
+}
+void* dispatchHigh(void* queue) {
+    OSReceiveMessage(static_cast<OSMessageQueue*>(queue), nullptr, OS_MESSAGE_BLOCK);
+    gHighRanAt = ++gDispatchOrder;
+    return nullptr;
+}
+
+void testDispatchBeforeWake() {
+    static OSMessageQueue lowQueue, highQueue;
+    static OSMessage lowSlot, highSlot;
+    OSInitMessageQueue(&lowQueue, &lowSlot, 1);
+    OSInitMessageQueue(&highQueue, &highSlot, 1);
+    static OSThread low, high;
+    alignas(32) static u8 lowStack[0x4000], highStack[0x4000];
+    for (int round = 0; round < 20; ++round) {
+        gDispatchOrder = 0;
+        gLowRanAt = gHighRanAt = 0;
+        OSCreateThread(&low, dispatchLow, &lowQueue, lowStack + sizeof(lowStack), sizeof(lowStack), 20, 0);
+        OSCreateThread(&high, dispatchHigh, &highQueue, highStack + sizeof(highStack), sizeof(highStack), 2, 0);
+        OSResumeThread(&low);
+        OSResumeThread(&high);  // both run and block on their queues
+        petari_os_begin_host_blocking();  // the CPU is idle now
+        static OSThread* afterLow;
+        static OSThread* afterHigh;
+        std::thread interrupt([] {
+            BOOL enabled = OSDisableInterrupts();
+            OSSendMessage(&lowQueue, nullptr, OS_MESSAGE_NOBLOCK);   // dispatches low to the idle CPU
+            afterLow = OSGetCurrentThread();
+            OSSendMessage(&highQueue, nullptr, OS_MESSAGE_NOBLOCK);  // before low's host thread can run
+            afterHigh = OSGetCurrentThread();                        // still under the interrupt lock
+            OSRestoreInterrupts(enabled);
+        });
+        interrupt.join();
+        check(afterLow == &low, "the idle CPU is dispatched to the first ready thread");
+        // The dispatch decision, not just the order game code observes: the
+        // high thread must get the baton now, not after the low thread's host
+        // thread wakes up only to be preempted (5-35 ms in the app).
+        check(afterHigh == &high, "the high-priority thread takes the baton from a dispatched thread that has not woken");
+        for (int i = 0; i < 2000 && gDispatchOrder.load() < 2; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        petari_os_end_host_blocking();
+        OSJoinThread(&low, nullptr);
+        OSJoinThread(&high, nullptr);
+        check(gHighRanAt.load() == 1 && gLowRanAt.load() == 2, "a dispatched thread that has not woken yet yields to a higher-priority one");
+    }
+}
+
 void testHostBlocking() {
     static OSThread spinner;
     alignas(32) static u8 stack[0x4000];
@@ -751,6 +810,7 @@ int main() {
     testDvdOnOsThreads();
     testCache();
     testHostBlocking();
+    testDispatchBeforeWake();
     OSReport("platform OS tests passed (%d checks)\n", checks);
     return 0;
 }

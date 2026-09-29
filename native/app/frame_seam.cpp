@@ -38,6 +38,9 @@ struct Trace {
     unsigned long unpresentableWaits = 0;  // failed aurora_begin_frame calls
     TraceClock::time_point start;
     TraceClock::time_point last;
+    TraceClock::time_point previousFrame;
+    double maxFrameMs = 0.0;
+    unsigned slowFrames = 0;
 };
 Trace gTrace;
 
@@ -112,20 +115,28 @@ void traceFrame(const Rect& image) {
     }
     ++gTrace.frames;
     const bool first = gTrace.frames == 1;
+    const auto now = TraceClock::now();
+    if (!first) {
+        const double frameMs = seconds(now - gTrace.previousFrame) * 1000.0;
+        if (frameMs > gTrace.maxFrameMs) gTrace.maxFrameMs = frameMs;
+        if (frameMs > 1000.0 / 30.0) ++gTrace.slowFrames;
+    }
+    gTrace.previousFrame = now;
     if (!first && gTrace.frames % kTraceInterval != 0) {
         return;
     }
-    const auto now = TraceClock::now();
     const double sinceLast = seconds(now - gTrace.last);
     std::fprintf(stderr,
                  "Petari trace: frame %lu%s at %.2f s (%.1f frames/s since last), image %.0fx%.0f at %.0f,%.0f, "
-                 "unpresentable waits %lu\n",
+                 "unpresentable waits %lu, max interval %.2f ms, intervals over 33.3 ms %u\n",
                  gTrace.frames, first ? " (first frame reached the seam)" : "", seconds(now - gTrace.start),
                  first || sinceLast <= 0.0 ? 0.0 : (gTrace.frames - gTrace.lastFrames) / sinceLast, image.width, image.height, image.x, image.y,
-                 gTrace.unpresentableWaits);
+                 gTrace.unpresentableWaits, gTrace.maxFrameMs, gTrace.slowFrames);
     std::fflush(stderr);
     gTrace.last = now;
     gTrace.lastFrames = gTrace.frames;
+    gTrace.maxFrameMs = 0.0;
+    gTrace.slowFrames = 0;
 }
 
 void handleEvents(const AuroraEvent* event) {

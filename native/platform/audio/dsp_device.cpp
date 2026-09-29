@@ -14,6 +14,7 @@
 
 #include <dispatch/dispatch.h>
 #include <pthread.h>
+#include <pthread/qos.h>
 
 #include <array>
 #include <atomic>
@@ -296,6 +297,7 @@ void handleMail(Device& d, std::uint32_t mail) {
 }
 
 void* workerMain(void*) {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);  // renders each audio frame on demand
     PetariNative::HostAllocationScope hostAllocations;
     Device& d = device();
     std::unique_lock<std::mutex> lock(d.lock);
@@ -313,6 +315,7 @@ void* workerMain(void*) {
 }
 
 void* interruptMain(void*) {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     Device& d = device();
     while (true) {
         dispatch_semaphore_wait(d.interruptSignal, DISPATCH_TIME_FOREVER);
