@@ -8,10 +8,12 @@ milestones.
 
 The full arm64 `Petari.app` now links and starts the Metal window, platform
 services, and original game entry point. The original frame loop runs at about
-60 Hz, audio initialization and system-wave loading complete, and startup reaches
-the Logo scene request. Layout construction there is the current blocker;
-reaching the title screen and gameplay remains unverified. A separate audio boot
-test plays a real coin sound through JAudio and the native DSP/AI path. Focused
+60 Hz, audio initialization and stationed-resource loading complete, and the fresh
+save check finishes. Startup reaches Game/FileSelect and title music preparation.
+The latest full-app run stopped in streamed audio; completing title input and
+entering gameplay remain unverified. A separate audio boot test plays a real coin
+sound and the title music through JAudio and the native DSP/AI path, including
+50 seconds of streaming through a loop. Focused
 tests have rendered both a J3D Mario model and the default
 Mii face/icon on Metal, with GPU pixel readback checks.
 
@@ -27,6 +29,13 @@ The explicit `--user` directory keeps development saves, settings, and crash
 reports under `build/`. Native saves are not byte-compatible with Wii saves.
 Set `PETARI_TRACE_BOOT=1` when launching to log startup phases, heap headroom,
 and frame progress. The trace is disabled by default.
+
+Set `PETARI_SMOKE=title` with a fresh `--user` directory to exercise strap-screen
+input and A+B on the title through the normal input layer. The script passes only
+when the file selector enters its start state, then requests the game's normal
+shutdown. Exit statuses are 0 for pass, 1 for failure, 2 for a blocked save
+sequence, 124 for stalled frames, and 125 for shutdown timeout. Its component
+tests pass; a complete full-app smoke pass is still pending.
 
 ## Build the native core
 
@@ -237,9 +246,9 @@ object target, not a game executable.
 
 ## Work still required for a playable port
 
-1. Resolve startup runtime failures and reach the title screen. Whole-program
-   linking and entry into original game initialization now succeed; the complete
-   frame loop has not yet been exercised by the game.
+1. Complete the title smoke, create a file, and enter playable gameplay. The
+   original frame loop now completes startup and first-run save checks; title
+   input acceptance and the full shutdown path still need verification.
 2. Continue serialized resource runtime validation. Archive, BCSV,
    BMG, KCL, models, layouts, fonts and TPL conversions have real-disc tests.
    All 1,761 disc model/material images construct real J3DModelData successfully.

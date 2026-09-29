@@ -4,8 +4,8 @@ Petari
 
 This fork has an **in-progress native Apple Silicon port** on `port/macos-arm64`.
 See [native build instructions and current limitations](native/README.md).
-The native targets currently build a tested core library and a GX/Metal integration
-probe; they do **not** yet run Super Mario Galaxy. The original Wii build instructions
+The native app runs the original game through startup into title initialization;
+playable gameplay is **not yet verified**. The original Wii build instructions
 below are retained for the matching build.
 
 [Build Status]: https://github.com/SMGCommunity/Petari/actions/workflows/build.yml/badge.svg
