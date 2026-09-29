@@ -3,6 +3,7 @@
 // sound and name tables, the sequence collection, the stream file table, and
 // every sound animation (.bas) in the disc's RARC archives.
 // Usage: jaudio_resource_tests --assets <files dir>
+#include "JSystem/JAudio2/JASAramStream.hpp"
 #include "JSystem/JAudio2/JASBNKParser.hpp"
 #include "JSystem/JAudio2/JASBasicBank.hpp"
 #include "JSystem/JAudio2/JASBasicInst.hpp"
@@ -331,6 +332,62 @@ void testSoundAnimations(const std::filesystem::path& files, JAUSoundTable* soun
     std::printf("sound animations: %d files, %d sounds, %d not in the sound table\n", animations, sounds, dangling);
     CHECK(animations > 0 && sounds > 0 && dangling * 20 < sounds);
 }
+static_assert(sizeof(JASAramStream::Header) == 0x40, "AST header");
+static_assert(sizeof(JASAramStream::BlockHeader) == 0x20, "AST block header");
+
+// Streamed BGM (.ast): JASAramStream reads the file header and each block header
+// in place. Walk every block the way JASAramStream::load does, against the
+// bounds it enforces (AudParams: 0x2760-byte blocks, up to 4 channels).
+void testStreams(const std::filesystem::path& files) {
+    const u32 blockSize = 0x2760;
+    const u32 channelMax = 4;
+    int streams = 0;
+    int blocks = 0;
+    for (const auto& item : std::filesystem::recursive_directory_iterator(files)) {
+        if (!item.is_regular_file() || item.path().extension() != ".ast") {
+            continue;
+        }
+        std::ifstream stream(item.path(), std::ios::binary);
+        const u32 length = static_cast< u32 >(item.file_size());
+        u8 bytes[sizeof(JASAramStream::Header)];
+        stream.read(reinterpret_cast< char* >(bytes), sizeof(bytes));
+        const JASAramStream::Header* header = reinterpret_cast< const JASAramStream::Header* >(bytes);
+        const u32 channels = header->channels;
+        bool ok = header->tag == 'STRM' && readU32BE(bytes) == 'STRM' && channels == PetariNative::readU16BE(bytes + 0xc);
+        ok &= channels >= 1 && channels <= channelMax && header->block_size == blockSize && header->_10 == 32000;
+        ok &= header->format == 1 && (header->loop == 0 || header->loop == 0xffff) && header->loop_start >= 0 && header->loop_start < header->loop_end;
+        // PCM16: loop_end samples fit in the blocks the file holds.
+        ok &= static_cast< u64 >(header->loop_end) * 2 * channels <= length;
+
+        u32 offset = sizeof(JASAramStream::Header);
+        u32 block = 0;
+        while (ok && offset < length) {
+            u8 blockBytes[sizeof(JASAramStream::BlockHeader)];
+            stream.seekg(offset);
+            stream.read(reinterpret_cast< char* >(blockBytes), sizeof(blockBytes));
+            const JASAramStream::BlockHeader* blockHeader = reinterpret_cast< const JASAramStream::BlockHeader* >(blockBytes);
+            ok &= blockHeader->tag == 'BLCK' && blockHeader->_4 <= blockSize && blockHeader->_4 == readU32BE(blockBytes + 4);
+            ok &= static_cast< s16 >(blockHeader->_8[0]._2) == static_cast< s16 >(PetariNative::readU16BE(blockBytes + 10));
+            // Full blocks sit where load() computes them; only the last may be short.
+            ok &= blockHeader->_4 == blockSize || offset + sizeof(JASAramStream::BlockHeader) + blockHeader->_4 * channels + 0x20 * channels >= length;
+            ok &= offset == sizeof(JASAramStream::Header) + block * (blockSize * channels + sizeof(JASAramStream::BlockHeader));
+            offset += sizeof(JASAramStream::BlockHeader) + blockHeader->_4 * channels;
+            block++;
+        }
+        // The last block may declare up to 0x20 bytes per channel past the end.
+        ok &= offset >= length && offset <= length + 0x20 * channels;
+        ok &= block == (static_cast< u32 >(header->loop_end) - 1) / (blockSize / 2) + 1;
+        CHECK(ok);
+        if (!ok) {
+            std::fprintf(stderr, "  bad stream %s at block %u (channels %u, block size %u, rate %d, loop end %d)\n", item.path().c_str(), block,
+                         channels, static_cast< u32 >(header->block_size), static_cast< int >(header->_10), static_cast< int >(header->loop_end));
+        }
+        streams++;
+        blocks += block;
+    }
+    std::printf("streams: %d files, %d blocks\n", streams, blocks);
+    CHECK(streams > 0 && blocks > streams);
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -356,6 +413,7 @@ int main(int argc, char** argv) {
     static JAUSoundTable soundTable(true);
     testAudioArchive(assets, heap, &soundTable);
     testSoundAnimations(assets, &soundTable);
+    testStreams(assets);
 
     if (sFailures != 0) {
         std::fprintf(stderr, "%d of %d jaudio check(s) failed\n", sFailures, sChecks);

@@ -235,6 +235,21 @@ bool JASAramStream::headerLoad(u32 param_0, int param_1) {
 
     DCInvalidateRange(sReadBuffer, sizeof(Header));
     Header* header = (Header*)sReadBuffer;
+#ifdef PETARI_NATIVE
+    // load() reads sBlockSize bytes per channel into sReadBuffer, sized for
+    // sChannelMax channels, and the per-channel state holds CHANNEL_MAX.
+    // getBlockSamples() knows ADPCM (0) and PCM16 (1); load() derives block
+    // indices from the loop range.
+    if (mDvdFileInfo.length < sizeof(Header) || header->tag != 'STRM' || header->channels == 0 || header->channels > sChannelMax ||
+        header->channels > CHANNEL_MAX || header->format > 1 || header->loop_end <= 0 || header->loop_start < 0 ||
+        header->loop_start >= header->loop_end) {
+        OSReport("JASAramStream::headerLoad: bad stream header (tag %08x, %u channels, max %u, format %u, loop %d..%d, %u bytes)\n",
+                 (u32)header->tag, (u32)header->channels, sChannelMax, header->format, (int)header->loop_start, (int)header->loop_end,
+                 mDvdFileInfo.length);
+        UNK_BOOL_B = true;
+        return false;
+    }
+#endif
     _158 = header->format;
     mChannelNum = header->channels;
     _164 = header->_10;
@@ -301,6 +316,14 @@ bool JASAramStream::load() {
         size = mDvdFileInfo.length - offset;
     }
 
+#ifdef PETARI_NATIVE
+    const u64 blockOffset = (u64)mBlock * (sBlockSize * mChannelNum + sizeof(BlockHeader)) + sizeof(Header);
+    if (blockOffset != offset || offset >= mDvdFileInfo.length || size < sizeof(BlockHeader) || size > (sBlockSize + 0x20) * sChannelMax) {
+        OSReport("JASAramStream::load: block %u (%u bytes at %u) does not fit the stream buffer or file\n", mBlock, size, offset);
+        UNK_BOOL_B = true;
+        return false;
+    }
+#endif
     if (DVDReadPrio(&mDvdFileInfo, sReadBuffer, size, offset, 1) < 0) {
         UNK_BOOL_B = true;
         return false;
@@ -308,6 +331,16 @@ bool JASAramStream::load() {
 
     DCInvalidateRange(sReadBuffer, size);
     BlockHeader* bhead = (BlockHeader*)sReadBuffer;
+#ifdef PETARI_NATIVE
+    // Channel data is copied from sReadBuffer in bhead->_4-byte runs into
+    // sBlockSize-sized ARAM slots. The last block of some disc streams declares a
+    // few bytes more than the file holds; those come from the buffer, as on the Wii.
+    if (bhead->tag != 'BLCK' || bhead->_4 > sBlockSize) {
+        OSReport("JASAramStream::load: bad block %u header (tag %08x, %u bytes per channel)\n", mBlock, (u32)bhead->tag, (u32)bhead->_4);
+        UNK_BOOL_B = true;
+        return false;
+    }
+#endif
     if (_114 != 0) {
         return false;
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "JSystem/JAudio2/JASTaskThread.hpp"
+#include "JSystem/JSupport/JSUBigEndian.hpp"
 
 class JASChannel;
 
@@ -26,29 +27,31 @@ public:
         /* 0x8 */ int _8;
     };
 
+    // AST stream file headers, read in place from disc (big-endian; see
+    // JSUBigEndian.hpp). The sample payload after them stays big-endian for the DSP.
     struct Header {
-        /* 0x00 */ u32 tag;
+        /* 0x00 */ JSU_BE(u32) tag;
         /* 0x04 */ u8 _4[5];
         /* 0x09 */ u8 format;
         /* 0x0A */ u8 bits;
-        /* 0x0C */ u16 channels;
-        /* 0x0E */ u16 loop;
-        /* 0x10 */ int _10;
+        /* 0x0C */ JSU_BE(u16) channels;
+        /* 0x0E */ JSU_BE(u16) loop;
+        /* 0x10 */ JSU_BE(int) _10;
         /* 0x14 */ u8 _14[4];
-        /* 0x18 */ int loop_start;
-        /* 0x1C */ int loop_end;
-        /* 0x20 */ u32 block_size;
+        /* 0x18 */ JSU_BE(int) loop_start;
+        /* 0x1C */ JSU_BE(int) loop_end;
+        /* 0x20 */ JSU_BE(u32) block_size;
         /* 0x24 */ u8 _24[4];
         /* 0x28 */ u8 _28;
         /* 0x29 */ u8 _29[0x17];
     };
 
     struct BlockHeader {
-        /* 0x00 */ u32 tag;
-        /* 0x04 */ u32 _4;
+        /* 0x00 */ JSU_BE(u32) tag;
+        /* 0x04 */ JSU_BE(u32) _4;
         /* 0x08 */ struct {
-            s16 _0;
-            s16 _2;
+            JSU_BE(s16) _0;
+            JSU_BE(s16) _2;
         } _8[6];
     };
 
