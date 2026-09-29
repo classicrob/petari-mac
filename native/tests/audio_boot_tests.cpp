@@ -35,6 +35,11 @@
 #include <JSystem/JAudio2/JASWaveInfo.hpp>
 #include <JSystem/JAudio2/JAUSectionHeap.hpp>
 #include "Game/AudioLib/AudSceneMgr.hpp"
+#include "Game/AudioLib/AudBgm.hpp"
+#include "Game/AudioLib/AudWrap.hpp"
+#include "Game/RhythmLib/AudChordInfo.hpp"
+#include <JSystem/JAudio2/JAIStream.hpp>
+#include <JSystem/JAudio2/JASAramStream.hpp>
 #include <JSystem/JKernel/JKRAram.hpp>
 #include <JSystem/JKernel/JKRExpHeap.hpp>
 #include <JSystem/JKernel/JKRSolidHeap.hpp>
@@ -104,8 +109,14 @@ void frame() {
     const std::size_t frames = static_cast<std::size_t>(exact);
     gFrameRemainder = exact - frames;
     const std::size_t at = gCapture.size();
-    gCapture.resize(at + frames * 2);
+    {
+        // The capture is the test's own host memory, not the game heap.
+        PetariNative::HostAllocationScope hostAllocations;
+        gCapture.resize(at + frames * 2);
+    }
     PAudio::pull(gCapture.data() + at, frames);
+    // GameSystemObjHolder::update, then updateAudioSystem.
+    gWrapper->updateRhythm();
     gWrapper->movement();
     VIWaitForRetrace();
 }
@@ -289,6 +300,69 @@ int main(int argc, char** argv) {
                 JASDriver::getSubFrameCounter() - subFramesBefore);
     check(seL > 50.0 || seR > 50.0, "the SE is audible in the captured output");
     check(seL > silenceL * 4 || seR > silenceR * 4, "output rises when the SE plays");
+
+    // The title BGM stream, as TitleSequenceProduct::exeBgmPrepare and
+    // MR::startStageBGM("STM_TITLE", true) / MR::unlockStageBGM run it:
+    // AudBgmMgr -> JAIStreamMgr -> JASAramStream (header, first blocks, and
+    // ARAM ring through JASDvd/the stream load thread), then playback.
+    const JAISoundID bgmId = AudSingletonHolder< AudSoundNameConverter >::get()->getSoundID("STM_TITLE");
+    JAISoundHandle* bgmHandle = AudWrap::startStageBgm(bgmId, true);
+    check(bgmHandle != nullptr, "AudWrap::startStageBgm(STM_TITLE, locked)");
+    AudBgm* stageBgm = AudWrap::getStageBgm();
+    const int prepareFrames = runFramesUntil([&] { return stageBgm->isPreparedPlay(); }, 60 * 10);
+    check(prepareFrames >= 0, "the title BGM stream prepares (header and first blocks in ARAM)");
+    std::printf("STM_TITLE prepared after %d frames\n", prepareFrames);
+    JAISound* bgmSound = stageBgm->getHandle() != nullptr ? stageBgm->getHandle()->getSound() : nullptr;
+    JAIStream* stream = bgmSound != nullptr ? bgmSound->asStream() : nullptr;
+    check(stream != nullptr, "the stage BGM is a JAIStream");
+    if (stream != nullptr) {
+        const JASAramStream& aram = stream->inner_.aramStream;
+        std::printf("STM_TITLE stream: %u channels, format %u, loop %d (%u..%u), block size %u, %u samples/block\n",
+                    aram.mChannelNum, aram._158, aram.mLoop ? 1 : 0, aram.mLoopStart, aram.mLoopEnd,
+                    JASAramStream::getBlockSize(), aram.getBlockSamples());
+        check(aram.mChannelNum >= 1 && aram.mChannelNum <= 6, "stream header channel count is sane (1..6)");
+        check(aram._158 <= 1, "stream format is ADPCM or PCM16");
+        check(aram.mLoopEnd == 0 || aram.mLoopStart < aram.mLoopEnd, "loop range is ordered");
+    }
+    const std::size_t bgmStart = gCapture.size() / 2;
+    stageBgm->playAfterPrepared();  // MR::unlockStageBGM
+    runFramesUntil([] { return false; }, 60 * seconds);
+    const std::size_t bgmEnd = gCapture.size() / 2;
+    const double bgmL = rms(bgmStart, bgmEnd, 0);
+    const double bgmR = rms(bgmStart, bgmEnd, 1);
+    std::printf("STM_TITLE RMS L=%.1f R=%.1f over %.1f s\n", bgmL, bgmR, (bgmEnd - bgmStart) / 32000.0);
+    check(bgmL > 100.0 && bgmR > 100.0, "the title BGM plays on both channels");
+
+    // Title -> file select, as the game runs it: A+B in TitleSequenceProduct
+    // (MR::stopStageBGM(75), SE_SY_GAME_START), then FileSelector::exeTitleEnd
+    // (MR::startStageBGM("MBGM_FILE_SELECT", false)): a sequence BGM whose
+    // rhythm/chord data (AudChordTable::setChordTableResource) loads on start.
+    stageBgm->stop(75);
+    JAISoundHandle startSe;
+    check(gWrapper->mAudSystem->startSound(AudSingletonHolder< AudSoundNameConverter >::get()->getSoundID("SE_SY_GAME_START"),
+                                           &startSe, nullptr),
+          "SE_SY_GAME_START");
+    runFramesUntil([] { return false; }, 90);  // the fade-out and the decide sequence
+    const JAISoundID fileSelectId = AudSingletonHolder< AudSoundNameConverter >::get()->getSoundID("MBGM_FILE_SELECT");
+    std::printf("MBGM_FILE_SELECT sound id %08x\n", static_cast<unsigned>(static_cast<u32>(fileSelectId)));
+    JAISoundHandle* fileSelectHandle = AudWrap::startStageBgm(fileSelectId, false);
+    check(fileSelectHandle != nullptr, "AudWrap::startStageBgm(MBGM_FILE_SELECT, unlocked)");
+    const std::size_t fsStart = gCapture.size() / 2;
+    runFramesUntil([] { return false; }, 60 * seconds);
+    const std::size_t fsEnd = gCapture.size() / 2;
+    const double fsL = rms(fsStart + 16000, fsEnd, 0);  // skip the first half second of fade-in
+    const double fsR = rms(fsStart + 16000, fsEnd, 1);
+    std::printf("MBGM_FILE_SELECT RMS L=%.1f R=%.1f over %.1f s\n", fsL, fsR, (fsEnd - fsStart) / 32000.0);
+    check(fsL > 100.0 || fsR > 100.0, "the file-select sequence BGM plays");
+    AudChordInfo* chords = gWrapper->mAudSystem->getChordInfo();
+    check(chords != nullptr && chords->isAvailable(), "the file-select BGM's chord table loads (AudChordTable::setChordTableResource)");
+    if (chords != nullptr) {
+        std::printf("chord info: table %d, %d chords, %d scales\n", chords->mTableId, static_cast<int>(chords->mTable.mChordCount),
+                    static_cast<int>(chords->mTable.mScaleCount));
+        check(chords->mTable.mChordCount > 0 && chords->mTable.mChordCount < 256 && chords->mTable.mScaleCount > 0 &&
+                  chords->mTable.mScaleCount < 256,
+              "chord table counts are sane");
+    }
 
     const std::filesystem::path wav = tmp / "petari_audio_boot.wav";
     writeWav(wav, PAudio::outputRate());

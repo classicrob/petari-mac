@@ -38,8 +38,18 @@ if(_petari_build_testing)
     target_compile_options(petari_jaudio_resource_tests PRIVATE -fno-rtti)
     target_link_libraries(petari_jaudio_resource_tests PRIVATE petari_game_libraries petari_resources)
     target_link_options(petari_jaudio_resource_tests PRIVATE -Wl,-dead_strip)
+    add_executable(petari_aud_chord_tests EXCLUDE_FROM_ALL
+        "${CMAKE_SOURCE_DIR}/native/tests/aud_chord_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/RhythmLib/AudChordInfo.cpp")
+    petari_encode_target_sources(petari_aud_chord_tests)
+    target_compile_options(petari_aud_chord_tests PRIVATE -fno-rtti)
+    target_link_libraries(petari_aud_chord_tests PRIVATE petari_kernel petari_resources)
+    target_link_options(petari_aud_chord_tests PRIVATE -Wl,-dead_strip)
     if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
         add_test(NAME native_jaudio_resources_assets COMMAND petari_jaudio_resource_tests
+            --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        add_test(NAME native_aud_chord_assets COMMAND petari_aud_chord_tests
             --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
     endif()
 endif()

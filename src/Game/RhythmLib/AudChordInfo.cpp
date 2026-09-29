@@ -29,8 +29,8 @@ bool AudChordTable::setChordTable(s32 id, JKRArchive* pArchive) {
 }
 
 #ifdef PETARI_NATIVE
-// Resource layout (big-endian): s32 relocated flag, "CITS", u16 chord count, u16 scale count,
-// u32 chord offsets[chord count], u32 scale offsets[scale count]. Each scale record holds
+// Resource layout (big-endian): s32 relocated flag, "CITS", u32 size, u16 chord count,
+// u16 scale count, u32 chord offsets[chord count], u32 scale offsets[scale count]. Each scale record holds
 // two u32 offsets (up, down). Offsets are relative to the resource start. The resource is
 // left untouched; pointer tables are built on the host.
 bool AudChordTable::setChordTableResource(void* pRes) {
@@ -40,10 +40,29 @@ bool AudChordTable::setChordTableResource(void* pRes) {
         return false;
     }
 
-    mChordCount = PetariNative::readU16BE(res + 8);
-    mScaleCount = PetariNative::readU16BE(res + 10);
-    const u8* chordOffsets = res + 12;
-    const u8* scaleOffsets = chordOffsets + mChordCount * 4;
+    // Reject offsets outside the resource before building pointers from them.
+    const u32 size = PetariNative::readU32BE(res + 8);
+    const u32 chordCount = PetariNative::readU16BE(res + 12);
+    const u32 scaleCount = PetariNative::readU16BE(res + 14);
+    const u8* chordOffsets = res + 16;
+    const u8* scaleOffsets = chordOffsets + chordCount * 4;
+    if (16 + (chordCount + scaleCount) * 4 > size) {
+        return false;
+    }
+    for (u32 i = 0; i < chordCount; i++) {
+        if (PetariNative::readU32BE(chordOffsets + i * 4) > size - sizeof(AudChordData)) {
+            return false;
+        }
+    }
+    for (u32 i = 0; i < scaleCount; i++) {
+        const u32 scale = PetariNative::readU32BE(scaleOffsets + i * 4);
+        if (scale > size - 8 || PetariNative::readU32BE(res + scale) >= size || PetariNative::readU32BE(res + scale + 4) >= size) {
+            return false;
+        }
+    }
+
+    mChordCount = chordCount;
+    mScaleCount = scaleCount;
 
     delete[] mChordPtr;
     delete[] mScalePtr;
