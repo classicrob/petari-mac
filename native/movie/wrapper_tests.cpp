@@ -16,6 +16,11 @@
 //
 // Malformed movies run in forked children, each mounting its own temporary disc,
 // and must end in the wrapper's OSPanic with the expected reason.
+//
+// --os runs the playbacks on an initialized native OS, the test thread as the OS
+// thread holding the CPU (as the game thread is), and checks that a ready
+// lower-priority OS thread makes progress during frame decodes, which it can only
+// do while the decoding thread has given up the CPU.
 #include "Game/Screen/THPSimplePlayerWrapper.hpp"
 
 #include <JSystem/JAudio2/JASAiCtrl.hpp>
@@ -23,8 +28,10 @@
 #include <petari/movie_thp.hpp>
 #include <petari/platform/dvd.hpp>
 #include <revolution/dvd.h>
+#include <revolution/os.h>
 #include <revolution/sc.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -110,6 +117,27 @@ void THPGXRestore(void) {
 namespace {
 
 int sFailures = 0;
+
+// --os: a priority-24 OS thread, ready throughout, counts while it holds the CPU. The
+// priority-16 test thread keeps the CPU except when it gives it up, so the count can only
+// advance during a decode that released the CPU. The count undercounts releases: when the
+// host does not run the spinner's thread before the decode ends, the CPU returns to the
+// test thread without the spinner having counted.
+bool sOsMode = false;
+std::atomic<bool> sSpinnerStop{false};
+std::atomic<std::uint64_t> sSpins{0};
+std::uint32_t sDecodedFrames = 0;
+std::uint32_t sReleasingDecodes = 0;
+
+void* spinner(void*) {
+    while (!sSpinnerStop.load()) {
+        sSpins.fetch_add(1);
+        const BOOL enabled = OSDisableInterrupts();
+        sSpins.fetch_add(1);
+        OSRestoreInterrupts(enabled);
+    }
+    return nullptr;
+}
 
 void check(bool condition, const char* text, const std::string& detail = {}) {
     if (!condition) {
@@ -322,7 +350,12 @@ PlaybackResult play(const char* dvdPath, const std::uint8_t* file, const Referen
             break;
         }
         player->updateNerve();
+        const std::uint64_t spinsBefore = sSpins.load();
         const s32 status = player->decode(0);
+        if (sOsMode && status == 0) {
+            sDecodedFrames++;
+            sReleasingDecodes += sSpins.load() != spinsBefore;
+        }
         if (status == 2) {
             // Next frame not read yet.
             std::this_thread::sleep_for(std::chrono::microseconds(200));
@@ -617,8 +650,10 @@ int main(int argc, char** argv) {
             frames = UINT32_MAX;
         } else if (arg == "--only" && i + 1 < argc) {
             only = argv[++i];
+        } else if (arg == "--os") {
+            sOsMode = true;
         } else {
-            std::fprintf(stderr, "usage: %s [--disc ROOT] [--frames N | --all] [--only NAME]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--disc ROOT] [--frames N | --all] [--only NAME] [--os]\n", argv[0]);
             return 2;
         }
     }
@@ -656,6 +691,16 @@ int main(int argc, char** argv) {
         }
     }
 
+    // After the forked cases, which must not inherit OS threads.
+    static OSThread spinnerThread;
+    alignas(16) static std::uint8_t spinnerStack[64 * 1024];
+    if (sOsMode) {
+        __OSThreadInit();  // the test thread becomes the default OS thread (priority 16)
+        OSCreateThread(&spinnerThread, spinner, nullptr, spinnerStack + sizeof(spinnerStack), sizeof(spinnerStack), 24, 0);
+        OSResumeThread(&spinnerThread);
+        check(OSGetThreadPriority(OSGetCurrentThread()) < 24, "the test thread outranks the spinner");
+    }
+
     std::string error;
     if (!PDVD::mount({discRoot}, &error)) {
         std::fprintf(stderr, "mount failed: %s\n", error.c_str());
@@ -686,6 +731,15 @@ int main(int argc, char** argv) {
         player->init(0);
         check(player->_30C == 1, "SC mono mode selects the mono fold-down");
         player->quit();
+    }
+
+    if (sOsMode) {
+        // The join gives the spinner the CPU; it sees the stop flag and returns.
+        sSpinnerStop.store(true);
+        OSJoinThread(&spinnerThread, nullptr);
+        std::printf("  OS mode: %u frame decodes, lower-priority thread progressed during %u (undercounts releases)\n",
+                    sDecodedFrames, sReleasingDecodes);
+        check(sDecodedFrames > 0 && sReleasingDecodes > 0, "a ready lower-priority OS thread makes progress during frame decodes");
     }
 
     if (sFailures != 0) {

@@ -8,6 +8,16 @@
 #ifdef PETARI_NATIVE
 #include <cstdlib>
 #include <petari/endian.hpp>
+
+// petari/platform/os_host.hpp (native/platform): run host work without holding the OS CPU.
+extern "C" void petari_os_begin_host_blocking(void);
+extern "C" void petari_os_end_host_blocking(void);
+
+namespace PetariNative::Platform::OS {
+    // native/platform/os/os_internal.hpp: the OS thread bound to the calling host thread, or
+    // null for host threads and threads already doing host-blocking work.
+    OSThread* boundThread();
+}  // namespace PetariNative::Platform::OS
 #endif
 
 static u16 VolumeTable[] = {0,     2,     8,     18,    32,    50,    73,    99,    130,   164,   203,   245,   292,   343,   398,   457,
@@ -38,6 +48,36 @@ namespace NrvTHPSimplePlayerWrapper {
 
 namespace {
 #ifdef PETARI_NATIVE
+    // Frame validation and video decoding are pure host work on the frame and texture
+    // buffers the decoding thread owns (no allocation, no OS calls; a few ms per frame).
+    // Natively an OS thread holds the CPU until an interrupt-state change, so a decode
+    // would delay interrupt-readied threads (audio) for its whole length, and longer when
+    // the host deschedules it; the Wii preempts it at any instruction. The OS thread gives
+    // up the CPU for the work instead. Only the OS thread that holds the CPU, with
+    // interrupts enabled, does so; other callers (host threads, standalone tools without
+    // OSInit) run the work in place as before.
+    class HostDecodeScope {
+    public:
+        HostDecodeScope() : mReleased(false) {
+            const BOOL enabled = OSDisableInterrupts();
+            OSRestoreInterrupts(enabled);
+            OSThread* bound = PetariNative::Platform::OS::boundThread();
+            if (enabled && bound != nullptr && bound == OSGetCurrentThread()) {
+                petari_os_begin_host_blocking();
+                mReleased = true;
+            }
+        }
+
+        ~HostDecodeScope() {
+            if (mReleased) {
+                petari_os_end_host_blocking();
+            }
+        }
+
+    private:
+        bool mReleased;
+    };
+
     PetariNative::Movie::ThpHeader toMovieHeader(const THPHeader& rHeader) {
         PetariNative::Movie::ThpHeader header;
         memcpy(header.magic, rHeader.magic, sizeof(header.magic));
@@ -456,9 +496,20 @@ s32 THPSimplePlayerWrapper::getTotalFrame() const {
 }
 
 bool THPSimplePlayerWrapper::videoDecode(u8* pFile) {
+#ifdef PETARI_NATIVE
+    s32 result;
+    {
+        HostDecodeScope scope;
+        result = THPVideoDecode(pFile, mTextureSet[_310].ytexture, mTextureSet[_310].utexture, mTextureSet[_310].vtexture, mTHPWork);
+    }
+    if (result) {
+        return false;
+    }
+#else
     if (THPVideoDecode(pFile, mTextureSet[_310].ytexture, mTextureSet[_310].utexture, mTextureSet[_310].vtexture, mTHPWork)) {
         return false;
     }
+#endif
 
     mTextureSet[_310].frameNumber = mReadBuffer[mNextDecodeIndex].frameNumber;
     return true;
@@ -1148,6 +1199,7 @@ void THPSimplePlayerWrapper::nativeValidateFrame(const u8* pFrame, s32 audio, u3
         pCompSizes[i] = size;
 
         if (components.kinds[i] == PetariNative::Movie::kThpComponentVideo) {
+            HostDecodeScope scope;
             pError = PetariNative::Movie::validateThpVideoComponent(pComp, size, components.video.xSize,
                                                                     components.video.ySize);
         } else if (audio >= 0 && static_cast< u32 >(audio) < components.audio.sndNumTracks) {
