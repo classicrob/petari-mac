@@ -472,6 +472,105 @@ void testFileSelectMilestone() {
           "a later FileSelect does not restart the script");
 }
 
+void testSavingWindow() {
+    // Real sequence (app23): Yes on System_FileSelect001, FileSelector.Create,
+    // the saving window System_Save01 (blocking) while the file is written,
+    // then Mii select.
+    Run run(1000000, Smoke::Script::Playable);
+    toFileSelect(run);
+    run.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 3);
+    run.frame(prompt(fileSelect(true), "System_FileSelect001", 2));
+    pointAndPress(run, fileSelect(true), "Prompt.Yes", 0);
+    const int aBefore = run.count(Button::A, true);
+    Observation saving = with(fileSelect(true), "FileSelector.Create");
+    saving.saveSequence = true;
+    run.frame(saving);
+    saving.milestones.clear();
+    run.frame(prompt(saving, "System_Save01", 1));
+    check(run.driver.result() == Result::Running && run.logged("saving window System_Save01: no input"),
+          "the saving window during file creation is expected");
+    run.frames(saving, 120);
+    check(run.count(Button::A, true) == aBefore && run.pointerMoves > 0, "no presses for the saving window");
+    run.frame(with(fileSelect(true), "FileSelector.MiiSelect"));
+    check(pointAndPress(run, fileSelect(true), "MiiSelect.Mario", 0) == 1, "then Mii select continues");
+
+    // Elsewhere, or as another type, it still blocks.
+    Run early(1000000, Smoke::Script::Playable);
+    toFileSelect(early);
+    early.frame(prompt(fileSelect(true), "System_Save01", 1));
+    check(early.driver.result() == Result::Blocked, "System_Save01 before the file is created blocks");
+
+    Run wrongType(1000000, Smoke::Script::Playable);
+    toFileSelect(wrongType);
+    wrongType.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 3);
+    wrongType.frame(with(fileSelect(true), "FileSelector.Create"));
+    wrongType.frame(prompt(fileSelect(true), "System_Save01", 2));
+    check(wrongType.driver.result() == Result::Blocked, "System_Save01 as a yes/no window blocks");
+
+    Run other(1000000, Smoke::Script::Playable);
+    toFileSelect(other);
+    other.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 3);
+    other.frame(with(fileSelect(true), "FileSelector.Create"));
+    other.frame(prompt(fileSelect(true), "System_Save02", 1));
+    check(other.driver.result() == Result::Blocked && other.driver.reason().find("System_Save02") != std::string::npos,
+          "another blocking window during creation blocks");
+
+    Run later(1000000, Smoke::Script::Playable);
+    toFileSelect(later);
+    later.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 3);
+    later.frame(with(fileSelect(true), "FileSelector.Create"));
+    later.frame(with(fileSelect(true), "FileSelector.MiiSelect"));
+    later.frame(prompt(fileSelect(true), "System_Save01", 1));
+    check(later.driver.result() == Result::Blocked, "System_Save01 after Mii select started blocks");
+}
+
+void testIconSavingWindow() {
+    // Second save: after System_FileSelect013 Yes, FileSelector::exeMiiCreateWait
+    // -> storeSetMiiIdUserFile -> startSaveAllUserFileSequence shows
+    // System_Save01 again, before FileSelector.FileConfirm.
+    auto toMarioChosen = [](Run& run) {
+        toFileSelect(run);
+        run.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 3);
+        run.frame(prompt(fileSelect(true), "System_FileSelect001", 2));
+        pointAndPress(run, fileSelect(true), "Prompt.Yes", 0);
+        run.frame(with(fileSelect(true), "FileSelector.Create"));
+        run.frame(prompt(fileSelect(true), "System_Save01", 1));
+        run.frames(fileSelect(true), 30);
+        run.frame(with(fileSelect(true), "FileSelector.MiiSelect"));
+        pointAndPress(run, fileSelect(true), "MiiSelect.Mario", 0);
+    };
+
+    Run run(1000000, Smoke::Script::Playable);
+    toMarioChosen(run);
+    run.frame(prompt(fileSelect(true), "System_FileSelect013", 2));
+    pointAndPress(run, fileSelect(true), "Prompt.Yes", 0);
+    const int aBefore = run.count(Button::A, true);
+    Observation saving = fileSelect(true);
+    saving.saveSequence = true;
+    run.frame(prompt(saving, "System_Save01", 1));
+    check(run.driver.result() == Result::Running && run.log.back() == "saving window System_Save01: no input",
+          "the icon save's System_Save01 is expected after 013 Yes");
+    run.frames(saving, 100);
+    check(run.count(Button::A, true) == aBefore, "no presses while the icon is saved");
+    run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+    check(pointAndPress(run, fileSelect(true), "FileSelect.Start", 0) == 1, "then Start");
+
+    // Before the icon was confirmed (013 not answered yet), it still blocks.
+    Run early(1000000, Smoke::Script::Playable);
+    toMarioChosen(early);
+    early.frame(prompt(fileSelect(true), "System_Save01", 1));
+    check(early.driver.result() == Result::Blocked, "System_Save01 before the icon is confirmed blocks");
+
+    // After FileConfirm, it blocks again.
+    Run late(1000000, Smoke::Script::Playable);
+    toMarioChosen(late);
+    late.frame(prompt(fileSelect(true), "System_FileSelect013", 2));
+    pointAndPress(late, fileSelect(true), "Prompt.Yes", 0);
+    late.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+    late.frame(prompt(fileSelect(true), "System_Save01", 1));
+    check(late.driver.result() == Result::Blocked, "System_Save01 after FileConfirm blocks");
+}
+
 void testPlayableGuards() {
     Run unknown(1000000, Smoke::Script::Playable);
     toFileSelect(unknown);
@@ -557,6 +656,8 @@ int main() {
     testPlayableFlow();
     testPrologueSameFrame();
     testFileSelectMilestone();
+    testSavingWindow();
+    testIconSavingWindow();
     testPlayableGuards();
     testMilestones();
     std::printf("native app smoke tests passed (%d checks)\n", checks);

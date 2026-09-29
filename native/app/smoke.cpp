@@ -376,6 +376,17 @@ Step Driver::step(const Observation& observation) {
     if (mScript == Script::Playable) {
         for (const Observation::Prompt& prompt : observation.prompts) {
             note("prompt " + prompt.messageId + " type " + std::to_string(prompt.type));
+            // Creating the file saves it (FileSelector::exeCreate), and so does
+            // confirming the icon (exeMiiCreateWait -> storeSetMiiIdUserFile ->
+            // startSaveAllUserFileSequence): SaveDataHandleSequence::trySave
+            // shows the blocking "saving" window System_Save01 until the save
+            // ends. It takes no input; only there it is expected and left alone.
+            const bool creating = mPhase == Phase::WaitMiiSelect && seen("FileSelector.Create");
+            const bool storingIcon = mPhase == Phase::WaitFileConfirm && mIconConfirmed;
+            if (prompt.messageId == "System_Save01" && prompt.type == 1 && (creating || storingIcon)) {
+                note("saving window System_Save01: no input");
+                continue;
+            }
             if (!isAllowedPrompt(prompt.messageId, prompt.type)) {
                 finish(Result::Blocked,
                        "prompt " + prompt.messageId + " (type " + std::to_string(prompt.type) + ") is not on the allow-list",
@@ -431,6 +442,9 @@ Step Driver::step(const Observation& observation) {
     if (!mPrompt.empty()) {
         if (aimAndPress(observation, "Prompt.Yes", false, step)) {
             note("answered " + mPrompt + ": yes");
+            if (mPrompt == "System_FileSelect013") {
+                mIconConfirmed = true;
+            }
             mPrompt.clear();
         }
         return step;

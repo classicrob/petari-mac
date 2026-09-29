@@ -31,8 +31,12 @@
 // game publishes and pressing A only once the game reports the pointer over a
 // selectable target:
 // 5. The lowest empty FileSelect.Slot. The prompts System_FileSelect001 and
-//    System_FileSelect013 (yes/no) are answered Prompt.Yes; any other prompt
-//    is BLOCKED with its message ID.
+//    System_FileSelect013 (yes/no) are answered Prompt.Yes. The blocking
+//    "saving" window System_Save01 (type 1) is left alone while the new file
+//    is saved (after FileSelector.Create, before FileSelector.MiiSelect) and
+//    while the chosen icon is saved (after System_FileSelect013 was answered
+//    Yes, before FileSelector.FileConfirm).
+//    Any other prompt, or these elsewhere, is BLOCKED with its message ID.
 // 6. FileSelector.MiiSelect: MiiSelect.Mario. FileSelector.FileConfirm:
 //    FileSelect.Start. After FileSelector.DemoStartWait any scene and stage
 //    may follow.
@@ -168,6 +172,7 @@ private:
     Script mScript;
     std::vector<std::string> mSeen;
     std::string mPrompt;          // allowed prompt being answered
+    bool mIconConfirmed = false;  // System_FileSelect013 answered Yes
     unsigned long mAimFrames = 0;
     unsigned long mAimMissing = 0;
     unsigned long mPointingFrames = 0;
