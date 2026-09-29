@@ -3,6 +3,7 @@
 
 #include <revolution/ai.h>
 #include <revolution/os.h>
+#include <revolution/wenc.h>
 
 #include <atomic>
 #include <chrono>
@@ -385,6 +386,38 @@ void testChannelOrder() {
     PAudio::shutdown();
 }
 
+// SpkSpeakerCtrl::updateSpeaker encodes 40 samples per Wii Remote speaker
+// update into a stack buffer and sends 20 bytes. The SDK encoder writes
+// (samples + 1) / 2 bytes, so the buffer must hold 20: the decompiled 16-byte
+// array overran it (app17, __stack_chk_fail in the speaker alarm).
+void testSpeakerEncodeSize() {
+    constexpr int kSamples = 40;  // SpkSpeakerCtrl.cpp
+    s16 pcm[kSamples];
+    for (int i = 0; i < kSamples; ++i) {
+        pcm[i] = static_cast<s16>((i % 2) ? 20000 : -20000);
+    }
+    constexpr u8 kCanary = 0xA5;
+    u8 guarded[4 + 20 + 16];
+    std::memset(guarded, kCanary, sizeof(guarded));
+    u8* data = guarded + 4;
+    WENCInfo info;
+    std::memset(&info, 0, sizeof(info));
+    WENCGetEncodeData(&info, 0, pcm, kSamples, data);
+    bool before = true, after = true;
+    for (int i = 0; i < 4; ++i) {
+        before = before && guarded[i] == kCanary;
+    }
+    for (int i = 20; i < 36; ++i) {
+        after = after && data[i] == kCanary;
+    }
+    int written = 0;
+    for (int i = 0; i < 20; ++i) {
+        written += data[i] != kCanary;
+    }
+    check(before && after, "WENCGetEncodeData writes only its (40 + 1) / 2 bytes");
+    check(written > 16, "40 speaker samples encode to 20 bytes, more than the Wii's 16-byte array holds");
+}
+
 std::atomic<int> gSecondSession{0};
 void secondSessionCallback() {
     gSecondSession++;
@@ -436,6 +469,7 @@ int main() {
     testAi();
     testAiReinit();
     testChannelOrder();
+    testSpeakerEncodeSize();
     OSReport("platform audio tests passed (%d checks)\n", checks);
     return 0;
 }

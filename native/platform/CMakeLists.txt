@@ -187,7 +187,10 @@ if(BUILD_TESTING)
     target_link_libraries(petari_platform_vi_tests PRIVATE petari_platform)
     add_test(NAME native_platform_vi COMMAND petari_platform_vi_tests)
 
-    add_executable(petari_platform_audio_tests ${PETARI_REPO_ROOT}/native/tests/platform_audio_tests.cpp)
+    # The SDK's Wii Remote speaker ADPCM encoder, for the speaker buffer check.
+    add_executable(petari_platform_audio_tests ${PETARI_REPO_ROOT}/native/tests/platform_audio_tests.cpp
+        ${PETARI_REPO_ROOT}/src/RVL_SDK/wenc/wenc.c ${PETARI_REPO_ROOT}/native/src/intrinsics.cpp)
+    set_source_files_properties(${PETARI_REPO_ROOT}/src/RVL_SDK/wenc/wenc.c TARGET_DIRECTORY petari_platform_audio_tests PROPERTIES LANGUAGE CXX)
     target_include_directories(petari_platform_audio_tests PRIVATE audio)
     target_link_libraries(petari_platform_audio_tests PRIVATE petari_platform)
     add_test(NAME native_platform_audio COMMAND petari_platform_audio_tests)

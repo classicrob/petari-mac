@@ -221,9 +221,20 @@ void SpkSpeakerCtrl::updateSpeaker(OSAlarm*, OSContext*) {
                 }
 
                 const s16* samples = sMixingBuffer->getSamples(i);
+#ifdef PETARI_NATIVE
+                // WENCGetEncodeData writes (samples + 1) / 2 bytes (20 for 40
+                // samples) and all of them are sent. The Wii's 16-byte array
+                // overran into frame padding; natively it trips the stack
+                // protector.
+                constexpr s32 kSamples = 40;
+                u8 data[(kSamples + 1) / 2];
+                WENCGetEncodeData(&inf.mWENCInfo, flags, samples, kSamples, data);
+                WPADSendStreamData(i, data, sizeof(data));
+#else
                 u8 data[16];
                 WENCGetEncodeData(&inf.mWENCInfo, flags, samples, 40, data);
                 WPADSendStreamData(i, data, 20);
+#endif
 
                 OSRestoreInterrupts(en);
             }
