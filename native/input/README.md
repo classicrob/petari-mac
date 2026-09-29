@@ -78,7 +78,8 @@ output:
 | Left or Right Shift | Nunchuk Z | approved |
 | Q / E | +Control Pad left / right (camera rotation) | approved |
 | C | Nunchuk C (camera recenter) | approved |
-| Escape | Plus (pause) and B (back) | approved; see below |
+| Escape (hold briefly) | Plus (pause) | hold for at least 12 frames |
+| Backspace | B (back) | also available on left mouse |
 | Up / Down / Left / Right | +Control Pad (Up: first-person view) | provisional |
 | - | Minus | provisional |
 | 1 / 2 | 1 / 2 | provisional |
@@ -89,9 +90,9 @@ output:
 All bindings are remappable: `Bindings::bind/unbind/clear`, with a text form
 (`serialize`/`parse`, one `Action=Key:Name,Mouse:Button` line per action) for
 saving. Menus use B to go back (scenario select, galaxy map, file select). The
-pause menu closes with Plus. Escape therefore sends both. A known side effect
-needs a gameplay check: B on the pausing frame may also fire a Star Bit if the
-pointer is on screen.
+pause menu closes with Plus. Escape sends only Plus: the game refuses to open
+pause while B is held. Hold Escape briefly to open the menu, then tap it to
+close. Backspace sends B for going back in menus.
 
 ## WPAD behaviour
 

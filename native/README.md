@@ -32,7 +32,8 @@ The launcher accepts the app's `--user DIR` option for a different save location
 
 At the title, hold **Space + left mouse** together (A+B). Point with the mouse
 and press **Space** or **right mouse** to select menu buttons. **WASD** moves,
-**Space** jumps, **F** spins, **Shift** is Z, and **Escape** pauses/goes back.
+**Space** jumps, **F** spins, **Shift** is Z, **Escape** (hold briefly) pauses,
+and **Backspace** goes back.
 See [all input bindings](input/README.md#default-bindings) for camera and tilt controls.
 Initial visits to new scenes can pause while Metal shader pipelines compile.
 Later stages, movie rendering in the game, and overall visual fidelity remain
@@ -62,6 +63,15 @@ tests and the complete full-app title run pass.
 fresh Mario file, advance the prologue, and require Mario to move in response to
 the movement binding. It uses observed UI targets and the normal input layer.
 This extended run passes end to end on RMGE01 with an empty test save directory.
+
+`PETARI_SMOKE=gameplay PETARI_SMOKE_FRAMES=36000` adds an idle baseline, jump
+and landing, opposite-direction movement, pause with movement blocked, and
+movement after resume. `PETARI_SMOKE=reload` loads a used slot from an existing
+test save and performs the same checks, failing on file creation or a saving
+window. Use a copy of a test save for reload, and compare its NAND file hashes
+afterwards. The reload run passed with unchanged save hashes (app27); the fresh gameplay
+run also passed with normal shutdown (app28).
+See [playtest results](PLAYTEST.md) for measured results and remaining coverage.
 
 ## Build the native core
 

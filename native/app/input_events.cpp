@@ -48,7 +48,12 @@ void setImage(const Rect& image, float windowWidth, float windowHeight) {
 }
 
 void pressButton(int button, bool down) {
-    const Input::Action action = button == 0 ? Input::Action::A : button == 1 ? Input::Action::B : Input::Action::StickUp;
+    static const Input::Action kActions[] = {Input::Action::A,         Input::Action::B,    Input::Action::StickUp,
+                                             Input::Action::StickDown, Input::Action::Plus, Input::Action::Minus};
+    if (button < 0 || button >= static_cast<int>(sizeof(kActions) / sizeof(kActions[0]))) {
+        return;
+    }
+    const Input::Action action = kActions[button];
     const Input::Bindings bindings = Input::bindings();
     const auto& inputs = bindings.inputs(action);
     if (inputs.empty()) {

@@ -15,6 +15,14 @@
 #include "Game/Util/SequenceUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
 
+#ifdef PETARI_NATIVE
+// Progress telemetry and the automated smoke run (native/app); observation only.
+#include <petari/milestone.hpp>
+#define NATIVE_MILESTONE(name) petari_milestone(name)
+#else
+#define NATIVE_MILESTONE(name)
+#endif
+
 namespace {
     const s32 cBackSequenceFadeFrame = 90;
 
@@ -171,7 +179,16 @@ void PauseMenu::draw() const {
 }
 
 void PauseMenu::kill() {
+#ifdef PETARI_NATIVE
+    // Only a menu that was shown closes; init also kills the menu once.
+    const bool isClosing = !MR::isDead(this);
+#endif
     LayoutActor::kill();
+#ifdef PETARI_NATIVE
+    if (isClosing) {
+        NATIVE_MILESTONE("PauseMenu.Close");
+    }
+#endif
 
     if (_54) {
         MR::activateDefaultGameLayout();
@@ -265,6 +282,11 @@ void PauseMenu::forceToWaitAllButton() {
 }
 
 void PauseMenu::exeSelecting() {
+    if (MR::isFirstStep(this)) {
+        // Also entered again after the confirm, save and letter sub-screens return.
+        NATIVE_MILESTONE("PauseMenu.Open");
+    }
+
     bool isPointingTrigger = _20->isPointingTrigger() || (_24 != nullptr && _24->isPointingTrigger()) ||
                              (!(_38 == nullptr || _38->isHidden()) && _38->isPointingTrigger());
 

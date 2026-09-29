@@ -1,8 +1,8 @@
 # Native controls
 
 These main defaults were approved for the native Mac port. The native input layer
-and text-file remapping are implemented; in-game validation is pending. The
-graphics probe is not the game.
+and text-file remapping are implemented. Opening movement, jumping and menu
+selection have been exercised in the full game; later controls remain unverified.
 
 | Input | Action |
 | --- | --- |
@@ -15,7 +15,8 @@ graphics probe is not the game.
 | Hold right mouse button | Interact with pointer targets / Pull Stars |
 | Q / E | Rotate camera |
 | C | Recenter camera |
-| Escape | Pause / back |
+| Escape (hold briefly) | Pause; tap again to resume |
+| Backspace | Back in menus |
 
 Bindings are loaded from `controls.txt` in the app's user directory (normally
 `~/Library/Application Support/Petari`, overridden by `--user`). Mouse motion
@@ -33,7 +34,7 @@ have input-component tests but have not been approved through gameplay:
 | Hold Tab + WASD | Tilt for motion-controlled activities |
 | T | Toggle upright remote posture for Star Ball |
 
-Escape currently sends Plus and B together to cover pause and back. Whether that
-fires a Star Bit on the pause frame needs a gameplay check. Focus loss releases
+Escape sends only Plus: the game requires a 12-frame hold and refuses to pause
+while B is held. Backspace sends B separately. Focus loss releases
 all held controls and hides the pointer; key repeats come from the game's KPAD
 logic rather than the operating system.

@@ -48,6 +48,35 @@
 // 8. Prologue.GameStart: 120 frames later record Mario's position, hold the
 //    input bound to the stick's up for 90 frames, and PASS if he moved at
 //    least 50 units within 30 frames of letting go.
+//
+// Script "gameplay" (PETARI_SMOKE=gameplay): the playable path to
+// Prologue.GameStart, then gameplay checks (below). Script "reload"
+// (PETARI_SMOKE=reload), for a copied save: the title, then the lowest
+// selectable NON-empty FileSelect.Slot, FileSelector.FileConfirm,
+// FileSelect.Start, the prologue as needed, and the same gameplay checks. It
+// FAILs if FileSelector.Create is reached or the saving window System_Save01
+// appears (the save must not be rewritten), and answers no prompts.
+//
+// Gameplay checks, all through bound inputs (A jump, Plus pause, the stick):
+// a. Ready: Mario present, no demo, pausing permitted, for 60 frames in a row.
+// b. Idle 120 frames: he stays within 5 units (so a fall cannot pass as
+//    movement) and on the ground.
+// c. Jump (tap A): he leaves the ground within 30 frames, rises at least 60
+//    units against gravity, and lands within 180 frames.
+// d. Stick up 45 frames, then stick down 45 frames: each moves him at least
+//    40 units across the ground (gravity component removed), in opposite
+//    directions (cosine below -0.5).
+// e. Pause: hold the default Plus binding (Escape) for 18 frames while
+//    pausing is permitted, then release; a PauseMenu.Open after that hold.
+//    (PauseButtonCheckerInGame opens the menu at a 12-frame Plus/Minus hold,
+//    but not while A or B is held, and Escape is also bound to B: if the menu
+//    does not open, the FAIL reports the game's buttons during the hold.) Holding the stick
+//    for 45 frames while paused must not move him (under 1 unit). Tap Plus:
+//    a PauseMenu.Close after that press (earlier ones, e.g. the menu's kill at
+//    scene start, do not count). Then stick up 45 frames moves him at least 40
+//    units: PASS.
+// Every position is logged. When the result is decided, inputs still held
+// are released at once.
 
 #include <string>
 #include <vector>
@@ -79,6 +108,13 @@ struct Observation {
     std::vector<Prompt> prompts;  // appeared since the previous frame
     bool playerValid = false;     // filled only while the driver wants it (wantsPlayer)
     float playerX = 0.0f, playerY = 0.0f, playerZ = 0.0f;
+    bool playerOnGround = false;  // with playerValid: MR::isOnGroundPlayer
+    float gravityX = 0.0f, gravityY = -1.0f, gravityZ = 0.0f;  // MR::getPlayerGravity
+    bool demoActive = false;      // MR::isDemoActive
+    bool pausePermitted = false;  // GameScene::isPermitToPauseMenu
+    // The game's view of the Wii Remote (channel 0), with playerValid.
+    bool padA = false, padB = false, padPlus = false, padMinus = false;
+    bool padOperating = false;  // MR::isOperatingWPad: blocks the pause button
 };
 
 // Target flags (petari/ui_observe.hpp).
@@ -86,9 +122,9 @@ constexpr unsigned kTargetPointing = 1u;
 constexpr unsigned kTargetEmpty = 2u;
 constexpr unsigned kTargetSelectable = 4u;
 
-enum class Script { Title, Playable };
+enum class Script { Title, Playable, Gameplay, Reload };
 
-enum class Button { A, B, StickUp };
+enum class Button { A, B, StickUp, StickDown, Plus, Minus };
 
 struct Press {
     Button button;
@@ -126,20 +162,31 @@ public:
     const std::vector<std::string>& log() const { return mLog; }
     // Whether the next observation should include Mario's position (only in
     // the game, after Prologue.GameStart).
-    bool wantsPlayer() const { return mPhase == Phase::Move; }
+    bool wantsPlayer() const {
+        return mPhase == Phase::Move || mPhase >= Phase::Ready ||
+               (mPhase == Phase::Prologue && mScript != Script::Playable);
+    }
 
 private:
     enum class Phase {
         Boot, Logo, WaitTitle, TitleReady, Holding, WaitTitleEnd, WaitFileSelect,
         // playable
         ChooseSlot, WaitMiiSelect, ChooseMario, WaitFileConfirm, ChooseStart, WaitDemo, Prologue, Move,
+        // gameplay and reload (after the prologue); keep these last before Done
+        Ready, Idle, Jump, Forward, Backward, PauseOpen, Paused, PauseClose, Resume,
         Done
     };
+    enum class Slot { Any, Empty, NonEmpty };
     // Points at a target and taps A once the game reports the pointer over it.
     // Returns true on the frame A is pressed.
-    bool aimAndPress(const Observation& observation, const char* id, bool emptySlot, Step& step);
+    bool aimAndPress(const Observation& observation, const char* id, Slot slot, Step& step);
     void playable(const Observation& observation, Step& step);
+    void gameplay(const Observation& observation, Step& step);
+    bool gameplayReady(const Observation& observation);
     bool seen(const std::string& milestone) const;
+    // How often a milestone was recorded so far (new events after an input are
+    // those beyond the count taken at the input).
+    unsigned long seenCount(const std::string& milestone) const;
 
     void finish(Result result, const std::string& reason, Step& step);
     void tap(Button button, unsigned long holdFrames, Step& step);
@@ -182,12 +229,21 @@ private:
     unsigned long mSinceProgress = 0;
     unsigned long mMoveFrame = 0;
     float mStartX = 0.0f, mStartY = 0.0f, mStartZ = 0.0f;
+    // gameplay
+    unsigned long mReadyFrames = 0;
+    bool mLeftGround = false;
+    float mMaxRise = 0.0f;
+    float mForwardX = 0.0f, mForwardY = 0.0f, mForwardZ = 0.0f;  // forward displacement
+    bool mPausePressed = false;
+    unsigned long mPauseOpenCount = 0;   // PauseMenu.Open events before our Plus
+    unsigned long mPauseCloseCount = 0;  // PauseMenu.Close events before our second Plus
+    std::string mPadDuringHold;          // game buttons while the pause button was held
 };
 
 // --- Process-wide state for the app (smoke.cpp) ---
 
-// Whether PETARI_SMOKE selects a known script ("title" or "playable"), and
-// which; prints why not otherwise.
+// Whether PETARI_SMOKE selects a known script ("title", "playable",
+// "gameplay" or "reload"), and which; prints why not otherwise.
 bool enabledFromEnvironment(Script* script);
 // Exit status the power exit handler uses: the smoke result, or 0 when the
 // smoke is not running or has not decided.

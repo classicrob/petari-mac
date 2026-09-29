@@ -109,7 +109,7 @@ Bindings Bindings::defaults() {
     b.bind(Action::DpadRight, Binding::key(Key::E));
     b.bind(Action::NunchukC, Binding::key(Key::C));   // camera recenter
     b.bind(Action::Plus, Binding::key(Key::Escape));  // pause
-    b.bind(Action::B, Binding::key(Key::Escape));     // back in menus
+    b.bind(Action::B, Binding::key(Key::Backspace));  // back in menus
     // Provisional, pending gameplay review.
     b.bind(Action::DpadUp, Binding::key(Key::Up));  // first-person view
     b.bind(Action::DpadDown, Binding::key(Key::Down));

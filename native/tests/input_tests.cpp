@@ -175,7 +175,8 @@ void testBindings() {
     check(hasBinding(d, Action::DpadRight, Binding::key(In::Key::E)), "E rotates the camera right");
     check(hasBinding(d, Action::NunchukC, Binding::key(In::Key::C)), "C recenters the camera");
     check(hasBinding(d, Action::Plus, Binding::key(In::Key::Escape)), "Escape pauses");
-    check(hasBinding(d, Action::B, Binding::key(In::Key::Escape)), "Escape backs out of menus");
+    check(!hasBinding(d, Action::B, Binding::key(In::Key::Escape)), "Escape does not hold B, which blocks pause");
+    check(hasBinding(d, Action::B, Binding::key(In::Key::Backspace)), "Backspace backs out of menus");
 
     const std::string text = d.serialize();
     In::Bindings parsed;
@@ -348,8 +349,15 @@ void testButtons() {
 
     press(In::Key::Escape);
     rig.frame();
-    check(button.testTriggerPlus() && button.testTriggerB(), "Escape: Plus (pause) and B (back)");
+    check(button.testTriggerPlus() && !button.testButtonB(), "Escape: Plus without B so pause is permitted");
+    rig.frames_(18);
+    check(button.testButtonPlus() && !button.testButtonA() && !button.testButtonB(), "pause hold keeps A and B up");
     lift(In::Key::Escape);
+    rig.frames_(2);
+    press(In::Key::Backspace);
+    rig.frame();
+    check(button.testTriggerB() && !button.testButtonPlus(), "Backspace: B without Plus");
+    lift(In::Key::Backspace);
     press(In::Key::Q);
     press(In::Key::C);
     press(In::Key::LeftShift);

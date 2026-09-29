@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -660,6 +661,318 @@ void testPlayableGuards() {
     check(title.driver.result() == Result::Running, "title mode unchanged by prompts");
 }
 
+// A small simulated Mario for the gameplay checks, driven by the presses the
+// driver makes: the stick moves him along z, A jumps (gravity -y), and the
+// pause menu opens after Plus is held 12 frames (not while B is held) and
+// closes on the next Plus press, as PauseButtonCheckerInGame and PauseMenu do.
+struct Sim {
+    float x = 100.0f, y = 0.0f, z = 200.0f, vy = 0.0f;
+    bool held[6] = {};
+    bool pressedA = false, pressedPlus = false;
+    bool paused = false;
+    int plusFrames = 0;
+    int pausedFrames = 0;
+    std::vector<std::string> pending;  // milestones for the next observation
+    // Faults to inject.
+    bool drift = false, noJump = false, downSameWay = false, bHeldWithPlus = false, moveWhilePaused = false,
+         neverClose = false;
+
+    Observation observe(const Observation& base) {
+        Observation o = base;
+        o.playerValid = true;
+        o.playerX = x;
+        o.playerY = y;
+        o.playerZ = z;
+        o.playerOnGround = y <= 0.0f;
+        o.gravityX = 0.0f;
+        o.gravityY = -1.0f;
+        o.gravityZ = 0.0f;
+        o.demoActive = false;
+        o.pausePermitted = !paused;
+        const bool b = held[1] || (bHeldWithPlus && held[4]);
+        o.padA = held[0];
+        o.padB = b;
+        o.padPlus = held[4];
+        o.padMinus = held[5];
+        o.padOperating = held[0] || b;
+        o.milestones.insert(o.milestones.end(), pending.begin(), pending.end());
+        pending.clear();
+        return o;
+    }
+    void apply(const Smoke::Step& step) {
+        for (const Smoke::Press& p : step.presses) {
+            const int i = static_cast<int>(p.button);
+            if (p.down && !held[i]) {
+                if (p.button == Button::A) {
+                    pressedA = true;
+                }
+                if (p.button == Button::Plus) {
+                    pressedPlus = true;
+                }
+            }
+            held[i] = p.down;
+        }
+    }
+    void advance() {
+        const bool operating = held[0] || held[1] || (bHeldWithPlus && held[4]);
+        if (paused) {
+            ++pausedFrames;
+            if (moveWhilePaused && held[2]) {
+                z += 3.0f;
+            }
+            if (pressedPlus && pausedFrames > 30 && !neverClose) {
+                paused = false;
+                pending.push_back("PauseMenu.Close");
+            }
+        } else {
+            if ((held[4] || held[5]) && !operating) {
+                if (++plusFrames == 12) {
+                    paused = true;
+                    pausedFrames = 0;
+                    pending.push_back("PauseMenu.Open");
+                }
+            } else {
+                plusFrames = 0;
+            }
+            if (!paused) {
+                if (held[2]) {
+                    z += 3.0f;
+                }
+                if (held[3]) {
+                    z += downSameWay ? 3.0f : -3.0f;
+                }
+                if (drift) {
+                    x += 0.5f;
+                }
+                if (pressedA && y <= 0.0f && !noJump) {
+                    vy = 12.0f;
+                }
+                if (vy != 0.0f || y > 0.0f) {
+                    y += vy;
+                    vy -= 1.0f;
+                    if (y <= 0.0f) {
+                        y = 0.0f;
+                        vy = 0.0f;
+                    }
+                }
+            }
+        }
+        pressedA = false;
+        pressedPlus = false;
+    }
+};
+
+Observation garden() {
+    Observation o;
+    o.scene = "Game";
+    o.stage = "PeachCastleGardenGalaxy";
+    o.sceneReady = true;
+    return o;
+}
+
+// The fresh-file path to Prologue.GameStart (gameplay script).
+void toGameStart(Run& run) {
+    toFileSelect(run);
+    run.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 3);
+    run.frame(with(fileSelect(true), "FileSelector.MiiSelect"));
+    run.frames(target(fileSelect(true), "MiiSelect.Mario", 0, 0.5f, 0.5f, kSel | kPoint), 3);
+    run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+    run.frames(target(fileSelect(true), "FileSelect.Start", 0, 0.5f, 0.5f, kSel | kPoint), 3);
+    run.frame(with(garden(), "FileSelector.DemoStartWait"));
+    run.frame(with(garden(), "Prologue.GameStart"));
+}
+
+// Runs the simulation until the result is decided or the frame budget ends.
+void simulate(Run& run, Sim& sim, unsigned long frames) {
+    for (unsigned long i = 0; i < frames && run.driver.result() == Result::Running; i++) {
+        const Smoke::Step step = run.driver.step(sim.observe(garden()));
+        for (const Smoke::Press& press : step.presses) {
+            run.events.push_back({run.driver.frame(), press.button, press.down, step.assertFocus});
+        }
+        for (const std::string& line : run.driver.log()) {
+            run.log.push_back(line);
+        }
+        run.quits += step.requestQuit ? 1 : 0;
+        sim.apply(step);
+        sim.advance();
+    }
+}
+
+bool allReleased(const Run& run) {
+    for (int b = 0; b < 6; b++) {
+        int balance = 0;
+        for (const Event& e : run.events) {
+            if (static_cast<int>(e.button) == b) {
+                balance += e.down ? 1 : -1;
+            }
+        }
+        if (balance != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void testGameplayFlow() {
+    Run run(1000000, Smoke::Script::Gameplay);
+    toGameStart(run);
+    check(run.driver.wantsPlayer(), "gameplay asks for Mario after GameStart");
+    Sim sim;
+    simulate(run, sim, 3000);
+    check(run.driver.result() == Result::Pass, "gameplay checks pass: " + run.driver.reason());
+    check(run.logged("gameplay ready at (100") && run.logged("idle 120 frames") && run.logged("drift 0.0"),
+          "idle baseline logged with positions");
+    check(run.logged("tap A: jump from") && run.logged("landed at") && run.logged("highest"), "jump and landing logged");
+    check(run.logged("stick up: (") && run.logged("stick down: (") && run.logged("cosine -1"),
+          "opposite moves logged with positions");
+    check(run.logged("hold Plus (default binding) 18 frames") && run.logged("game buttons during the pause hold"),
+          "pause by holding the default Plus binding, with the game's buttons logged");
+    check(run.logged("while paused:") && run.logged("tap Plus: resume") && run.logged("after resuming:"),
+          "paused freeze, resume and movement logged");
+    check(run.count(Button::Plus, true) == 2 && run.count(Button::Minus, true) == 0, "Plus to pause and to resume");
+    check(allReleased(run), "every input released");
+    // Order: jump before moving.
+    size_t jumpAt = 0, moveAt = 0;
+    for (size_t i = 0; i < run.log.size(); i++) {
+        if (run.log[i].find("tap A: jump") != std::string::npos) jumpAt = i;
+        if (run.log[i].find("hold stick up 45 frames from") != std::string::npos && moveAt == 0) moveAt = i;
+    }
+    check(jumpAt != 0 && moveAt > jumpAt, "the jump comes before the long moves");
+}
+
+void testGameplayFaults() {
+    auto runWith = [](void (*fault)(Sim&)) {
+        auto run = std::make_unique<Run>(1000000, Smoke::Script::Gameplay);
+        toGameStart(*run);
+        Sim sim;
+        fault(sim);
+        simulate(*run, sim, 3000);
+        return run;
+    };
+    auto drift = runWith([](Sim& s) { s.drift = true; });
+    check(drift->driver.result() == Result::Fail && drift->driver.reason().find("not still") != std::string::npos,
+          "drifting with no input fails the idle baseline");
+    auto noJump = runWith([](Sim& s) { s.noJump = true; });
+    check(noJump->driver.result() == Result::Fail &&
+              noJump->driver.reason().find("did not leave the ground") != std::string::npos,
+          "no jump fails");
+    auto sameWay = runWith([](Sim& s) { s.downSameWay = true; });
+    check(sameWay->driver.result() == Result::Fail && sameWay->driver.reason().find("opposite") != std::string::npos,
+          "stick down moving the same way fails");
+    auto blocked = runWith([](Sim& s) { s.bHeldWithPlus = true; });
+    check(blocked->driver.result() == Result::Fail &&
+              blocked->driver.reason().find("no PauseMenu.Open") != std::string::npos &&
+              blocked->driver.reason().find("B held") != std::string::npos &&
+              blocked->driver.reason().find("operating yes") != std::string::npos,
+          "a pause blocked by B reports the game's buttons");
+    check(allReleased(*blocked), "inputs released after the pause failure");
+    auto paused = runWith([](Sim& s) { s.moveWhilePaused = true; });
+    check(paused->driver.result() == Result::Fail &&
+              paused->driver.reason().find("while the game was paused") != std::string::npos,
+          "moving while paused fails");
+    auto stuck = runWith([](Sim& s) { s.neverClose = true; });
+    check(stuck->driver.result() == Result::Fail && stuck->driver.reason().find("no PauseMenu.Close") != std::string::npos,
+          "a menu that does not close fails");
+
+    // A PauseMenu.Close from before the press (the menu's kill at stage start)
+    // does not count as the resume.
+    Run stale(1000000, Smoke::Script::Gameplay);
+    toGameStart(stale);
+    stale.frame(with(garden(), "PauseMenu.Close"));
+    stale.frame(with(garden(), "PauseMenu.Open"));
+    Sim sim;
+    sim.neverClose = true;
+    simulate(stale, sim, 3000);
+    check(stale.driver.result() == Result::Fail && stale.driver.reason().find("no PauseMenu.Close") != std::string::npos,
+          "earlier Open/Close events do not satisfy the pause checks");
+}
+
+void testReload() {
+    // A copied save: slot 0 used, slot 1 empty. The reload picks slot 0, goes
+    // through FileConfirm (no Mii select, no create, no save) to Start.
+    auto toStart = [](Run& run) {
+        toFileSelect(run);
+        Observation slots = fileSelect(true);
+        slots = target(slots, "FileSelect.Slot", 1, 0.6f, 0.5f, kSel | kEmpty);
+        slots = target(slots, "FileSelect.Slot", 0, 0.3f, 0.5f, kSel | kPoint);
+        run.frames(slots, 3);
+        check(run.pointerU == 0.3f, "reload aims at the used slot");
+        run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+        run.frames(target(fileSelect(true), "FileSelect.Start", 0, 0.5f, 0.5f, kSel | kPoint), 3);
+        run.frame(with(garden(), "FileSelector.DemoStartWait"));
+    };
+    Run run(1000000, Smoke::Script::Reload);
+    toStart(run);
+    check(run.logged("loading a saved file"), "reload logged");
+    // No prologue milestones: the game is playable directly.
+    Sim sim;
+    simulate(run, sim, 3000);
+    check(run.driver.result() == Result::Pass && run.driver.reason().find("reloaded save") != std::string::npos &&
+              run.logged("in the game without a prologue"),
+          "reload reaches gameplay without a prologue and passes the checks");
+
+    Run prologue(1000000, Smoke::Script::Reload);
+    toStart(prologue);
+    prologue.frame(with(garden(), "Prologue.PictureBook"));
+    Observation book = garden();
+    book.playerValid = true;
+    book.pausePermitted = false;
+    book.demoActive = true;
+    const int before = prologue.count(Button::A, true);
+    prologue.frames(book, 100);
+    prologue.frame(with(book, "ProloguePictureBook.PageReady"));
+    prologue.frames(book, 40);
+    check(prologue.count(Button::A, true) == before + 1, "a reload's prologue pages are tapped as in playable");
+    prologue.frame(with(book, "Prologue.GameStart"));
+    Sim sim2;
+    simulate(prologue, sim2, 3000);
+    check(prologue.driver.result() == Result::Pass, "reload through the prologue passes");
+
+    Run created(1000000, Smoke::Script::Reload);
+    toFileSelect(created);
+    created.frame(with(fileSelect(true), "FileSelector.Create"));
+    check(created.driver.result() == Result::Fail && created.driver.reason().find("created a new file") != std::string::npos,
+          "a reload that creates a file fails");
+
+    Run rewrite(1000000, Smoke::Script::Reload);
+    toStart(rewrite);
+    rewrite.frame(prompt(garden(), "System_Save01", 1));
+    check(rewrite.driver.result() == Result::Fail && rewrite.driver.reason().find("rewrote the save") != std::string::npos,
+          "a save during the reload fails");
+
+    Run asked(1000000, Smoke::Script::Reload);
+    toFileSelect(asked);
+    asked.frame(prompt(fileSelect(true), "System_FileSelect001", 2));
+    check(asked.driver.result() == Result::Blocked && asked.pointerMoves == 0, "reload answers no prompt");
+
+    Run onlyEmpty(1000000, Smoke::Script::Reload);
+    toFileSelect(onlyEmpty);
+    onlyEmpty.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 600);
+    check(onlyEmpty.driver.result() == Result::Fail && onlyEmpty.driver.reason().find("(non-empty)") != std::string::npos,
+          "reload with no used slot fails rather than creating one");
+}
+
+void testReleaseOnFailure() {
+    // A result decided while the stick is held releases it in that step.
+    Run run(1000000, Smoke::Script::Gameplay);
+    toGameStart(run);
+    Sim sim;
+    // Run to the first stick hold.
+    for (int i = 0; i < 3000 && run.count(Button::StickUp, true) == 0; i++) {
+        simulate(run, sim, 1);
+    }
+    check(run.count(Button::StickUp, true) == 1, "stick held");
+    Observation bad = sim.observe(garden());
+    bad.scene = "Intermission";
+    bad.playerValid = false;
+    const Smoke::Step step = run.driver.step(bad);
+    bool released = false;
+    for (const Smoke::Press& press : step.presses) {
+        released = released || (press.button == Button::StickUp && !press.down);
+    }
+    check(run.driver.result() == Result::Fail && released, "a failure releases the held stick at once");
+}
+
 void testMilestones() {
     const unsigned long start = petari_milestone_count();
     check(petari_milestone_at(start) == nullptr, "no milestone beyond the count");
@@ -692,6 +1005,10 @@ int main() {
     testSavingWindow();
     testIconSavingWindow();
     testProloguePictureBook();
+    testGameplayFlow();
+    testGameplayFaults();
+    testReload();
+    testReleaseOnFailure();
     testPlayableGuards();
     testMilestones();
     std::printf("native app smoke tests passed (%d checks)\n", checks);

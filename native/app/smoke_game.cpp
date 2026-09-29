@@ -8,7 +8,11 @@
 #include "Game/System/GameSystemSceneController.hpp"
 #include "Game/Player/MarioActor.hpp"
 #include "Game/Player/MarioHolder.hpp"
+#include "Game/Scene/GameScene.hpp"
 #include "Game/Scene/SceneObjHolder.hpp"
+#include "Game/Util/DemoUtil.hpp"
+#include "Game/Util/GamePadUtil.hpp"
+#include "Game/Util/PlayerUtil.hpp"
 #include "Game/Util/SingletonHolder.hpp"
 
 #include <petari/milestone.hpp>
@@ -79,6 +83,23 @@ Observation observeGame(bool wantPlayer) {
             observation.playerX = pMario->mPosition.x;
             observation.playerY = pMario->mPosition.y;
             observation.playerZ = pMario->mPosition.z;
+            // The MR:: player queries go through the same MarioHolder actor.
+            observation.playerOnGround = MR::isOnGroundPlayer();
+            if (const TVec3f* pGravity = MR::getPlayerGravity()) {
+                observation.gravityX = pGravity->x;
+                observation.gravityY = pGravity->y;
+                observation.gravityZ = pGravity->z;
+            }
+            observation.demoActive = MR::isDemoActive();
+            observation.padA = MR::testCorePadButtonA(WPAD_CHAN0);
+            observation.padB = MR::testCorePadButtonB(WPAD_CHAN0);
+            observation.padPlus = MR::testCorePadButtonPlus(WPAD_CHAN0);
+            observation.padMinus = MR::testCorePadButtonMinus(WPAD_CHAN0);
+            observation.padOperating = MR::isOperatingWPad(WPAD_CHAN0);
+            // The Game scene is a GameScene (SceneFactory: "Game").
+            if (pController->mScene != nullptr) {
+                observation.pausePermitted = static_cast< const GameScene* >(pController->mScene)->isPermitToPauseMenu();
+            }
         }
     }
     return observation;
