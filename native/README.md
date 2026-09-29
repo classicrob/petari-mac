@@ -1,7 +1,8 @@
 # Native Apple Silicon port
 
 This is an in-progress source port of Petari at `e5bc761c0`, whose commit marks the
-completed SMG1 decompilation. **There is no playable native game executable yet.**
+completed SMG1 decompilation. **The opening is playable on Apple Silicon;
+full-game compatibility remains in progress.**
 The upstream README's decompilation progress wording does not describe this fork's
 native-port progress. Native compilation and successful game behavior are separate
 milestones.
@@ -10,15 +11,32 @@ The full arm64 `Petari.app` now links and starts the Metal window, platform
 services, and original game entry point. The original frame loop runs at about
 60 Hz, audio initialization and stationed-resource loading complete, and the fresh
 save check finishes. The full title smoke accepts A+B, reaches selectable save
-slots, and exits through the game's normal power-off path with status 0. Gameplay
-remains unverified. The extended smoke selects an empty slot and confirms file
-creation through the real pointer; the game writes GameData.bin and banner.bin
-and completes the save successfully. A separate audio boot test plays a real coin
+slots, and exits through the game's normal power-off path with status 0. The
+extended smoke creates a Mario file through the real pointer, completes both
+saves, presses Start, advances all five prologue pages and Peach's letter, and
+finishes the arrival cutscene. After control is handed to Mario, holding the
+movement binding for 90 frames moves him 963 units in Peach's Castle Garden.
+The run then shuts down normally with status 0 (development run app25).
+A separate audio boot test plays a real coin
 sound and the title music through JAudio and the native DSP/AI path, including
 50 seconds of streaming through a loop, and the transition to file-select music
 with its chord table. Focused
 tests have rendered both a J3D Mario model and the default
 Mii face/icon on Metal, with GPU pixel readback checks.
+
+To play on this development checkout, double-click `Play Petari.command` in the
+repository root. It locates the built app and extracted disc independently of
+the Terminal's current directory. Normal saves, settings and crash reports go to
+`~/Library/Application Support/Petari`, separate from automated test saves.
+The launcher accepts the app's `--user DIR` option for a different save location.
+
+At the title, hold **Space + left mouse** together (A+B). Point with the mouse
+and press **Space** or **right mouse** to select menu buttons. **WASD** moves,
+**Space** jumps, **F** spins, **Shift** is Z, and **Escape** pauses/goes back.
+See [all input bindings](input/README.md#default-bindings) for camera and tilt controls.
+Initial visits to new scenes can pause while Metal shader pipelines compile.
+Later stages, movie rendering in the game, and overall visual fidelity remain
+unverified; this is a development build.
 
 With the GX build configured below, build and launch the development app using:
 
@@ -43,7 +61,7 @@ tests and the complete full-app title run pass.
 `PETARI_SMOKE=playable PETARI_SMOKE_FRAMES=36000` extends the script to create a
 fresh Mario file, advance the prologue, and require Mario to move in response to
 the movement binding. It uses observed UI targets and the normal input layer.
-This extended run is still under development and has not passed end to end.
+This extended run passes end to end on RMGE01 with an empty test save directory.
 
 ## Build the native core
 
@@ -252,10 +270,11 @@ The target also embeds the game's two built-in BCSV tables as Mach-O assembly.
 It is excluded from the default component build because it is large. It is an
 object target, not a game executable.
 
-## Work still required for a playable port
+## Remaining validation and packaging
 
-1. Complete icon selection and the prologue, then verify playable movement. The
-   title smoke, file creation, save writes and normal shutdown pass.
+1. Exercise gameplay beyond the opening: jumps, spins, encounters, movies,
+   subsequent stages and save/reload across sessions. The complete opening smoke,
+   pointer selection, both file-creation saves, movement and normal shutdown pass.
 2. Continue serialized resource runtime validation. Archive, BCSV,
    BMG, KCL, models, layouts, fonts and TPL conversions have real-disc tests.
    All 1,761 disc model/material images construct real J3DModelData successfully.

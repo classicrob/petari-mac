@@ -4,8 +4,10 @@ Petari
 
 This fork has an **in-progress native Apple Silicon port** on `port/macos-arm64`.
 See [native build instructions and current limitations](native/README.md).
-The native app accepts title input, reaches selectable save slots, and shuts down cleanly;
-playable gameplay is **not yet verified**. The original Wii build instructions
+The native app now completes the opening, creates a save, and moves Mario in
+Peach's Castle Garden using keyboard/mouse input. **Later gameplay and overall
+visual fidelity are not yet verified.** On this development checkout, double-click
+`Play Petari.command` to launch. The original Wii build instructions
 below are retained for the matching build.
 
 [Build Status]: https://github.com/SMGCommunity/Petari/actions/workflows/build.yml/badge.svg
