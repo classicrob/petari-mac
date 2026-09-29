@@ -2,12 +2,25 @@
 
 #include <revolution/types.h>
 
+#ifdef PETARI_NATIVE
+#include "Game/Util/BigEndian.hpp"
+#endif
+
+// An entry of spktable.bct, in place in the resource (big-endian; decoded on read natively).
 struct SpkParameters {
+#ifdef PETARI_NATIVE
+    /* 0x00 */ BigEndianValue< u16 > mWaveID;
+    /* 0x02 */ u8 _2;
+    /* 0x03 */ u8 mVolume;
+    /* 0x04 */ BigEndianValue< u16 > mReleaseTime;
+    /* 0x06 */ BigEndianValue< u16 > _padding;  // (?)
+#else
     /* 0x00 */ u16 mWaveID;
     /* 0x02 */ u8 _2;
     /* 0x03 */ u8 mVolume;
     /* 0x04 */ u16 mReleaseTime;
     /* 0x06 */ u16 _padding;  // (?)
+#endif
 };
 
 struct SpkFile {

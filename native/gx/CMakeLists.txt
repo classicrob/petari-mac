@@ -201,6 +201,19 @@ if(_petari_build_testing)
         "${CMAKE_SOURCE_DIR}/src/Game/Player/GhostPacket.cpp")
     petari_encode_target_sources(petari_game_data_tests)
     target_link_libraries(petari_game_data_tests PRIVATE petari_j3d petari_platform_dvd)
+    add_executable(petari_speaker_tests EXCLUDE_FROM_ALL
+        "${CMAKE_SOURCE_DIR}/native/tests/speaker_tests.cpp" "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Speaker/SpkTable.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Speaker/SpkWave.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Speaker/SpkMixingBuffer.cpp"
+        "${CMAKE_SOURCE_DIR}/src/JSystem/JAudio2/JASCalc.cpp")
+    petari_encode_target_sources(petari_speaker_tests)
+    target_link_libraries(petari_speaker_tests PRIVATE petari_j3d)
+    target_link_options(petari_speaker_tests PRIVATE -Wl,-dead_strip)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        add_test(NAME native_speaker_assets COMMAND petari_speaker_tests
+            --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+    endif()
 endif()
 
 add_library(petari_audio_sdl STATIC "${CMAKE_SOURCE_DIR}/native/audio/sdl_sink.cpp")
