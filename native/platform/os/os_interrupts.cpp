@@ -58,9 +58,11 @@ extern "C" {
 
 BOOL OSDisableInterrupts(void) {
     if (tDisabled) {
+        noteInterruptDisable(true);
         return FALSE;
     }
     disable();
+    noteInterruptDisable(false);
     return TRUE;
 }
 

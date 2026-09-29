@@ -38,6 +38,9 @@ void hostWait(std::condition_variable& cv, Predicate predicate) {
 // Scheduler hooks used by the interrupt layer (os_thread.cpp).
 void onInterruptsEnabling();   // interrupt lock still held
 void onInterruptsDisabled();   // interrupt lock just acquired
+// PETARI_BATON_DIAG: counts the calling OS thread's OSDisableInterrupts calls
+// (nested = interrupts were already disabled, so it was a no-op).
+void noteInterruptDisable(bool nested);
 
 [[noreturn]] void fatal(const char* fmt, ...);
 

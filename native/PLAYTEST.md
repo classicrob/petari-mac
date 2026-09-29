@@ -173,3 +173,18 @@ no successor. The zeroed initial buffer therefore plays twice, as on the Wii.
 Subsequent interrupts register the prepared buffer. The diagnostic intentionally
 counts this event rather than masking it. No unexpected replay was measured
 in the final route; listening remains a separate fidelity check.
+
+## Longer-route diagnostics
+
+For timing measurements, use `PETARI_BATON_DIAG=1 PETARI_BATON_SAMPLE=0`
+with `PETARI_AUDIO_DIAG=1`. Disabling the stack sampler avoids suspending the
+thread being measured. Reports include holder CPU time, interrupt-disable
+counts, and a mid-wait host run-state sample. The sample describes one instant,
+not the entire wait. Mach CPU accounting may lag a scheduling slice.
+
+With sampling enabled, the diagnostic also reports the measured sampler pause;
+its intervention can lengthen the wait. Early timing magnitudes were collected
+while two stale TSan test processes were consuming CPU. Those processes were
+stopped; do not use those magnitudes as clean-machine benchmarks.
+
+See `RELIABILITY.md` for the expanding story-route coverage and open findings.

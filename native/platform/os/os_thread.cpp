@@ -61,6 +61,10 @@ struct HostThread {
     OSThread* thread = nullptr;
     mach_port_t machThread = MACH_PORT_NULL;  // for the preemption diagnostic's PC sample
     std::uintptr_t stackLow = 0, stackHigh = 0; // host stack bounds, for its bounded frame walk
+    // PETARI_BATON_DIAG: incremented only by this OS thread (relaxed), read by
+    // the episode bookkeeping for per-episode deltas.
+    std::atomic<std::uint64_t> disables{0};        // OSDisableInterrupts that disabled
+    std::atomic<std::uint64_t> nestedDisables{0};  // ... that found interrupts already disabled
     std::condition_variable cv;
     bool terminated = false;
     void* (*func)(void*) = nullptr;
@@ -93,10 +97,18 @@ bool gCurrentRunning;
 // the holder briefly, reads its PC, LR and FP, and walks at most 12 frame
 // records on the holder's own (suspended) stack, each checked to lie inside
 // that thread's stack bounds, aligned, and moving toward the stack base.
-bool gBatonDiag = false;
+std::atomic<bool> gBatonDiag{false};  // set once at __OSThreadInit
+// PETARI_BATON_SAMPLE=0: no PC sampling, so the diagnostic never suspends a
+// thread (the sampler's own pause could lengthen the wait it measures).
+std::atomic<bool> gBatonSample{true};
 // The open episode. Written under the interrupt lock and episodeLock(); the
 // reporter snapshots it under episodeLock() only (never while a thread is
 // suspended).
+struct RunStateSample {
+    int state = -1;
+    int suspendCount = -1;
+    double atMs = -1;  // time since the episode opened
+};
 struct BatonEpisode {
     std::uint64_t id = 0;            // 0 = none open
     std::int64_t start = 0;          // steady_clock ticks
@@ -104,6 +116,12 @@ struct BatonEpisode {
     int holderPriority = 0, waiterPriority = 0;
     mach_port_t holderPort = MACH_PORT_NULL;
     std::uintptr_t stackLow = 0, stackHigh = 0;
+    HostThread* holderHost = nullptr;             // counters of the holder
+    std::uint64_t disablesAtOpen = 0, nestedAtOpen = 0;
+    double cpuAtOpenMs = -1;                      // holder thread CPU time, -1 if unavailable
+    double samplePauseMs = 0;        // how long the sampler kept the holder suspended
+    std::uint64_t midStateId = 0;    // episode the mid-wait run-state sample belongs to
+    RunStateSample midState;         // reporter's point sample, once the wait exceeds 10 ms
     std::uint64_t sampleId = 0;      // episode the sample below belongs to
     std::uint64_t sample[12] = {};   // pc, lr, then return addresses
 };
@@ -126,6 +144,11 @@ struct BatonStats {
     OSThread* holder = nullptr;
     int holderPriority = 0, waiterPriority = 0;
     std::uint64_t frames[12] = {};   // sample of the longest sampled episode
+    // For the worst episode: holder CPU time and interrupt transitions during it.
+    double worstCpuMs = -1;
+    double worstSamplePauseMs = 0;   // sampler-induced pause inside the worst episode
+    RunStateSample worstMidState, worstCloseState;  // point samples for the worst episode
+    std::uint64_t worstDisables = 0, worstNested = 0;
     double sampledWaitMs = 0;
 };
 BatonStats& batonStats() {
@@ -134,6 +157,46 @@ BatonStats& batonStats() {
         return new BatonStats;
     }();
     return *stats;
+}
+
+// Point sample of a host thread's Mach run state (TH_STATE_*) and suspend
+// count; no suspension (threadRunState below). -1 if unavailable.
+RunStateSample threadRunState(mach_port_t port) {
+    RunStateSample sample;
+    if (port == MACH_PORT_NULL) {
+        return sample;
+    }
+    thread_basic_info_data_t info;
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    if (thread_info(port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &count) == KERN_SUCCESS) {
+        sample.state = info.run_state;
+        sample.suspendCount = info.suspend_count;
+    }
+    return sample;
+}
+const char* runStateName(int state) {
+    switch (state) {
+    case TH_STATE_RUNNING: return "RUNNING (runnable)";
+    case TH_STATE_STOPPED: return "STOPPED";
+    case TH_STATE_WAITING: return "WAITING (blocked)";
+    case TH_STATE_UNINTERRUPTIBLE: return "UNINTERRUPTIBLE";
+    case TH_STATE_HALTED: return "HALTED";
+    default: return "unknown";
+    }
+}
+
+// CPU time (user + system) consumed by a host thread, or -1.
+double threadCpuMs(mach_port_t port) {
+    if (port == MACH_PORT_NULL) {
+        return -1;
+    }
+    thread_basic_info_data_t info;
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    if (thread_info(port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &count) != KERN_SUCCESS) {
+        return -1;
+    }
+    return (info.user_time.seconds + info.system_time.seconds) * 1000.0 +
+           (info.user_time.microseconds + info.system_time.microseconds) / 1000.0;
 }
 
 // Unset, empty, or starting with '0' means off.
@@ -503,9 +566,14 @@ void openEpisode(OSThread* holder, int waiterPriority) {
     gEpisode.holderPriority = holder->priority;
     gEpisode.waiterPriority = waiterPriority;
     if (found != hosts().end()) {
-        gEpisode.holderPort = found->second->machThread;
-        gEpisode.stackLow = found->second->stackLow;
-        gEpisode.stackHigh = found->second->stackHigh;
+        HostThread* host = found->second.get();
+        gEpisode.holderPort = host->machThread;
+        gEpisode.stackLow = host->stackLow;
+        gEpisode.stackHigh = host->stackHigh;
+        gEpisode.holderHost = host;
+        gEpisode.disablesAtOpen = host->disables.load(std::memory_order_relaxed);
+        gEpisode.nestedAtOpen = host->nestedDisables.load(std::memory_order_relaxed);
+        gEpisode.cpuAtOpenMs = threadCpuMs(host->machThread);
     }
     gEpisodeId.store(gEpisode.id, std::memory_order_release);
 }
@@ -522,6 +590,20 @@ void closeEpisode() {
         gEpisodeId.store(0, std::memory_order_release);
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::duration(nowTicks() - closed.start)).count();
+    // Holder activity during the wait. Interrupt lock held: the holder's
+    // HostThread (owned by hosts()) cannot go away meanwhile.
+    double cpuMs = -1;
+    std::uint64_t disables = 0, nested = 0;
+    RunStateSample closeState = threadRunState(closed.holderPort);
+    closeState.atMs = ms;
+    if (closed.holderHost != nullptr) {
+        const double cpuNow = threadCpuMs(closed.holderPort);
+        if (cpuNow >= 0 && closed.cpuAtOpenMs >= 0) {
+            cpuMs = cpuNow - closed.cpuAtOpenMs;
+        }
+        disables = closed.holderHost->disables.load(std::memory_order_relaxed) - closed.disablesAtOpen;
+        nested = closed.holderHost->nestedDisables.load(std::memory_order_relaxed) - closed.nestedAtOpen;
+    }
     BatonStats& st = batonStats();
     std::lock_guard<std::mutex> guard(st.lock);
     if (ms > 10.0) {
@@ -529,6 +611,12 @@ void closeEpisode() {
     }
     if (ms > st.worstMs) {
         st.worstMs = ms;
+        st.worstCpuMs = cpuMs;
+        st.worstSamplePauseMs = closed.sampleId == closed.id ? closed.samplePauseMs : 0;
+        st.worstMidState = closed.midStateId == closed.id ? closed.midState : RunStateSample{};
+        st.worstCloseState = closeState;
+        st.worstDisables = disables;
+        st.worstNested = nested;
         st.holder = closed.holder;
         st.holderPriority = closed.holderPriority;
         st.waiterPriority = closed.waiterPriority;
@@ -552,6 +640,27 @@ std::string describe(std::uint64_t address) {
     return buffer;
 }
 
+// Frame-pointer walk of a SUSPENDED thread's own stack into sample[2..11]:
+// every frame must lie inside its stack bounds, be aligned, and move toward
+// the stack base. ThreadSanitizer cannot see thread_suspend as
+// synchronisation, so it would report these deliberate reads of another
+// thread's (frozen) stack as races.
+__attribute__((no_sanitize("thread"))) void walkSuspendedStack(std::uintptr_t fp, std::uintptr_t low, std::uintptr_t high,
+                                                                std::uint64_t (&sample)[12]) {
+    for (int i = 2; i < 12 && low != 0; ++i) {
+        if (fp < low || fp + 16 > high || (fp & 7) != 0) {
+            break;
+        }
+        const std::uintptr_t* frame = reinterpret_cast<const std::uintptr_t*>(fp);
+        const std::uintptr_t next = frame[0];
+        sample[i] = frame[1] & 0x0000FFFFFFFFFFFFull;  // strip pointer authentication
+        if (next <= fp) {
+            break;
+        }
+        fp = next;
+    }
+}
+
 // Host thread: samples long episodes, reports once a second.
 void* batonReporter(void*) {
     PetariNative::HostAllocationScope hostAllocations;
@@ -565,9 +674,23 @@ void* batonReporter(void*) {
             std::lock_guard<std::mutex> guard(episodeLock());
             snapshot = gEpisode;
         }
-        if (snapshot.id != 0 && snapshot.sampleId != snapshot.id && snapshot.holderPort != MACH_PORT_NULL &&
+        if (snapshot.id != 0 && snapshot.midStateId != snapshot.id && snapshot.holderPort != MACH_PORT_NULL) {
+            const double elapsed = duration<double, std::milli>(steady_clock::duration(nowTicks() - snapshot.start)).count();
+            if (elapsed > kSampleAfterMs) {
+                RunStateSample mid = threadRunState(snapshot.holderPort);  // read-only, no suspend
+                mid.atMs = elapsed;
+                std::lock_guard<std::mutex> guard(episodeLock());
+                if (gEpisode.id == snapshot.id) {  // attach only to the episode it was taken in
+                    gEpisode.midStateId = snapshot.id;
+                    gEpisode.midState = mid;
+                }
+            }
+        }
+        if (gBatonSample.load(std::memory_order_relaxed) && snapshot.id != 0 && snapshot.sampleId != snapshot.id &&
+            snapshot.holderPort != MACH_PORT_NULL &&
             duration<double, std::milli>(steady_clock::duration(nowTicks() - snapshot.start)).count() > kSampleAfterMs &&
             thread_suspend(snapshot.holderPort) == KERN_SUCCESS) {
+            const std::int64_t suspendedAt = nowTicks();
             // No lock is held while the holder is suspended (it may hold any).
             std::uint64_t sample[12] = {};
             bool valid = gEpisodeId.load(std::memory_order_acquire) == snapshot.id;  // still the same wait
@@ -577,30 +700,17 @@ void* batonReporter(void*) {
                              KERN_SUCCESS) {
                 sample[0] = arm_thread_state64_get_pc(state);
                 sample[1] = arm_thread_state64_get_lr(state);
-                // Frame-pointer walk of the suspended thread's own stack: every
-                // frame must lie inside its stack bounds, be aligned, and move
-                // toward the stack base.
-                std::uintptr_t fp = arm_thread_state64_get_fp(state);
-                for (int i = 2; i < 12 && snapshot.stackLow != 0; ++i) {
-                    if (fp < snapshot.stackLow || fp + 16 > snapshot.stackHigh || (fp & 7) != 0) {
-                        break;
-                    }
-                    const std::uintptr_t* frame = reinterpret_cast<const std::uintptr_t*>(fp);
-                    const std::uintptr_t next = frame[0];
-                    sample[i] = frame[1] & 0x0000FFFFFFFFFFFFull;  // strip pointer authentication
-                    if (next <= fp) {
-                        break;
-                    }
-                    fp = next;
-                }
+                walkSuspendedStack(arm_thread_state64_get_fp(state), snapshot.stackLow, snapshot.stackHigh, sample);
             } else {
                 valid = false;
             }
             thread_resume(snapshot.holderPort);
+            const double pauseMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::duration(nowTicks() - suspendedAt)).count();
             if (valid) {
                 std::lock_guard<std::mutex> guard(episodeLock());
                 if (gEpisode.id == snapshot.id) {  // attach only to the episode it was taken in
                     gEpisode.sampleId = snapshot.id;
+                    gEpisode.samplePauseMs = pauseMs;
                     std::copy(std::begin(sample), std::end(sample), gEpisode.sample);
                 }
             }
@@ -608,13 +718,25 @@ void* batonReporter(void*) {
         if (steady_clock::now() >= nextReport) {
             nextReport += seconds(1);
             BatonStats& st = batonStats();
-            double worst, sampledWait;
+            double worst, sampledWait, worstCpu, worstPause;
+            RunStateSample midState, closeState;
+            std::uint64_t worstDisables, worstNested;
             int over10, holderPriority, waiterPriority;
             OSThread* holder;
             std::uint64_t frames[12];
             {
                 std::lock_guard<std::mutex> guard(st.lock);
                 worst = st.worstMs;
+                worstCpu = st.worstCpuMs;
+                worstPause = st.worstSamplePauseMs;
+                st.worstSamplePauseMs = 0;
+                midState = st.worstMidState;
+                closeState = st.worstCloseState;
+                st.worstMidState = st.worstCloseState = RunStateSample{};
+                worstDisables = st.worstDisables;
+                worstNested = st.worstNested;
+                st.worstCpuMs = -1;
+                st.worstDisables = st.worstNested = 0;
                 over10 = st.over10;
                 holder = st.holder;
                 holderPriority = st.holderPriority;
@@ -628,6 +750,25 @@ void* batonReporter(void*) {
             if (worst > 5.0) {
                 std::fprintf(stderr, "[baton] worst preemption wait %.1f ms (priority-%d thread waited on OS thread %p, priority %d); %d waits over 10 ms",
                              worst, waiterPriority, static_cast<void*>(holder), holderPriority, over10);
+                // During the worst wait: how much CPU the holder actually got
+                // (much less than the wait: the host descheduled it) and how
+                // many interrupt-state changes it made (each takes a pending
+                // preemption; nested ones are no-ops inside a disabled region).
+                // CPU times from Mach can lag by up to a scheduling quantum, so
+                // the CPU figure can slightly exceed the wait; much less than
+                // the wait means the holder was not on a CPU.
+                std::fprintf(stderr, "; holder during it: %.1f ms CPU, %llu interrupt disables, %llu nested, sampler pause %.2f ms", worstCpu,
+                             static_cast<unsigned long long>(worstDisables), static_cast<unsigned long long>(worstNested), worstPause);
+                // Point samples, not a whole-wait record: the holder's Mach run
+                // state once after 10 ms of waiting, and when the wait closed.
+                if (midState.state >= 0) {
+                    std::fprintf(stderr, "; holder state at %.1f ms: %s, suspend %d", midState.atMs, runStateName(midState.state),
+                                 midState.suspendCount);
+                }
+                if (closeState.state >= 0) {
+                    std::fprintf(stderr, "; at close (%.1f ms): %s, suspend %d", closeState.atMs, runStateName(closeState.state),
+                                 closeState.suspendCount);
+                }
                 if (frames[0] != 0) {
                     std::fprintf(stderr, "; holder at %s", describe(frames[0]).c_str());
                     for (int i = 1; i < 12 && frames[i] != 0; ++i) {
@@ -647,6 +788,13 @@ OSThread* boundThread() {
     // A host-blocking OS thread has given up the CPU: platform waits must
     // treat it as a host thread.
     return tHostBlocking ? nullptr : tBound;
+}
+
+void noteInterruptDisable(bool nested) {
+    if (!gBatonDiag.load(std::memory_order_relaxed) || !tHost) {
+        return;
+    }
+    (nested ? tHost->nestedDisables : tHost->disables).fetch_add(1, std::memory_order_relaxed);
 }
 
 void onInterruptsDisabled() {
@@ -714,7 +862,9 @@ void __OSThreadInit(void) {
     tBound = thread;
     PetariNative::setGameAllocationThread(true);  // the default thread runs game code
     if (envEnabled("PETARI_BATON_DIAG") && !gBatonDiag) {
-        gBatonDiag = true;
+        const char* sample = std::getenv("PETARI_BATON_SAMPLE");
+        gBatonSample.store(sample == nullptr || sample[0] == '\0' || sample[0] != '0', std::memory_order_relaxed);
+        gBatonDiag.store(true, std::memory_order_relaxed);
         pthread_t reporter;
         PetariNative::HostAllocationScope hostAllocations;
         if (pthread_create(&reporter, nullptr, batonReporter, nullptr) == 0) {

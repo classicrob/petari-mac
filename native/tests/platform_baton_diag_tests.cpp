@@ -42,6 +42,12 @@ __attribute__((noinline)) void holdBatonInHostCode(int ms) {
     }
 }
 
+// Host code that blocks (a host sleep, not an OS sleep) while holding the
+// baton: the holder is off-CPU in a blocking call, not runnable.
+__attribute__((noinline)) void holdBatonBlockedInHost(int ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
 }  // namespace
 
 int main() {
@@ -80,6 +86,21 @@ int main() {
     const double expectedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::duration(yieldedAt - gSentAt.load())).count();
     OSSleepTicks(OSMillisecondsToTicks(1500));  // let the reporter print
 
+    // Phase 2: the holder blocks in host code while the priority-2 thread waits.
+    static OSThread thread2;
+    alignas(32) static u8 stack2[0x4000];
+    gWoke = false;
+    OSCreateThread(&thread2, audioLike, nullptr, stack2 + sizeof(stack2), sizeof(stack2), 2, 0);
+    OSResumeThread(&thread2);
+    std::thread interrupt2([] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        OSSendMessage(&gQueue, nullptr, OS_MESSAGE_NOBLOCK);
+    });
+    holdBatonBlockedInHost(40);
+    interrupt2.join();
+    OSYieldThread();
+    OSSleepTicks(OSMillisecondsToTicks(1500));
+
     std::fflush(stderr);
     ::dup2(savedErr, 2);
     ::close(fd);
@@ -109,8 +130,44 @@ int main() {
         check(std::abs(ms - expectedMs) <= 2.0, "the reported wait equals the measured send-to-yield time (within 2 ms)");
         check(log.find("priority-2 thread waited", at) != std::string::npos && log.find("priority 16", at) != std::string::npos,
               "waiter and holder priorities");
-        check(log.find("holder at ", at) != std::string::npos && log.find("holdBatonInHostCode", at) != std::string::npos,
-              "the PC sample names the holder's host code");
+        const char* sampleEnv = std::getenv("PETARI_BATON_SAMPLE");
+        const bool sampling = sampleEnv == nullptr || sampleEnv[0] == '\0' || sampleEnv[0] != '0';
+        if (sampling) {
+            check(log.find("holder at ", at) != std::string::npos && log.find("holdBatonInHostCode", at) != std::string::npos,
+                  "the PC sample names the holder's host code");
+        } else {
+            // PETARI_BATON_SAMPLE=0: never suspends the holder.
+            check(log.find("holder at ", at) == std::string::npos && log.find("sampler pause 0.00 ms", at) != std::string::npos,
+                  "with sampling off there is no PC sample and no sampler pause");
+        }
+        // The holder spun in host code: it made no interrupt-state change
+        // during the wait (its handoff disable is counted after the episode
+        // closes) and was on a CPU for it.
+        const auto during = log.find("holder during it: ", at);
+        check(during != std::string::npos, "the report has the holder's activity during the wait");
+        if (during != std::string::npos) {
+            const double cpu = std::atof(log.c_str() + during + std::string("holder during it: ").size());
+            check(log.find("ms CPU, 0 interrupt disables, 0 nested, sampler pause ", during) != std::string::npos,
+                  "no interrupt-state changes by a holder in host code");
+            if (cpu < 0.5 * ms) {
+                std::fprintf(stderr, "holder CPU %.1f ms of a %.1f ms wait\n", cpu, ms);
+            }
+            // Lower bound only: Mach thread CPU times lag by up to a quantum.
+            check(cpu >= 0.5 * ms, "a spinning holder was on a CPU for most of the wait (quiet machine)");
+        }
+    }
+    // Mid-wait run state (a point sample taken >10 ms into the wait).
+    if (at != std::string::npos) {
+        check(log.find("holder state at ", at) != std::string::npos, "a mid-wait run-state sample for the spinning holder");
+        const auto second = log.find("[baton] worst preemption wait ", at + 1);
+        check(second != std::string::npos, "a report for the blocked holder");
+        if (second != std::string::npos) {
+            const auto end = log.find('\n', second);
+            const std::string line = log.substr(second, end == std::string::npos ? std::string::npos : end - second);
+            check(line.find("holder state at ") != std::string::npos && line.find("WAITING (blocked)") != std::string::npos,
+                  "a holder blocked in a host call reads WAITING at the mid-wait sample");
+            check(line.find("0 interrupt disables, 0 nested") != std::string::npos, "and made no interrupt-state change");
+        }
     }
     if (failures != 0) {
         std::fprintf(stderr, "diagnostic output was:\n%s\n", log.c_str());
