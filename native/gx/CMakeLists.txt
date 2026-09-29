@@ -195,6 +195,29 @@ if(_petari_build_testing)
         add_test(NAME native_j3d_material_anm_corpus COMMAND petari_j3d_material_anm_tests
             --corpus "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
     endif()
+    add_executable(petari_host_image_heap_tests EXCLUDE_FROM_ALL
+        "${CMAKE_SOURCE_DIR}/native/tests/host_image_heap_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp" legacy_commands.cpp)
+    target_link_libraries(petari_host_image_heap_tests PRIVATE petari_j3d)
+    target_link_options(petari_host_image_heap_tests PRIVATE -Wl,-dead_strip)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        add_test(NAME native_host_image_heap COMMAND petari_host_image_heap_tests
+            --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        set_tests_properties(native_host_image_heap PROPERTIES TIMEOUT 60)
+    endif()
+    add_executable(petari_file_cache_heap_tests EXCLUDE_FROM_ALL
+        "${CMAKE_SOURCE_DIR}/native/tests/file_cache_heap_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/System/HeapMemoryWatcher.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Util/MemoryUtil.cpp")
+    petari_encode_target_sources(petari_file_cache_heap_tests)
+    target_link_libraries(petari_file_cache_heap_tests PRIVATE petari_j3d)
+    target_link_options(petari_file_cache_heap_tests PRIVATE -Wl,-dead_strip)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        add_test(NAME native_file_cache_heap_assets COMMAND petari_file_cache_heap_tests
+            --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        set_tests_properties(native_file_cache_heap_assets PROPERTIES TIMEOUT 120)
+    endif()
     file(GLOB PETARI_JPA_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/JSystem/JParticle/*.cpp")
     add_executable(petari_jpa_load_tests EXCLUDE_FROM_ALL
         "${CMAKE_SOURCE_DIR}/native/tests/jpa_load_tests.cpp" "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"

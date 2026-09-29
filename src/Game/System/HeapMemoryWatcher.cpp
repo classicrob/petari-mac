@@ -4,8 +4,47 @@
 #include <JSystem/JKernel/JKRSolidHeap.hpp>
 #include <revolution/os.h>
 #include <revolution/wpad.h>
+#ifdef PETARI_NATIVE
+#include "Game/Util/SingletonHolder.hpp"
+#include <petari/host_image_heap.hpp>
+#include "Game/System/NativeBootTrace.hpp"
+#endif
 
 JKRExpHeap* HeapMemoryWatcher::sRootHeapGDDR3;
+
+#ifdef PETARI_NATIVE
+namespace {
+    // Heap for the host-layout copy of a big-endian J3D file: the file cache's companion when
+    // the file is inside the file cache, otherwise null (the current heap, as before). The
+    // companion is a sibling of the file cache, so findFromRoot resolves a source inside the
+    // file cache to the file cache itself. Both pointers are null outside their lifetime.
+    void traceSceneHeap(const char* pName, JKRHeap* pHeap) {
+        if (pHeap == nullptr) {
+            OSReport("[heap] %s: none\n", pName);
+            return;
+        }
+
+        const s32 size = static_cast< s32 >(static_cast< u8* >(pHeap->getEndAddr()) - static_cast< u8* >(pHeap->getStartAddr()));
+        const s32 freeSize = pHeap->getTotalFreeSize();
+        OSReport("[heap] %s: size %d, used %d, free %d (%.1f%%), max free %d\n", pName, size, size - freeSize, freeSize,
+                 size != 0 ? 100.0f * freeSize / size : 0.0f, pHeap->getFreeSize());
+    }
+
+    JKRHeap* resolveFileCacheHostImageHeap(const void* pSource) {
+        HeapMemoryWatcher* pWatcher = SingletonHolder< HeapMemoryWatcher >::get();
+
+        if (pWatcher == nullptr || pWatcher->mFileCacheHeap == nullptr || pWatcher->mFileCacheHostImageHeap == nullptr) {
+            return nullptr;
+        }
+
+        if (JKRHeap::findFromRoot(const_cast< void* >(pSource)) != pWatcher->mFileCacheHeap) {
+            return nullptr;
+        }
+
+        return pWatcher->mFileCacheHostImageHeap;
+    }
+}  // namespace
+#endif
 
 namespace {
     JKRExpHeap* createExpHeap(u32 size, JKRHeap* pHeap, bool a3) NO_INLINE {
@@ -69,6 +108,18 @@ JKRHeap* HeapMemoryWatcher::getHeapGDDR3(const JKRHeap* pHeap) {
 
 void HeapMemoryWatcher::createFileCacheHeapOnGameHeap(u32 size) {
     mFileCacheHeap = ::createSolidHeap(size, mGameHeapGDDR);
+#ifdef PETARI_NATIVE
+    // Natively each J3D model or animation file in a cached archive also gets a same-size
+    // host-layout copy (J3DModelLoader/J3DAnmLoader). Archive placement (the 3% rule of
+    // getAproposHeapForSceneArchive) only sees archive bytes, so the copies get their own
+    // heap of the same size, a sibling under the game heap, created before the scene heap
+    // takes the rest. Every copy duplicates a file inside an archive resident in the file
+    // cache, each file is converted once per residency, and all such files are multiples of
+    // 32 bytes, so 32-aligned copies pack without padding except before the first one (a new
+    // solid heap's data is 16-aligned): the copies fit in the file cache size plus 32. Native
+    // J3D object growth stays on the file cache, as the Wii objects do.
+    mFileCacheHostImageHeap = ::createSolidHeap(size + 0x20, mGameHeapGDDR);
+#endif
 }
 
 void HeapMemoryWatcher::createSceneHeapOnGameHeap() {
@@ -110,6 +161,13 @@ void HeapMemoryWatcher::destroyGameHeap() {
     if (mFileCacheHeap != nullptr) {
         ::destroyHeapAndSetNULL(reinterpret_cast< JKRHeap** >(&mFileCacheHeap));
     }
+
+#ifdef PETARI_NATIVE
+    // The file cache's J3D objects point into these copies; both go away together.
+    if (mFileCacheHostImageHeap != nullptr) {
+        ::destroyHeapAndSetNULL(reinterpret_cast< JKRHeap** >(&mFileCacheHostImageHeap));
+    }
+#endif
 
     ::destroyHeapAndSetNULL(reinterpret_cast< JKRHeap** >(&mGameHeapNapa));
     ::destroyHeapAndSetNULL(reinterpret_cast< JKRHeap** >(&mGameHeapGDDR));
@@ -203,8 +261,16 @@ void HeapMemoryWatcher::createGameHeap() {
 
 HeapMemoryWatcher::HeapMemoryWatcher()
     : mStationedHeapNapa(nullptr), mStationedHeapGDDR(nullptr), mGameHeapNapa(nullptr), mGameHeapGDDR(nullptr), mFileCacheHeap(nullptr),
-      mSceneHeapNapa(nullptr), mSceneHeapGDDR(nullptr), mWPadHeap(nullptr), mHomeButtonLayoutHeap(nullptr), mAudSystemHeap(nullptr) {
+      mSceneHeapNapa(nullptr), mSceneHeapGDDR(nullptr), mWPadHeap(nullptr), mHomeButtonLayoutHeap(nullptr), mAudSystemHeap(nullptr)
+#ifdef PETARI_NATIVE
+      ,
+      mFileCacheHostImageHeap(nullptr)
+#endif
+{
     JKRHeap::setErrorHandler(HeapMemoryWatcher::memoryErrorCallback);
+#ifdef PETARI_NATIVE
+    PetariNative::J3D::setHostImageHeapResolver(::resolveFileCacheHostImageHeap);
+#endif
     createHeaps();
 }
 
@@ -222,4 +288,16 @@ void HeapMemoryWatcher::memoryErrorCallback(void*, u32, int) {
 #endif
 
 void HeapMemoryWatcher::checkRestMemory() {
+#ifdef PETARI_NATIVE
+    // End of scene initialization (GameSystemSceneController::initializeScene): with
+    // PETARI_TRACE_BOOT set, report the scene's heap headroom, including the file cache's
+    // host-image companion, so a ready stage shows its margin rather than only the absence
+    // of an allocation failure.
+    if (MR::Native::isTraceBoot()) {
+        ::traceSceneHeap("file cache", mFileCacheHeap);
+        ::traceSceneHeap("file cache host images", mFileCacheHostImageHeap);
+        ::traceSceneHeap("scene NAPA", mSceneHeapNapa);
+        ::traceSceneHeap("scene GDDR", mSceneHeapGDDR);
+    }
+#endif
 }

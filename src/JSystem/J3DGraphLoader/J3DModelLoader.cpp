@@ -11,14 +11,28 @@
 #include "JSystem/JUtility/JUTNameTab.hpp"
 #include <stdint.h>
 #ifdef PETARI_NATIVE
+#include <petari/host_image_heap.hpp>
 #include <petari/j3d_model.hpp>
 #include <revolution/os.h>
 
 namespace {
+    PetariNative::J3D::HostImageHeapResolver sHostImageHeapResolver = NULL;
+}  // namespace
+
+void PetariNative::J3D::setHostImageHeapResolver(HostImageHeapResolver resolver) {
+    sHostImageHeapResolver = resolver;
+}
+
+JKRHeap* PetariNative::J3D::resolveHostImageHeap(const void* pSource) {
+    return sHostImageHeapResolver != NULL ? sHostImageHeapResolver(pSource) : NULL;
+}
+
+namespace {
     // Model files are big-endian. Natively the loaders work on a host-layout image (see
     // petari/j3d_model.hpp): big-endian files are converted into a copy allocated on the
-    // current JKR heap, which is also where the model data built from it is allocated, so
-    // both live until that heap is freed. The archive resource itself is not modified.
+    // heap petari/host_image_heap.hpp resolves for the source, by default the current JKR
+    // heap, where the model data built from it is also allocated. The copy must live as long
+    // as that model data. The archive resource itself is not modified.
     // Host images (already converted) are used as they are. Returns NULL for a malformed file.
     const void* getHostModelImage(const void* pData) {
         if (pData == NULL) {
@@ -34,7 +48,8 @@ namespace {
         }
 
         const u32 size = PetariNative::J3D::modelFileSize(pData);
-        u8* pImage = new (0x20) u8[size];
+        JKRHeap* pHeap = PetariNative::J3D::resolveHostImageHeap(pData);
+        u8* pImage = pHeap != NULL ? new (pHeap, 0x20) u8[size] : new (0x20) u8[size];
         if (pImage == NULL) {
             return NULL;
         }

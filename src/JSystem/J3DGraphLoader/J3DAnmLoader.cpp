@@ -4,14 +4,16 @@
 #include <stdint.h>
 #ifdef PETARI_NATIVE
 #include "JSystem/JKernel/JKRHeap.hpp"
+#include <petari/host_image_heap.hpp>
 #include <petari/j3d_animation.hpp>
 #include <revolution/os.h>
 
 namespace {
     // Animation files are big-endian. Natively the loaders work on a host-layout image (see
-    // petari/j3d_animation.hpp) allocated on the current JKR heap, where the animation object
-    // is also allocated, so both live until that heap is freed. Host images are used as
-    // they are. Returns NULL for malformed or unsupported (vertex-color) files.
+    // petari/j3d_animation.hpp) allocated on the heap petari/host_image_heap.hpp resolves for
+    // the source, by default the current JKR heap, where the animation object is also
+    // allocated; the image must live as long as the object. Host images are used as they
+    // are. Returns NULL for malformed or unsupported (vertex-color) files.
     const void* getHostAnimImage(const void* pData) {
         if (pData == NULL) {
             return NULL;
@@ -26,7 +28,8 @@ namespace {
         }
 
         const u32 size = PetariNative::J3D::animFileSize(pData);
-        u8* pImage = new (0x20) u8[size];
+        JKRHeap* pHeap = PetariNative::J3D::resolveHostImageHeap(pData);
+        u8* pImage = pHeap != NULL ? new (pHeap, 0x20) u8[size] : new (0x20) u8[size];
         if (pImage == NULL) {
             return NULL;
         }

@@ -46,5 +46,10 @@ public:
     /* 0x1C */ JKRExpHeap* mWPadHeap;
     /* 0x20 */ JKRExpHeap* mHomeButtonLayoutHeap;
     /* 0x24 */ JKRSolidHeap* mAudSystemHeap;
+#ifdef PETARI_NATIVE
+    // Host-layout copies of big-endian J3D files whose archive is in mFileCacheHeap (see
+    // HeapMemoryWatcher.cpp). Created and destroyed with mFileCacheHeap.
+    JKRSolidHeap* mFileCacheHostImageHeap;
+#endif
     static JKRExpHeap* sRootHeapGDDR3;
 };
