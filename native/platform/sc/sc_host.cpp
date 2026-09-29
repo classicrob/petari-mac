@@ -4,6 +4,7 @@
 // SCReplace*Item) have no host equivalent and are not implemented.
 
 #include <revolution/os.h>
+#include <revolution/nand.h>
 #include <revolution/sc.h>
 
 #include <cstdio>
@@ -247,15 +248,24 @@ using namespace PetariNative::Platform::SC;
 extern "C" {
 
 void SCInit(void) {
-    PetariNative::HostAllocationScope hostAllocations;
-    std::string error;
-    Guard guard(state().lock);
-    if (!state().store.empty()) {
-        state().loadFailed = !loadLocked(&error);
-        if (state().loadFailed) {
-            OSReport("SC: cannot load %s: %s\n", state().store.c_str(), error.c_str());
+    {
+        PetariNative::HostAllocationScope hostAllocations;
+        std::string error;
+        Guard guard(state().lock);
+        if (!state().store.empty()) {
+            state().loadFailed = !loadLocked(&error);
+            if (state().loadFailed) {
+                OSReport("SC: cannot load %s: %s\n", state().store.c_str(), error.c_str());
+            }
         }
     }
+    // The SDK's SCInit (src/RVL_SDK/sc/scsystem.c) initialises the NAND
+    // library, which OSInit therefore does for every title; the game never
+    // calls NANDInit itself. Settings come from the host store, so a NAND
+    // failure (no NAND root mounted) does not fail SC here, unlike the
+    // console's SC_STATUS_FATAL; NAND calls then report
+    // NAND_RESULT_FATAL_ERROR themselves.
+    NANDInit();
 }
 
 u32 SCCheckStatus(void) {

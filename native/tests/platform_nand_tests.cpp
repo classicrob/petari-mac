@@ -132,6 +132,11 @@ void testSaveData(const fs::path& root) {
 
     std::string error;
     check(PNAND::mount(root, &error), "mount NAND root");
+    // OSInit runs SCInit, which initialises NAND as the SDK's does; the game
+    // never calls NANDInit itself.
+    SCInit();
+    char scHome[64];
+    check(NANDGetHomeDir(scHome) == NAND_RESULT_OK && std::strcmp(scHome, kHome) == 0, "SCInit initialises NAND (no explicit NANDInit)");
     check(NANDInit() == NAND_RESULT_OK && NANDInit() == NAND_RESULT_OK, "NANDInit succeeds and is idempotent");
     char home[64];
     check(NANDGetHomeDir(home) == NAND_RESULT_OK && std::strcmp(home, kHome) == 0, "home directory from the disc's title ID");

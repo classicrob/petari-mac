@@ -99,7 +99,7 @@ target_compile_features(petari_platform_nand PUBLIC cxx_std_17)
 # SC system settings from native preferences. Replaces src/RVL_SDK/sc/*.c.
 add_library(petari_platform_sc STATIC sc/sc_host.cpp)
 target_include_directories(petari_platform_sc PUBLIC include)
-target_link_libraries(petari_platform_sc PUBLIC petari_platform_os petari_native_config petari_host_runtime)
+target_link_libraries(petari_platform_sc PUBLIC petari_platform_os petari_platform_nand petari_native_config petari_host_runtime)
 target_compile_features(petari_platform_sc PUBLIC cxx_std_17)
 
 # ARAM in MEM2 (port of src/RVL_SDK/aralt/aralt.c). Replaces aralt.c.
