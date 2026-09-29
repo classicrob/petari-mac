@@ -8,16 +8,20 @@
 
 #include <SDL3/SDL_video.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "../app/host.hpp"
 #include "../app/smoke.hpp"
 #include "petari/app.hpp"
+#include "petari/frame_telemetry.hpp"
 #include "petari/host_allocation.hpp"
 
 namespace App = PetariNative::App;
@@ -350,6 +354,140 @@ void testSmoke() {
     unsetenv("PETARI_SMOKE");
 }
 
+namespace FrameStats = PetariNative::App::FrameStats;
+
+FrameStats::Frame statsFrame(double ms, FrameStats::Phase phase) {
+    FrameStats::Frame frame;
+    frame.intervalMs = ms;
+    frame.phase = phase;
+    return frame;
+}
+
+void testFrameStats() {
+    FrameStats::Recorder stats(4);
+    std::uint64_t index = 0;
+    const auto add = [&](double ms, FrameStats::Phase phase) {
+        FrameStats::Frame frame = statsFrame(ms, phase);
+        frame.index = ++index;
+        frame.us[FrameStats::RetraceWait] = static_cast<std::uint32_t>(ms * 1000.0);
+        stats.add(frame);
+    };
+    for (int i = 0; i < 96; i++) {
+        add(16.68, FrameStats::Phase::Gameplay);
+    }
+    add(40.0, FrameStats::Phase::Gameplay);
+    add(33.0, FrameStats::Phase::Gameplay);
+    add(21.0, FrameStats::Phase::Loading);  // the run continues across phases for the total
+    add(16.68, FrameStats::Phase::Gameplay);
+    add(1500.0, FrameStats::Phase::Loading);
+    add(9000.0, FrameStats::Phase::Unfocused);  // past the histogram: max still exact
+
+    const auto& total = stats.totals(FrameStats::kPhaseCount);
+    const auto& gameplay = stats.totals(static_cast<unsigned>(FrameStats::Phase::Gameplay));
+    const auto& loading = stats.totals(static_cast<unsigned>(FrameStats::Phase::Loading));
+    check(total.frames == 102 && gameplay.frames == 99 && loading.frames == 2, "frames counted per phase and in total");
+    check(std::fabs(stats.percentile(FrameStats::kPhaseCount, 50) - 16.68) < 0.011, "p50 to the 10 us bin");
+    check(std::fabs(stats.percentile(static_cast<unsigned>(FrameStats::Phase::Gameplay), 98) - 33.0) < 0.011,
+          "nearest-rank: gameplay p98 of 99 frames is its second-worst frame");
+    check(total.maxMs == 9000.0 && stats.percentile(FrameStats::kPhaseCount, 100) == 9000.0,
+          "intervals past the histogram keep their exact maximum");
+    check(std::fabs(stats.percentile(FrameStats::kPhaseCount, 99) - 1500.0) < 1.01, "1 ms bins above 50 ms");
+    check(total.over16 == 5 && total.over33 == 3 && total.late == 5,
+          "counts over 16.7 ms, over 33.3 ms, and late (over 1.25 fields)");
+    check(total.longestLateRun == 3 && gameplay.longestLateRun == 2 && loading.longestLateRun == 1,
+          "late runs: across phases in the total, within a phase for the phase");
+    check(gameplay.lateSum[FrameStats::RetraceWait] == 73000, "attribution is summed over late frames");
+
+    const std::string csv = "app_seam_frame_stats.csv";
+    check(stats.writeCsv(csv.c_str()), "CSV written");
+    std::ifstream in(csv);
+    std::vector<std::string> lines;
+    for (std::string line; std::getline(in, line);) {
+        lines.push_back(line);
+    }
+    std::remove(csv.c_str());
+    check(lines.size() == 5 && lines[0].rfind("frame,phase,interval_ms,efb_captures,pipeline_resolves,seam_compose_ms", 0) == 0,
+          "CSV header and the ring's last 4 frames");
+    check(lines[1].rfind("99,loading,21.000,", 0) == 0 && lines[4].rfind("102,unfocused,9000.000,", 0) == 0,
+          "CSV rows oldest first");
+    // Summaries print without crashing on these values.
+    std::FILE* sink = std::fopen("/dev/null", "w");
+    stats.writeSummary(sink);
+    stats.writeWindow(sink);
+    std::fclose(sink);
+}
+
+void testSeamTiming() {
+    namespace Telemetry = PetariNative::FrameTelemetry;
+    using std::chrono::milliseconds;
+    App::setCpuRelease({releaseBegin, releaseEnd});
+    reset();
+    petari_host_frame_seam();
+    const FrameStats::Recorder* stats = App::Seam::frameStats();
+    check(stats != nullptr, "statistics exist after the first frame opened");
+    const auto before = stats->totals(FrameStats::kPhaseCount);
+
+    // One frame: retrace wait 4 ms, game work 6 ms, draw-done wait 2 ms, and
+    // a 5 ms pipeline wait on another thread.
+    std::this_thread::sleep_for(milliseconds(4));
+    petari_host_frame_mark(PETARI_FRAME_MARK_RETRACE_DONE);
+    Telemetry::add(Telemetry::PipelineWait, 5000000);
+    std::this_thread::sleep_for(milliseconds(6));
+    petari_host_frame_mark(PETARI_FRAME_MARK_END_FRAME);
+    std::this_thread::sleep_for(milliseconds(2));
+    petari_host_frame_seam();
+
+    const auto& after = stats->totals(FrameStats::kPhaseCount);
+    check(after.frames == before.frames + 1, "each seam after the first records one frame");
+    const auto part = [&](unsigned p) { return after.allSum[p] - before.allSum[p]; };
+    check(part(FrameStats::RetraceWait) >= 4000 && part(FrameStats::GameWork) >= 6000 &&
+              part(FrameStats::DrawDoneWait) >= 2000,
+          "frame-loop marks split the frame: retrace wait, game work, draw-done wait");
+    std::uint64_t gameThread = 0;
+    for (unsigned p = 0; p <= FrameStats::Unattributed; p++) {
+        gameThread += part(p);
+    }
+    const double intervalUs = (after.sumMs - before.sumMs) * 1000.0;
+    check(std::fabs(gameThread - intervalUs) <= 10.0, "game-thread parts and unattributed add up to the interval");
+    check(part(FrameStats::PipelineWait) == 5000 && after.pipelineWaits == before.pipelineWaits + 1,
+          "other threads' waits land in the frame they ended in");
+
+    // Marks out of order (none this frame): the time stays unattributed.
+    const auto second = stats->totals(FrameStats::kPhaseCount);
+    std::this_thread::sleep_for(milliseconds(1));
+    petari_host_frame_seam();
+    const auto& third = stats->totals(FrameStats::kPhaseCount);
+    check(third.allSum[FrameStats::RetraceWait] == second.allSum[FrameStats::RetraceWait] &&
+              third.allSum[FrameStats::Unattributed] >= second.allSum[FrameStats::Unattributed] + 1000,
+          "a frame without marks is unattributed, not guessed");
+
+    // Focus loss marks the frame it happened in, and later frames until focus returns.
+    SDL_Event lost{};
+    lost.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+    AuroraEvent lostEvent{};
+    lostEvent.type = AURORA_SDL_EVENT;
+    lostEvent.sdl = lost;
+    const unsigned unfocused = static_cast<unsigned>(FrameStats::Phase::Unfocused);
+    const auto unfocusedBefore = stats->totals(unfocused).frames;
+    updates = {{lostEvent}};
+    petari_host_frame_seam();  // the event arrives in this seam, inside the next frame
+    petari_host_frame_seam();
+    petari_host_frame_seam();
+    check(stats->totals(unfocused).frames == unfocusedBefore + 2, "frames with focus lost count as unfocused");
+    SDL_Event gained{};
+    gained.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+    AuroraEvent gainedEvent{};
+    gainedEvent.type = AURORA_SDL_EVENT;
+    gainedEvent.sdl = gained;
+    updates = {{gainedEvent}};
+    petari_host_frame_seam();
+    petari_host_frame_seam();
+    petari_host_frame_seam();
+    // The frame that began in the seam where focus returned was unfocused at its start.
+    check(stats->totals(unfocused).frames == unfocusedBefore + 4,
+          "frames stay unfocused through the one focus returned in; later ones are not");
+}
+
 }  // namespace
 
 int main() {
@@ -357,6 +495,8 @@ int main() {
     testSeamWithHooks();
     testQuit();
     testSmoke();
+    testFrameStats();
+    testSeamTiming();
     std::printf("native app seam tests passed (%d checks)\n", checks);
     return 0;
 }

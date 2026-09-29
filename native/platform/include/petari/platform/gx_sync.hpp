@@ -20,6 +20,7 @@
 // pointer-versus-token test stays correct.
 
 #include <cstdint>
+#include <cstdio>
 
 #include <revolution/gx/GXFifo.h>
 #include <revolution/gx/GXManage.h>
@@ -123,6 +124,45 @@ GPStatus gpStatus();
 
 // Last processed stream position reported by the renderer.
 std::uint64_t processedPosition();
+
+// ---- Hang check for GXDrawDone waits (the game's GX abort alarm) ----
+// On the Wii, MainLoopFramework's alarm aborts the frame when a GXDrawDone
+// wait sees no GP progress for 0.5 s. Natively the processor reports progress
+// only at command-batch boundaries, and one batch can block for many seconds
+// while first-use pipelines compile (serially, with short gaps between them),
+// so an unchanged position is not evidence of a hang. checkWait classifies
+// why no progress was seen. Only a stall nothing else can end asks for the
+// abort: the processor halted at the breakpoint, or idle with a draw done
+// outstanding, for kWaitAbortAfterNs while no game code can run (no OS thread
+// holds or waits for the CPU, none is in host work) to move the breakpoint.
+enum class WaitState {
+    Progress,    // the processed position moved since the last check
+    Done,        // every issued draw done was delivered; the waiter has not run yet
+    Busy,        // unprocessed commands, not at the breakpoint: the processor is inside a batch
+    Delivering,  // processed events not yet delivered (GP interrupt thread, or held behind a capture)
+    Halted,      // halted at the breakpoint with commands pending
+    Idle,        // nothing left to process or deliver, yet a draw done is outstanding
+};
+inline constexpr std::uint64_t kWaitAbortAfterNs = 1000000000;
+struct WaitCheck {
+    std::uint64_t processed = 0;  // position at the last check
+    std::uint64_t sinceNs = 0;    // when it last moved; 0: no check yet (the first one counts as progress)
+};
+struct WaitVerdict {
+    WaitState state;
+    std::uint64_t stalledNs;  // since the position last moved
+    bool abort;
+};
+// Takes the interrupt lock (reentrant: the alarm handler holds it). nowNs is
+// any nonzero monotonic nanosecond clock, the same for every call on one
+// WaitCheck.
+WaitVerdict checkWait(WaitCheck& check, std::uint64_t nowNs);
+const char* waitStateName(WaitState state);
+
+// Hang report: positions, breakpoint, queued GP events, draw-done and ticket
+// counts. Never blocks for long: if the state lock stays unavailable for two
+// seconds the state is read without it, and the report says so.
+void dumpState(std::FILE* out);
 
 // Stops the GP interrupt thread and resets all state; undelivered events
 // (including ones waiting for a snapshot) are discarded. For tests and

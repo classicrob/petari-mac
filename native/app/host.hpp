@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <string>
 
+#include "frame_stats.hpp"
 #include "petari/app.hpp"
 #include "smoke.hpp"
 
@@ -36,6 +37,13 @@ void startOS();
 void requestQuit();
 // A second close request while the game is still shutting down.
 [[noreturn]] void forceQuit();
+}  // namespace Host
+
+// --- frame_phase.cpp (SDK side) ---
+namespace Host {
+// What the game is doing, for the frame-time statistics. Game thread, while
+// it holds the CPU (the seam calls it before releasing it).
+FrameStats::Phase framePhase();
 }  // namespace Host
 
 // --- input_events.cpp ---
@@ -71,6 +79,13 @@ void attach(SDL_Window* window);
 // Opens the Aurora frame the game's first GX commands go into. Main thread,
 // after Host::startOS and before Host::runGame.
 void openFirstFrame();
+// Classifies frames for the statistics (Host::framePhase). Before openFirstFrame.
+void setPhaseProbe(FrameStats::Phase (*probe)());
+// The frame-time statistics so far; null before openFirstFrame.
+const FrameStats::Recorder* frameStats();
+// At exit: prints the frame-time summary and writes PETARI_FRAME_CSV, if
+// enabled (PETARI_TRACE_BOOT, PETARI_FRAME_STATS or PETARI_FRAME_CSV). Once.
+void reportFrameStats();
 }  // namespace Seam
 
 }  // namespace PetariNative::App

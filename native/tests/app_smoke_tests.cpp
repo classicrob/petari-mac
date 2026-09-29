@@ -1535,6 +1535,168 @@ void testStoryFaults() {
     check(prompt.driver.result() == Result::Blocked, "any prompt stops the story route");
 }
 
+void testGalaxy() {
+    auto start = [](Run& run) {
+        toFileSelect(run);
+        run.frames(target(fileSelect(true), "FileSelect.Slot", 0, .3f, .5f, kSel | kPoint), 3);
+        run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+        run.frames(target(fileSelect(true), "FileSelect.Start", 0, .5f, .5f, kSel | kPoint), 3);
+        run.frame(with(garden(), "FileSelector.DemoStartWait"));
+        Observation o = garden();
+        o.stage = "AstroGalaxy"; o.scenario = 1;
+        o.playerValid = o.playerOnGround = o.pausePermitted = true;
+        o.playerX = 2825; o.playerY = 787; o.playerZ = -3750;
+        run.frame(o);
+        const int beforeCalibration = run.count(Button::StickUp, true);
+        o.pausePermitted = false;
+        run.frames(o, 180);
+        check(run.driver.result() == Result::Running && run.count(Button::StickUp, true) == beforeCalibration,
+              "initialized observatory with opening camera does not start calibration");
+        o.pausePermitted = true;
+        run.frames(o, 35);
+        o.pausePermitted = false;
+        run.frame(o);
+        o.pausePermitted = true;
+        run.frames(o, 30);
+        check(run.count(Button::StickUp, true) == beforeCalibration,
+              "observatory calibration requires consecutive ready frames");
+        run.frames(o, 30);
+        check(run.count(Button::StickUp, true) == beforeCalibration + 1,
+              "sixty ready frames starts the forward hold");
+        o.demoActive = true;
+        run.frames(o, 90);
+        check(run.driver.result() == Result::Running &&
+              run.count(Button::StickUp, false) == run.count(Button::StickUp, true),
+              "readiness lost during calibration releases the held stick and resets calibration");
+        o.demoActive = false;
+        for (int i = 0; i < 105; ++i) {
+            o.playerX += 4; o.playerZ += 4;
+            run.frame(o);
+        }
+        check(run.count(Button::StickUp, true) > 0 && run.count(Button::StickRight, true) > 0,
+              "galaxy route calibrates through real stick inputs");
+        o.stage = "AstroDome";
+        run.frames(o, 65);
+        return o;
+    };
+    auto click = [](Run& run, Observation o, const char* id) {
+        const int before = run.count(Button::A, true);
+        run.frames(target(o, id, 1, .4f, .3f, kSel), 4);
+        check(run.count(Button::A, true) == before, std::string(id) + " waits for real pointing");
+        run.frames(target(o, id, 1, .4f, .3f, kSel | kPoint), 3);
+        check(run.count(Button::A, true) == before + 1, std::string(id) + " selected with A");
+        run.frames(o, 10);
+    };
+    auto select = [&](Run& run, Observation o, bool newlyAvailable = false) {
+        click(run, o, "Dome.BlueStar");
+        if (newlyAvailable) {
+            click(run, o, "Galaxy.UnlockEggStarGalaxy");
+            const int before = run.count(Button::A, true);
+            // Stale New publication must not cause a second unlock click.
+            run.frames(target(o, "Galaxy.UnlockEggStarGalaxy", 1, .4f, .3f, kSel | kPoint), 5);
+            bool quiet = true;
+            for (int i = 0; i < 210; ++i) {
+                const auto step = run.driver.step(o);
+                quiet = quiet && !step.pointer && step.presses.empty();
+            }
+            run.frames(target(o, "Galaxy.EggStarGalaxy", 1, .4f, .3f, kPoint), 5);
+            check(quiet && run.count(Button::A, true) == before && run.driver.result() == Result::Running &&
+                      std::string(run.driver.phase()) == "waiting for Good Egg reveal",
+                  "New reveal sends no input and waits past 150 frames for selectable Open");
+            run.frame(target(o, "Galaxy.EggStarGalaxy", 1, .4f, .3f, kSel));
+            check(run.count(Button::A, true) == before, "observed Open ends reveal without clicking yet");
+        }
+        click(run, o, "Galaxy.EggStarGalaxy");
+        click(run, o, "Galaxy.Start");
+        // ScenarioSelectScene runs while the destination Game scene is loading;
+        // Mario and a decided scenario number are not available yet.
+        o.stage = "EggStarGalaxy";
+        o.scenario = -1;
+        o.sceneReady = o.playerValid = false;
+        run.frames(o, 120);
+        click(run, o, "Scenario.First");
+        check(run.driver.result() == Result::Running &&
+                  std::string(run.driver.phase()) == "loading Good Egg mission 1",
+              "mission selection accepts observed UI while destination scene is initializing");
+    };
+    Run run(1000000, Smoke::Script::Galaxy);
+    auto dome = start(run);
+    auto talking = target(dome, "Talk.Advance", 0, .5f, .5f, kSel);
+    talking.talkActive = true;
+    int before = run.count(Button::A, true);
+    run.frames(talking, 30);
+    check(run.count(Button::A, true) == before + 1, "visible lecture page advances once with debounce");
+    select(run, dome, true);
+    Observation loading = dome;
+    loading.sceneReady = loading.playerValid = false;
+    run.frames(loading, 120);
+    check(run.driver.result() == Result::Running, "galaxy load tolerates missing Mario");
+    Observation egg = dome; egg.stage = "EggStarGalaxy";
+    Sim sim;
+    for (int i = 0; i < 3000 && run.driver.result() == Result::Running; ++i) {
+        auto step = run.driver.step(sim.observe(egg));
+        sim.apply(step); sim.advance();
+    }
+    check(run.driver.result() == Result::Pass && run.driver.reason().find("Good Egg mission 1") != std::string::npos,
+          "New galaxy reveal, confirmation, mission selection and all gameplay checks pass");
+    Run helped(1000000, Smoke::Script::Galaxy);
+    auto helpedDome = start(helped);
+    select(helped, helpedDome);
+    Sim helpedSim;
+    Observation helpedEgg = egg;
+    helpedEgg.physical.gameplay = 1;
+    for (int i = 0; i < 3000 && helped.driver.result() == Result::Running; ++i) {
+        auto step = helped.driver.step(helpedSim.observe(helpedEgg));
+        helpedSim.apply(step); helpedSim.advance();
+    }
+    check(helped.driver.result() == Result::Assisted, "already-open galaxy skips unlock, completes gameplay and preserves ASSISTED");
+    Run wrong(1000000, Smoke::Script::Galaxy);
+    auto wrongDome = start(wrong);
+    select(wrong, wrongDome);
+    egg.scenario = 2;
+    wrong.frame(egg);
+    check(wrong.driver.result() == Result::Fail && wrong.driver.reason().find("wrong mission") != std::string::npos,
+          "wrong Good Egg mission fails");
+    Run stalled(1000000, Smoke::Script::Galaxy);
+    auto stalledDome = start(stalled);
+    click(stalled, stalledDome, "Dome.BlueStar");
+    click(stalled, stalledDome, "Galaxy.UnlockEggStarGalaxy");
+    const int unlockPresses = stalled.count(Button::A, true);
+    stalled.frames(stalledDome, 600);
+    check(stalled.driver.result() == Result::Fail && stalled.driver.reason().find("reveal did not show selectable") != std::string::npos &&
+              stalled.count(Button::A, true) == unlockPresses,
+          "missing Open after unlock fails within bounded reveal timeout without more clicks");
+    Run readiness(1000000, Smoke::Script::Galaxy);
+    auto readyDome = start(readiness);
+    select(readiness, readyDome);
+    auto readyEgg = readyDome; readyEgg.stage = "EggStarGalaxy";
+    readiness.frames(readyEgg, 40);
+    auto interrupted = readyEgg; interrupted.sceneReady = interrupted.playerValid = false;
+    readiness.frame(interrupted);
+    readiness.frames(readyEgg, 30);
+    check(std::string(readiness.driver.phase()) == "loading Good Egg mission 1",
+          "mission loading interruption resets consecutive readiness");
+    interrupted = readyEgg; interrupted.talkActive = true;
+    readiness.frame(interrupted);
+    readiness.frames(readyEgg, 30);
+    check(std::string(readiness.driver.phase()) == "loading Good Egg mission 1",
+          "mission dialogue interruption resets consecutive readiness");
+    readiness.frames(readyEgg, 100);
+    readyEgg.playerDead = true;
+    readiness.frame(readyEgg);
+    check(readiness.driver.result() == Result::Fail && readiness.driver.reason().find("Mario died") != std::string::npos,
+          "death after mission readiness fails during gameplay checks");
+    Run returned(1000000, Smoke::Script::Galaxy);
+    auto back = start(returned); back.stage = "AstroGalaxy";
+    returned.frame(back);
+    check(returned.driver.result() == Result::Fail, "backing out of Terrace fails");
+    Run missing(1000000, Smoke::Script::Galaxy);
+    auto empty = start(missing);
+    missing.frames(empty, 610);
+    check(missing.driver.result() == Result::Fail && missing.driver.reason().find("Dome.BlueStar") != std::string::npos,
+          "missing Blue Star fails with target name");
+}
+
 void testMilestones() {
     const unsigned long start = petari_milestone_count();
     check(petari_milestone_at(start) == nullptr, "no milestone beyond the count");
@@ -1576,6 +1738,7 @@ int main() {
     testStoryFaults();
     testAssisted();
     testPlayableGuards();
+    testGalaxy();
     testMilestones();
     std::printf("native app smoke tests passed (%d checks)\n", checks);
     return 0;

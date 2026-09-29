@@ -96,6 +96,19 @@
 // no input is sent. PASS needs HeavensDoorGalaxy ready for 60 frames in a row
 // (so it has updated and drawn), within 3600 frames of PrologueB's end.
 //
+// Script "galaxy" (PETARI_SMOKE=galaxy): load a copied observatory fixture,
+// walk the AstroBaseA collision-checked corridor to Terrace with calibrated
+// stick inputs, point at its Blue Star, reveal Good Egg if new, then select
+// Good Egg, Start and first mission. Reveal waits for the observed Open/Wait
+// target with a bounded timeout and sends no new input.
+// Only published selectable targets can receive A; visible non-choice lecture
+// pages may receive a debounced A. Require AstroDome scenario 1 and then
+// EggStarGalaxy scenario 1 before the gameplay checks above. Route, target and
+// load timeouts fail; backing out, death and wrong stages/missions fail too.
+// Fixture bootstrap is separate from this input-only driver. Static collision
+// inspection supports the route; a live unattended PASS is still required to
+// validate it against actual actors, cameras and game timing.
+//
 // Assisted runs (every script): physical keyboard and mouse input still works
 // during a smoke run. A press or release (not a key repeat) of a key or mouse
 // button bound to a game action, from the driver's first frame on, is logged
@@ -130,6 +143,7 @@ struct PhysicalInputs {
 struct Observation {
     std::string scene;          // current SceneControlInfo scene ("" before the first)
     std::string stage;
+    int scenario = 0;
     bool sceneReady = false;    // scene initialisation finished
     bool strap = false;         // strap reminder (Logo scene) on screen
     bool saveSequence = false;  // save-data handling sequence active
@@ -187,7 +201,7 @@ constexpr unsigned kTargetPointing = 1u;
 constexpr unsigned kTargetEmpty = 2u;
 constexpr unsigned kTargetSelectable = 4u;
 
-enum class Script { Title, Playable, Gameplay, Reload, Story };
+enum class Script { Title, Playable, Gameplay, Reload, Story, Galaxy };
 
 enum class Button { A, B, StickUp, StickDown, Plus, Minus, StickLeft, StickRight };
 
@@ -252,7 +266,8 @@ private:
     void playable(const Observation& observation, Step& step);
     void gameplay(const Observation& observation, Step& step);
     void story(const Observation& observation, Step& step);
-    bool loadsSave() const { return mScript == Script::Reload || mScript == Script::Story; }
+    bool galaxy(const Observation& observation, Step& step);
+    bool loadsSave() const { return mScript == Script::Reload || mScript == Script::Story || mScript == Script::Galaxy; }
     // Holds exactly these steering keys (presses for the changes).
     void steer(const StickKeys& keys, Step& step);
     void startSegment(int segment);
@@ -304,6 +319,10 @@ private:
     unsigned long mMoveFrame = 0;
     float mStartX = 0.0f, mStartY = 0.0f, mStartZ = 0.0f;
     // gameplay
+    enum class GalaxyPhase { Observatory, Dome, BlueStar, Galaxy, Reveal, Confirm, Scenario, Mission, Complete };
+    GalaxyPhase mGalaxyPhase = GalaxyPhase::Observatory;
+    unsigned long mGalaxyFrames = 0;
+    unsigned long mGalaxyTapAfter = 0;
     unsigned long mReadyFrames = 0;
     bool mLeftGround = false;
     float mMaxRise = 0.0f;
@@ -335,7 +354,7 @@ private:
 // --- Process-wide state for the app (smoke.cpp) ---
 
 // Whether PETARI_SMOKE selects a known script ("title", "playable",
-// "gameplay", "reload" or "story"), and which; prints why not otherwise.
+// "gameplay", "reload", "story" or "galaxy"), and which; prints why not otherwise.
 bool enabledFromEnvironment(Script* script);
 // Exit status the power exit handler uses: the smoke result, or 0 when the
 // smoke is not running or has not decided.
@@ -347,6 +366,13 @@ void setProcessResult(Result result);
 // the game has not exited shutdownSeconds after the smoke pressed the power
 // button. It reads only values published below, never game state.
 void startWatchdog(unsigned stallSeconds, unsigned shutdownSeconds);
+// What the watchdog records before the stall exit (124), so a hang explains
+// itself: unless PETARI_HANG_SAMPLE=0, /usr/bin/sample's stacks of every
+// thread for 3 s, written to petari-hang-<pid>.sample.txt in sampleDirectory
+// (the temporary directory if empty); then `dump` (the platform state: OS
+// threads and the CPU baton, GX sync, pending alarms), if set. A report that
+// has not finished 60 s later is abandoned and the process exits anyway.
+void setHangReport(void (*dump)(const char* reason), const std::string& sampleDirectory);
 void heartbeat(unsigned long frame, const char* phase);
 void noteQuitRequested(bool saveSequenceActive);
 

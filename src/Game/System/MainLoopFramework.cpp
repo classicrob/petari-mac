@@ -16,6 +16,8 @@
 #ifdef PETARI_NATIVE
 extern "C" bool petari_gx_waiting_for_pipeline();
 extern "C" u64 petari_gx_sync_held_ticket();
+// native/platform/include/petari/platform/diagnostics.hpp
+extern "C" int petari_gx_wait_check(MainLoopFrameworkAlarm::NativeWaitCheck* check, int pipelineWait);
 #endif
 
 MainLoopFramework* MainLoopFramework::sManager;
@@ -508,8 +510,7 @@ namespace {
         OSTime tick = __cvt_dbl_usll(OS_BUS_CLOCK / 4 * 0.5);
 #endif
 #ifdef PETARI_NATIVE
-        u32 unused;
-        GXReadXfRasMetric(&unused, &unused, &unused, &alarm.mNativeLastProcessed);
+        petari_gx_wait_check(&alarm.mNativeWait, 0);  // the first check records the position
 #endif
         OSSetAlarm(&alarm, tick, &handleGXAbortAlarm);
         GXDrawDone();
@@ -527,8 +528,15 @@ namespace {
         GXReadXfRasMetric(&xf_wait_in, &xf_wait_out, &ras_busy, &clocks);
         GXReadXfRasMetric(&xf_wait_in2, &xf_wait_out2, &ras_busy2, &clocks2);
 #ifdef PETARI_NATIVE
+        // Natively the Wii's test (no GP progress for 0.5 s) misfires: the
+        // processor reports progress only between command batches, and one
+        // batch can spend seconds in serial first-use pipeline compiles. An
+        // abort there discards a good frame. petari_gx_wait_check aborts only
+        // when the processor is halted at the breakpoint or idle with the
+        // draw done outstanding and no game thread can run to change that;
+        // other stalls are reported (with a full state dump after 10 s) while
+        // the wait continues.
         auto* nativeAlarm = static_cast<MainLoopFrameworkAlarm*>(alarm);
-        const bool compiling = petari_gx_waiting_for_pipeline();
         const u64 capture = petari_gx_sync_held_ticket();
         if (capture != nativeAlarm->mNativeCaptureTicket) {
             nativeAlarm->mNativeCaptureTicket = capture;
@@ -536,13 +544,10 @@ namespace {
         }
         if (capture && OSGetTime() - nativeAlarm->mNativeCaptureSince > static_cast<OSTime>(OS_BUS_CLOCK / 4) * 30)
             OSPanic(__FILE__, __LINE__, "GPU capture ticket %llu did not complete within 30 seconds", capture);
-        if (compiling || capture || clocks2 != nativeAlarm->mNativeLastProcessed) {
-            nativeAlarm->mNativeLastProcessed = clocks2;
-            OSReport("GX wait extended: pipeline=%u, capture=%llu, processed=%u\n", compiling, capture, clocks2);
+        if (!petari_gx_wait_check(&nativeAlarm->mNativeWait, petari_gx_waiting_for_pipeline() ? 1 : 0)) {
             OSSetAlarm(alarm, static_cast<OSTime>(OS_BUS_CLOCK / 8), &handleGXAbortAlarm);
             return;
         }
-        OSReport("GX abort: no processor progress and no pipeline compilation\n");
 #endif
         GXBool brkpt, cmdIdle, readIdle, underlow, overhi;
         GXGetGPStatus(&overhi, &underlow, &readIdle, &cmdIdle, &brkpt);

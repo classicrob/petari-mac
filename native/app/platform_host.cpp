@@ -10,6 +10,7 @@
 #include <petari/audio_sdl.hpp>
 #include <petari/boot.hpp>
 #include <petari/platform/crash.hpp>
+#include <petari/platform/diagnostics.hpp>
 #include <petari/platform/dvd.hpp>
 #include <petari/platform/nand.hpp>
 #include <petari/platform/os_host.hpp>
@@ -23,6 +24,7 @@
 extern "C" void petari_game_main(void);          // src/Game/System/GameSystem.cpp
 extern "C" void petari_attach_vi_renderer(void);  // native/gx/vi_bridge.cpp
 extern "C" void petari_present_install(void);     // native/gx/present/present_host.cpp
+extern "C" bool petari_gx_waiting_for_pipeline();  // native/gx/patch_aurora_pipeline.py
 
 namespace PetariNative::App::Host {
 
@@ -36,6 +38,7 @@ namespace {
 // nothing needs flushing but stdio; process exit releases the audio device and
 // the window, so no platform shutdowns (which join their threads) run here.
 void leave(const Platform::Power::Exit& exit, void*) {
+    Seam::reportFrameStats();
     std::fflush(stdout);
     std::fflush(stderr);
     if (exit.intent == Platform::Power::Intent::Restart) {
@@ -45,6 +48,12 @@ void leave(const Platform::Power::Exit& exit, void*) {
     }
     // 0, or the smoke run's result (smoke.hpp) when one decided.
     std::_Exit(Smoke::processExitStatus());
+}
+
+// The smoke watchdog's hang report (smoke.hpp).
+void dumpHangState(const char* reason) {
+    std::fprintf(stderr, "[hang] renderer: blocking pipeline wait %s\n", petari_gx_waiting_for_pipeline() ? "yes" : "no");
+    petari_platform_dump_hang_state(reason);
 }
 
 }  // namespace
@@ -62,6 +71,7 @@ bool preparePlatform(const Paths& paths, std::string* error) {
         return false;
     }
     Platform::Crash::install(crashes);
+    Smoke::setHangReport(dumpHangState, crashes.string());
 
     if (!Platform::DVD::mount({paths.disc}, error)) {
         *error = "disc " + paths.disc.string() + ": " + *error;
@@ -112,6 +122,7 @@ void requestQuit() {
 }
 
 void forceQuit() {
+    Seam::reportFrameStats();
     std::fputs("Petari: quitting immediately\n", stderr);
     std::fflush(stderr);
     std::_Exit(0);

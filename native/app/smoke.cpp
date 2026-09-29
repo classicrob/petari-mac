@@ -3,6 +3,11 @@
 
 #include "smoke.hpp"
 
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -10,7 +15,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <string>
 #include <thread>
+
+extern char** environ;
 
 namespace PetariNative::App::Smoke {
 
@@ -329,6 +338,13 @@ void Driver::playable(const Observation& observation, Step& step) {
         mSinceProgress = 0;
         break;
     case Phase::Prologue:
+        if (mScript == Script::Galaxy && observation.scene == "Game" && observation.sceneReady &&
+            observation.stage != "FileSelect") {
+            mPhase = Phase::Ready;
+            mPhaseFrames = 0;
+            mReadyFrames = 0;
+            break;
+        }
         if (seen("Prologue.GameStart")) {
             mPhase = mScript == Script::Playable ? Phase::Move : Phase::Ready;
             mMoveFrame = 0;
@@ -398,7 +414,224 @@ bool Driver::gameplayReady(const Observation& observation) {
     return mReadyFrames >= kReadyFrames;
 }
 
+bool Driver::galaxy(const Observation& observation, Step& step) {
+    if (mGalaxyPhase == GalaxyPhase::Complete) return true;
+    const Vec pos = position(observation);
+    auto next = [&](GalaxyPhase phase, const char* label) {
+        steer({}, step);
+        mGalaxyPhase = phase;
+        mGalaxyFrames = mReadyFrames = mAimFrames = mAimMissing = mPointingFrames = 0;
+        note(std::string("galaxy route: ") + label);
+    };
+    if (++mGalaxyFrames > (mGalaxyPhase == GalaxyPhase::Observatory ? 7200u : 3600u)) {
+        finish(Result::Fail, "galaxy route timed out in step " + std::to_string(static_cast<int>(mGalaxyPhase)) +
+               " at " + text(pos), step);
+        return false;
+    }
+    if (observation.playerValid && observation.playerDead) {
+        finish(Result::Fail, "Mario died on galaxy route at " + text(pos), step);
+        return false;
+    }
+    const bool missionLoading = mGalaxyPhase == GalaxyPhase::Scenario || mGalaxyPhase == GalaxyPhase::Mission;
+    if (!observation.stage.empty() && observation.stage != "AstroGalaxy" && observation.stage != "AstroDome" &&
+        !(missionLoading && observation.stage == "EggStarGalaxy")) {
+        finish(Result::Fail, "unexpected galaxy route stage " + observation.stage, step);
+        return false;
+    }
+    if (observation.stage == "AstroGalaxy" && mGalaxyPhase != GalaxyPhase::Observatory) {
+        finish(Result::Fail, "returned to observatory before Good Egg mission", step);
+        return false;
+    }
+    if (mGalaxyPhase == GalaxyPhase::Observatory && observation.stage == "AstroDome") {
+        if (mSignForward == 0.0f) {
+            finish(Result::Fail, "entered dome before observatory route calibration", step);
+            return false;
+        }
+        next(GalaxyPhase::Dome, "Terrace entered");
+    }
+    const bool observatoryReady = observation.scene == "Game" && observation.sceneReady && observation.playerValid &&
+                                  !observation.demoActive && observation.pausePermitted && !observation.talkActive;
+    if (mGalaxyPhase == GalaxyPhase::Observatory && !observatoryReady && mSignForward == 0.0f) {
+        if (mReadyFrames >= 60) note("observatory calibration interrupted; waiting for gameplay again");
+        mReadyFrames = 0;
+    }
+    for (const auto& target : observation.targets) {
+        if (target.id == "Talk.Advance" && (target.flags & kTargetSelectable)) {
+            steer({}, step);
+            mReadyFrames = 0;
+            if (mFrame >= mGalaxyTapAfter) {
+                note("tap A: visible dialogue page");
+                tap(Button::A, kTapFrames, step);
+                mGalaxyTapAfter = mFrame + 45;
+            }
+            return false;
+        }
+    }
+    if (observation.talkActive) {
+        mReadyFrames = 0;
+        steer({}, step);
+        return false;
+    }
+    switch (mGalaxyPhase) {
+    case GalaxyPhase::Observatory: {
+        // Scene initialization can finish while the opening camera still stops
+        // player movement. Pause permission requires GameSceneAction and no wipe.
+        if (!observatoryReady) {
+            steer({}, step);
+            if (mGalaxyFrames % 120 == 0) {
+                note("observatory waiting for control at " + text(pos) + ", player " +
+                     std::to_string(observation.playerValid) + ", demo " + std::to_string(observation.demoActive) +
+                     ", pause " + std::to_string(observation.pausePermitted));
+            }
+            return false;
+        }
+        const Vec u = up(observation);
+        const Vec right = across(Vec{observation.camXx, observation.camXy, observation.camXz}, u);
+        const Vec forward = across(Vec{observation.camZx, observation.camZy, observation.camZz}, u);
+        if (!std::isfinite(length(pos)) || !std::isfinite(length(right)) || !std::isfinite(length(forward)) ||
+            length(Vec{observation.gravityX, observation.gravityY, observation.gravityZ}) < kMinimumAxis ||
+            u.y < kMinimumUpY || length(right) < kMinimumAxis || length(forward) < kMinimumAxis) {
+            finish(Result::Fail, "invalid position, gravity or camera on observatory route", step);
+            return false;
+        }
+        if (mSignForward == 0.0f) {
+            ++mReadyFrames;
+            if (mReadyFrames == 60 || mReadyFrames == 80 || mReadyFrames == 100) {
+                note("observatory calibration " + std::string(mReadyFrames == 60 ? "start forward" :
+                     mReadyFrames == 80 ? "end forward/start right" : "end right") + " at " + text(pos) +
+                     ", grounded " + std::to_string(observation.playerOnGround) +
+                     ", demo " + std::to_string(observation.demoActive) +
+                     ", pause " + std::to_string(observation.pausePermitted) +
+                     ", pad operating " + std::to_string(observation.padOperating));
+            }
+            if (mReadyFrames == 60 || mReadyFrames == 80) {
+                if (mReadyFrames == 80) {
+                    const Vec delta = sub(pos, Vec{mStartX, mStartY, mStartZ});
+                    if (length(delta) < kCalibrateMinimum) {
+                        finish(Result::Fail, "observatory forward calibration did not move", step);
+                        return false;
+                    }
+                    mForwardX = dot(delta, forward) >= 0 ? 1.0f : -1.0f;
+                }
+                mStartX = pos.x; mStartY = pos.y; mStartZ = pos.z;
+                steer(mReadyFrames == 60 ? StickKeys{true, false, false, false} : StickKeys{false, false, false, true}, step);
+            } else if (mReadyFrames == 100) {
+                const Vec delta = sub(pos, Vec{mStartX, mStartY, mStartZ});
+                if (length(delta) < kCalibrateMinimum) {
+                    finish(Result::Fail, "observatory right calibration did not move", step);
+                    return false;
+                }
+                mSignForward = mForwardX;
+                mSignRight = dot(delta, right) >= 0 ? 1.0f : -1.0f;
+                steer({}, step);
+                mBestDistance = 1e30f;
+            }
+            return false;
+        }
+        // Approach coordinates follow the observatory ground to the Terrace trigger.
+        static const Waypoint route[] = {{2400, -3700}, {2400, -2000}, {2900, -2000}, {2900, -1600},
+                                        {3000, -1500}, {3200, -1500}, {3200, -300}, {3200, 1000},
+                                        {2900, 1150}, {2634, 1322}};
+        constexpr unsigned lastWaypoint = sizeof(route) / sizeof(route[0]) - 1;
+        const auto& target = route[mWaypoint];
+        const Vec delta = across(Vec{target.x - pos.x, 0, target.z - pos.z}, u);
+        const float distance = length(delta);
+        if (mGalaxyFrames % 120 == 0) {
+            note("observatory waypoint " + std::to_string(mWaypoint) + ": " + std::to_string(distance) +
+                 " units away at " + text(pos));
+        }
+        if (distance < (mWaypoint == lastWaypoint ? 45.0f : 60.0f)) {
+            steer({}, step);
+            if (mWaypoint < lastWaypoint) {
+                ++mWaypoint; mBestDistance = 1e30f; mStuckFrames = mRecoveries = 0;
+                note("observatory waypoint " + std::to_string(mWaypoint) + " at " + text(pos));
+            }
+            return false;
+        }
+        if (distance < mBestDistance - 30) {
+            mBestDistance = distance; mStuckFrames = 0;
+        } else if (++mStuckFrames >= 180) {
+            mStuckFrames = 0;
+            if (++mRecoveries > 3) {
+                finish(Result::Fail, "observatory route stuck at " + text(pos) + " waypoint " + std::to_string(mWaypoint), step);
+                return false;
+            }
+            tap(Button::A, kTapFrames, step);
+        }
+        steer(stickKeysFor(dot(delta, normalized(right)) * mSignRight,
+                           dot(delta, normalized(forward)) * mSignForward), step);
+        break;
+    }
+    case GalaxyPhase::Dome:
+        if (observation.sceneReady && observation.scenario != 1) {
+            finish(Result::Fail, "entered a dome other than Terrace", step);
+        } else if (gameplayReady(observation)) {
+            next(GalaxyPhase::BlueStar, "aiming at Blue Star");
+        }
+        break;
+    case GalaxyPhase::BlueStar:
+        if (aimAndPress(observation, "Dome.BlueStar", Slot::Any, step))
+            next(GalaxyPhase::Galaxy, "selecting Good Egg Galaxy");
+        break;
+    case GalaxyPhase::Galaxy:
+        if (std::any_of(observation.targets.begin(), observation.targets.end(), [](const Observation::Target& target) {
+                return target.id == "Galaxy.UnlockEggStarGalaxy" && (target.flags & kTargetSelectable);
+            })) {
+            if (aimAndPress(observation, "Galaxy.UnlockEggStarGalaxy", Slot::Any, step))
+                next(GalaxyPhase::Reveal, "waiting for Good Egg reveal");
+            break;
+        }
+        if (aimAndPress(observation, "Galaxy.EggStarGalaxy", Slot::Any, step))
+            next(GalaxyPhase::Confirm, "confirming Good Egg Galaxy");
+        break;
+    case GalaxyPhase::Reveal:
+        // Open state alone is insufficient: the observer publishes this target
+        // only once the reveal has returned to Wait and pointing is valid.
+        if (std::any_of(observation.targets.begin(), observation.targets.end(), [](const Observation::Target& target) {
+                return target.id == "Galaxy.EggStarGalaxy" && (target.flags & kTargetSelectable);
+            })) {
+            next(GalaxyPhase::Galaxy, "Good Egg revealed; selecting galaxy");
+        } else if (mGalaxyFrames >= kTargetMissingLimit) {
+            finish(Result::Fail, "Good Egg reveal did not show selectable Galaxy.EggStarGalaxy within " +
+                   std::to_string(kTargetMissingLimit) + " frames", step);
+        }
+        break;
+    case GalaxyPhase::Confirm:
+        if (aimAndPress(observation, "Galaxy.Start", Slot::Any, step))
+            next(GalaxyPhase::Scenario, "selecting first mission");
+        break;
+    case GalaxyPhase::Scenario:
+        if (aimAndPress(observation, "Scenario.First", Slot::Any, step))
+            next(GalaxyPhase::Mission, "waiting for Good Egg mission 1");
+        break;
+    case GalaxyPhase::Mission:
+        if (observation.stage != "EggStarGalaxy" || observation.scene != "Game" || !observation.sceneReady)
+            mReadyFrames = 0;
+        if (observation.stage == "EggStarGalaxy" && observation.scene == "Game" && observation.sceneReady) {
+            if (observation.scenario != 1) {
+                finish(Result::Fail, "Good Egg loaded the wrong mission", step);
+            } else if (gameplayReady(observation)) {
+                next(GalaxyPhase::Complete, "Good Egg mission 1 ready; checking gameplay");
+                mPhaseFrames = 0;
+                return true;
+            }
+        }
+        break;
+    case GalaxyPhase::Complete: return true;
+    }
+    return false;
+}
+
 void Driver::gameplay(const Observation& observation, Step& step) {
+    if (mScript == Script::Galaxy && mGalaxyPhase == GalaxyPhase::Complete &&
+        (observation.scene != "Game" || observation.stage != "EggStarGalaxy" || observation.scenario != 1)) {
+        finish(Result::Fail, "left Good Egg mission 1 during gameplay checks", step);
+        return;
+    }
+    if (mScript == Script::Galaxy && observation.playerValid && observation.playerDead) {
+        finish(Result::Fail, "Mario died during Good Egg gameplay checks", step);
+        return;
+    }
     // Waiting for gameplay checks the player itself. The story checks him in
     // story(): needed while walking, not during the movies and stage load
     // (after a movie's start milestone is handled).
@@ -421,6 +654,9 @@ void Driver::gameplay(const Observation& observation, Step& step) {
     };
     switch (mPhase) {
     case Phase::Ready:
+        if (mScript == Script::Galaxy && !galaxy(observation, step)) {
+            break;
+        }
         if (gameplayReady(observation) || (mReadyFrames >= kReadyFrames)) {
             note("gameplay ready at " + text(pos) + (observation.playerOnGround ? ", on the ground" : ", in the air"));
             setStart();
@@ -589,7 +825,7 @@ void Driver::gameplay(const Observation& observation, Step& step) {
                 finish(Result::Fail, "Mario did not move after resuming (" + std::to_string(distance) + " units)", step);
             } else {
                 finish(Result::Pass,
-                       std::string(mScript == Script::Reload ? "reloaded save: " : "") +
+                       std::string(mScript == Script::Galaxy ? "observatory, Terrace, Good Egg mission 1: " : mScript == Script::Reload ? "reloaded save: " : "") +
                            "idle, jump, opposite moves, pause and resume all checked",
                        step);
             }
@@ -906,6 +1142,19 @@ const char* Driver::phase() const {
     case Phase::Move:
         return "moving Mario";
     case Phase::Ready:
+        if (mScript == Script::Galaxy) {
+            switch (mGalaxyPhase) {
+            case GalaxyPhase::Observatory: return "walking to Terrace";
+            case GalaxyPhase::Dome: return "waiting for Terrace";
+            case GalaxyPhase::BlueStar: return "pointing at Blue Star";
+            case GalaxyPhase::Galaxy: return "selecting Good Egg Galaxy";
+            case GalaxyPhase::Reveal: return "waiting for Good Egg reveal";
+            case GalaxyPhase::Confirm: return "confirming Good Egg Galaxy";
+            case GalaxyPhase::Scenario: return "selecting Good Egg mission 1";
+            case GalaxyPhase::Mission: return "loading Good Egg mission 1";
+            case GalaxyPhase::Complete: break;
+            }
+        }
         return "waiting for gameplay";
     case Phase::Idle:
         return "idling";
@@ -1280,8 +1529,75 @@ std::atomic<const char*> gPhase{"before the first frame"};
 std::atomic<long long> gQuitAt{0};
 std::atomic<bool> gQuitWithSave{false};
 
+std::mutex gHangReportLock;
+void (*gHangDump)(const char* reason) = nullptr;
+std::string gHangSampleDirectory;
+
 long long nowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+}
+
+// Runs /usr/bin/sample on this process (all threads' stacks) into a file;
+// waits for it, killing it if it takes far longer than asked.
+void sampleProcess(const std::string& directory) {
+    const char* enabled = std::getenv("PETARI_HANG_SAMPLE");
+    if (enabled != nullptr && enabled[0] == '0') {
+        return;
+    }
+    std::string dir = directory;
+    if (dir.empty()) {
+        const char* tmp = std::getenv("TMPDIR");
+        dir = tmp != nullptr && tmp[0] != '\0' ? tmp : "/tmp";
+    }
+    if (dir.back() != '/') {
+        dir += '/';
+    }
+    const std::string pid = std::to_string(::getpid());
+    const std::string file = dir + "petari-hang-" + pid + ".sample.txt";
+    const char* argv[] = {"/usr/bin/sample", pid.c_str(), "3", "-mayDie", "-file", file.c_str(), nullptr};
+    pid_t child = 0;
+    if (posix_spawn(&child, argv[0], nullptr, nullptr, const_cast<char* const*>(argv), environ) != 0) {
+        std::fprintf(stderr, "PETARI SMOKE HANG: could not run /usr/bin/sample\n");
+        return;
+    }
+    std::fprintf(stderr, "PETARI SMOKE HANG: sampling every thread for 3 s into %s\n", file.c_str());
+    std::fflush(stderr);
+    for (int waited = 0;; waited += 100) {
+        int status = 0;
+        const pid_t done = ::waitpid(child, &status, WNOHANG);
+        if (done == child || done < 0) {
+            break;
+        }
+        if (waited >= 30000) {
+            ::kill(child, SIGKILL);
+            ::waitpid(child, &status, 0);
+            std::fprintf(stderr, "PETARI SMOKE HANG: sample did not finish in 30 s\n");
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+[[noreturn]] void exitAfterHangReport(int status, const char* reason) {
+    // The report reads a hung process; never let it keep the process alive.
+    std::thread([status] {
+        std::this_thread::sleep_for(std::chrono::seconds(60));
+        std::fprintf(stderr, "PETARI SMOKE HANG: report abandoned after 60 s\n");
+        std::_Exit(status);
+    }).detach();
+    void (*dump)(const char*);
+    std::string directory;
+    {
+        std::lock_guard<std::mutex> guard(gHangReportLock);
+        dump = gHangDump;
+        directory = gHangSampleDirectory;
+    }
+    sampleProcess(directory);
+    if (dump != nullptr) {
+        dump(reason);
+    }
+    std::fflush(stderr);
+    std::_Exit(status);
 }
 
 }  // namespace
@@ -1305,6 +1621,10 @@ bool enabledFromEnvironment(Script* script) {
     }
     if (std::strcmp(value, "reload") == 0) {
         *script = Script::Reload;
+        return true;
+    }
+    if (std::strcmp(value, "galaxy") == 0) {
+        *script = Script::Galaxy;
         return true;
     }
     if (std::strcmp(value, "story") == 0) {
@@ -1338,16 +1658,22 @@ void startWatchdog(unsigned stallSeconds, unsigned shutdownSeconds) {
                              "save-data sequence %s at the request)\n",
                              shutdownSeconds, gFrame.load(), gQuitWithSave.load() ? "active" : "idle");
                 std::fflush(stderr);
-                std::_Exit(125);
+                exitAfterHangReport(125, "smoke watchdog: no exit after the power button");
             }
             if (now - gLastBeat.load() > stall) {
                 std::fprintf(stderr, "PETARI SMOKE TIMEOUT: no frame for %u s (frame %lu, %s)\n", stallSeconds,
                              gFrame.load(), gPhase.load());
                 std::fflush(stderr);
-                std::_Exit(124);
+                exitAfterHangReport(124, "smoke watchdog: no frame reached the seam");
             }
         }
     }).detach();
+}
+
+void setHangReport(void (*dump)(const char* reason), const std::string& sampleDirectory) {
+    std::lock_guard<std::mutex> guard(gHangReportLock);
+    gHangDump = dump;
+    gHangSampleDirectory = sampleDirectory;
 }
 
 void heartbeat(unsigned long frame, const char* phase) {

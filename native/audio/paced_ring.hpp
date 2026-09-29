@@ -12,9 +12,21 @@
 // relative to its target level. That locks the long-run pull rate to the
 // device's consumption (its clock) rather than the host's, so rate drift
 // never accumulates. How much a tick may pull is bounded by real time
-// (Pacer): twice the audio time elapsed since the previous tick, with at most
-// 5 ms of credit. So late or coalesced ticks cannot starve the ring, and time
-// lost to a long producer stall is made up at 2x real time, never in a burst.
+// (Pacer), with at most 5 ms of credit, so late or coalesced ticks cannot
+// starve the ring and a stall is never made up in a burst.
+//
+// The bound is also the game's deadline. The DMA engine advances only as the
+// producer pulls, and JAudio2 must register the next block before the current
+// one (560 frames, 17.5 ms at 32 kHz) has been pulled through. A device that
+// takes large bursts leaves the ring short by a whole burst each time; refilled
+// at 2x, the engine alternated between double speed and a halt, so a block
+// could end 8.75 ms after it started and the game's audio thread, answering in
+// 9-16 ms, had blocks replayed (observatory-3, story-9 logs). The engine
+// therefore runs at most 5% fast (a block lasts at least 16.7 ms); only below
+// the low-water mark, where the next device burst would underrun, may it catch
+// up faster, at 1.25x (14 ms blocks). Not 2x: when the level is low because the
+// game was late (the engine waited for it), doubling the pace halves the
+// deadline of a game already behind, and it falls further behind.
 // Pulled audio is never discarded: the producer only pulls what fits.
 //
 // Single producer, single consumer.
@@ -55,6 +67,11 @@ public:
         const std::uint64_t wanted = mMinTarget + mLargestRequest.load(std::memory_order_relaxed);
         return std::min<std::uint64_t>(wanted, kCapacity - kHeadroom);
     }
+
+    // Below this level the next device burst would (nearly) underrun: the
+    // largest request plus 8 ms at 32 kHz.
+    static constexpr std::uint64_t kLowWaterMargin = 256;
+    std::uint64_t lowWater() const { return mLargestRequest.load(std::memory_order_relaxed) + kLowWaterMargin; }
 
     // Producer: frames to pull this tick, at most maxChunk.
     std::size_t wanted(std::size_t maxChunk) const {
@@ -119,26 +136,35 @@ private:
     std::atomic<std::uint64_t> mUnderrun{0};
 };
 
-// Real-time bound on catch-up: a tick may pull twice the audio time elapsed
-// since the previous tick, counting at most 5 ms of elapsed time.
+// Real-time bound on the pull rate: a tick may pull the audio time elapsed
+// since the previous tick (at most 5 ms of it) times kTrim, or times kCatchUp
+// while the ring is below its low-water mark. Fractions of a frame carry over
+// to the next tick, so the average speed is exact. Producer thread only.
 class Pacer {
 public:
     explicit Pacer(std::uint32_t rate) : mRate(rate) {}
     // elapsedSeconds: real time since the previous tick.
-    std::size_t allowance(double elapsedSeconds) const {
+    std::size_t allowance(double elapsedSeconds, const PacedRing& ring) {
         const double credited = std::min(std::max(elapsedSeconds, 0.0), kMaxCreditSeconds);
-        return std::max<std::size_t>(1, static_cast<std::size_t>(kCatchUp * mRate * credited));
+        const double speed = ring.level() < ring.lowWater() ? kCatchUp : kTrim;
+        const double frames = speed * mRate * credited + mCarry;
+        const std::size_t whole = static_cast<std::size_t>(frames);
+        mCarry = frames - static_cast<double>(whole);
+        return std::max<std::size_t>(1, whole);
     }
-    static constexpr double kCatchUp = 2.0;
+    static constexpr double kTrim = 1.05;
+    static constexpr double kCatchUp = 1.25;
     static constexpr double kMaxCreditSeconds = 0.005;
 
 private:
     std::uint32_t mRate;
+    double mCarry = 0.0;
 };
 
 // One producer tick: pulls what the ring wants, in pieces of at most quantum
-// frames (pull(out, frames) is Platform::Audio::pull in the sink). Returns the
-// frames pulled.
+// frames. pull(out, frames) is Platform::Audio::pull in the sink and returns
+// the frames it produced; fewer than asked means the DMA engine is waiting for
+// the game's next block, and the tick ends. Returns the frames pulled.
 template <class Pull>
 std::size_t produceTick(PacedRing& ring, std::size_t quantum, std::size_t maxChunk, Pull&& pull) {
     std::array<std::int16_t, 2 * 256> block;
@@ -146,9 +172,12 @@ std::size_t produceTick(PacedRing& ring, std::size_t quantum, std::size_t maxChu
     std::size_t wanted = ring.wanted(maxChunk);
     while (wanted > 0) {
         const std::size_t n = std::min({wanted, quantum, block.size() / 2});
-        pull(block.data(), n);
-        ring.write(block.data(), n);
-        total += n;
+        const std::size_t got = std::min<std::size_t>(pull(block.data(), n), n);
+        ring.write(block.data(), got);
+        total += got;
+        if (got < n) {
+            break;
+        }
         wanted -= n;
     }
     return total;

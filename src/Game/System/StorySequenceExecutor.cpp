@@ -21,6 +21,10 @@
 #include "Game/Util/StarPointerUtil.hpp"
 #include "Game/Util/StringUtil.hpp"
 #include <cstdio>
+#ifdef PETARI_NATIVE
+#include <petari/test_fixture.hpp>
+#include "Game/System/GameDataHolder.hpp"
+#endif
 
 namespace {
     enum {
@@ -1025,6 +1029,21 @@ void StorySequenceExecutor::decideNextStageForGalaxyOut(GalaxyMoveArgument* pMov
 }
 
 void StorySequenceExecutor::overwriteGalaxyNameAfterLoading(GalaxyMoveArgument* pMoveArgument) {
+#ifdef PETARI_NATIVE
+    if (PetariNative::TestFixture::observatory) {
+        // Match a post-tutorial reload on both snapshots, so "just acquired"
+        // checks do not trigger first-Grand-Star return demos during loading.
+        GameDataHolder* holders[] = {GameDataFunction::getCurrentGameDataHolder(),
+                                    GameDataFunction::getSceneStartGameDataHolder()};
+        for (GameDataHolder* holder : holders) {
+            holder->setPowerStar("HeavensDoorGalaxy", 1, true);
+            holder->followStoryEventByName("バトラー情報Ａ");
+            holder->onGalaxyScenarioFlagAlreadyVisited("HeavensDoorGalaxy", 1);
+        }
+        std::fprintf(stderr, "PETARI FIXTURE: tutorial Grand Star and observatory introduction set; Good Egg progress unchanged\n");
+    }
+#endif
+
     if (GameDataFunction::hasGrandStar(1)) {
         setNextStageToAstroGalaxy(pMoveArgument);
     } else if (GameDataFunction::isPassedStoryEvent("ピーチ城浮上後") || !GameDataFunction::isDataMario()) {

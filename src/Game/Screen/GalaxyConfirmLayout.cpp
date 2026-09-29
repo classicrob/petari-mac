@@ -52,6 +52,9 @@ void GalaxyConfirmLayout::control() {
 }
 
 void GalaxyConfirmLayout::exeSelecting() {
+#ifdef PETARI_NATIVE
+    mPaneCtrl->publishUiTarget("Galaxy.Start", 0);
+#endif
     if (mBackButton->_24) {
         setNerve(GET_NERVE(GalaxyConfirmLayout, GalaxyConfirmLayoutNrvSelectedBackButton));
     } else {

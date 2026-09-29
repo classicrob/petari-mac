@@ -24,6 +24,7 @@
 // is not executed on. The default thread has no game stack; its stackBase and
 // stackEnd are null.
 
+#include <cxxabi.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/thread_act.h>
@@ -46,6 +47,7 @@
 #include "os_internal.hpp"
 #include "os_sdk_private.h"
 #include "petari/host_allocation.hpp"
+#include "petari/platform/diagnostics.hpp"
 #include "petari/platform/os_host.hpp"
 
 namespace PetariNative::Platform::OS {
@@ -69,6 +71,7 @@ struct HostThread {
     std::atomic<std::uint64_t> nestedDisables{0};  // ... that found interrupts already disabled
     std::condition_variable cv;
     bool terminated = false;
+    bool hostBlocking = false;  // interrupt lock; for hang reports
     void* (*func)(void*) = nullptr;
     void* param = nullptr;
 };
@@ -88,6 +91,8 @@ bool gPreemptPending;
 // dispatch, so a higher-priority thread readied meanwhile may take the baton
 // from it directly (see interruptReschedule).
 bool gCurrentRunning;
+// OS threads between petari_os_begin_host_blocking and _end (interrupt lock).
+int gHostBlockingThreads;
 
 // Host QoS inheritance for the baton holder. While a strictly higher-priority
 // OS thread is ready and waits for the running holder to reach its next
@@ -458,6 +463,7 @@ OSThread* popHighestReady() {
         tHost.reset();
     }
     tBound = nullptr;
+    setInterruptOwner(false);
     interruptMutex().unlock();
     pthread_exit(nullptr);
 }
@@ -670,12 +676,14 @@ void closeEpisode() {
     }
 }
 
-std::string describe(std::uint64_t address) {
+std::string describe(std::uint64_t address, bool demangle = false) {
     Dl_info info{};
     if (address != 0 && dladdr(reinterpret_cast<void*>(address), &info) && info.dli_sname != nullptr) {
+        char* readable = demangle ? abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, nullptr) : nullptr;
         char buffer[512];
-        std::snprintf(buffer, sizeof(buffer), "%s+%llu", info.dli_sname,
+        std::snprintf(buffer, sizeof(buffer), "%s+%llu", readable != nullptr ? readable : info.dli_sname,
                       static_cast<unsigned long long>(address - reinterpret_cast<std::uint64_t>(info.dli_saddr)));
+        std::free(readable);
         return buffer;
     }
     char buffer[32];
@@ -689,8 +697,8 @@ std::string describe(std::uint64_t address) {
 // synchronisation, so it would report these deliberate reads of another
 // thread's (frozen) stack as races.
 __attribute__((no_sanitize("thread"))) void walkSuspendedStack(std::uintptr_t fp, std::uintptr_t low, std::uintptr_t high,
-                                                                std::uint64_t (&sample)[12]) {
-    for (int i = 2; i < 12 && low != 0; ++i) {
+                                                                std::uint64_t* sample, int size) {
+    for (int i = 2; i < size && low != 0; ++i) {
         if (fp < low || fp + 16 > high || (fp & 7) != 0) {
             break;
         }
@@ -743,7 +751,7 @@ void* batonReporter(void*) {
                              KERN_SUCCESS) {
                 sample[0] = arm_thread_state64_get_pc(state);
                 sample[1] = arm_thread_state64_get_lr(state);
-                walkSuspendedStack(arm_thread_state64_get_fp(state), snapshot.stackLow, snapshot.stackHigh, sample);
+                walkSuspendedStack(arm_thread_state64_get_fp(state), snapshot.stackLow, snapshot.stackHigh, sample, 12);
             } else {
                 valid = false;
             }
@@ -876,6 +884,178 @@ HolderOverrideStats holderOverrideStats() {
             gOverrideTarget, static_cast<int>(deferredOverrides().size())};
 }
 
+bool cpuQuiescent() {
+    return gCurrent.load(std::memory_order_relaxed) == nullptr && RunQueueBits == 0 && gHostBlockingThreads == 0;
+}
+
+std::string describeAddress(std::uint64_t address) {
+    return describe(address, true);
+}
+
+namespace {
+
+const char* osStateName(u16 state) {
+    switch (state) {
+    case kStateReady: return "ready";
+    case kStateRunning: return "running";
+    case kStateWaiting: return "waiting";
+    case kStateMoribund: return "moribund";
+    case 0: return "terminated";
+    default: return "?";
+    }
+}
+
+struct ThreadRecord {
+    OSThread* thread = nullptr;
+    u16 state = 0;
+    OSPriority priority = 0, base = 0;
+    s32 suspend = 0;
+    OSThreadQueue* queue = nullptr;
+    OSMutex* mutex = nullptr;
+    OSThread* mutexOwner = nullptr;
+    std::uint64_t entry = 0;
+    bool known = false, hostBlocking = false, self = false;
+    mach_port_t port = MACH_PORT_NULL;
+    std::uintptr_t stackLow = 0, stackHigh = 0;
+    RunStateSample run;
+    double cpuMs = -1;
+    std::uint64_t frames[24] = {};
+};
+
+bool lockInterruptsWithin(std::chrono::milliseconds limit) {
+    const auto end = std::chrono::steady_clock::now() + limit;
+    while (!interruptMutex().try_lock()) {
+        if (std::chrono::steady_clock::now() >= end) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+std::string describeHostThread(std::uintptr_t id) {
+    if (id == 0) {
+        return "none";
+    }
+    for (const auto& [thread, host] : hosts()) {
+        if (reinterpret_cast<std::uintptr_t>(host->pthread) == id) {
+            char buffer[64];
+            std::snprintf(buffer, sizeof(buffer), "OS thread %p", static_cast<void*>(thread));
+            return buffer;
+        }
+    }
+    char name[64] = {};
+    pthread_getname_np(reinterpret_cast<pthread_t>(id), name, sizeof(name));
+    char buffer[128];
+    std::snprintf(buffer, sizeof(buffer), "host thread %#llx \"%s\"", static_cast<unsigned long long>(id), name);
+    return buffer;
+}
+
+}  // namespace
+
+// The emulated CPU's state for a hang report: who holds the baton, what every
+// OS thread waits for, and where its host thread actually is. Stacks are
+// frame-pointer samples of briefly suspended threads (no allocation, lock or
+// dladdr while any thread is suspended).
+void dumpThreads(std::FILE* out) {
+    PetariNative::HostAllocationScope hostAllocations;
+    std::vector<ThreadRecord> records;
+    records.reserve(64);
+    const bool held = interruptsDisabled();
+    const bool locked = held || lockInterruptsWithin(std::chrono::milliseconds(2000));
+    if (!locked) {
+        std::fprintf(out,
+                     "[hang] the OS interrupt lock stayed unavailable for 2 s (holder: %s); scheduler state below is "
+                     "read without it\n",
+                     describeHostThread(interruptOwner()).c_str());
+    }
+    OSThread* current = gCurrent.load(std::memory_order_acquire);
+    std::fprintf(out,
+                 "[hang] OS CPU: baton holder %p (%s), run-queue priorities %#010x, scheduler disabled %d, preemption "
+                 "pending %d, host-blocking threads %d, interrupt lock holder %s\n",
+                 static_cast<void*>(current),
+                 current == nullptr ? "idle" : gCurrentRunning ? "executing" : "dispatched, not yet woken",
+                 static_cast<unsigned>(RunQueueBits), static_cast<int>(Reschedule), gPreemptPending ? 1 : 0,
+                 gHostBlockingThreads, describeHostThread(interruptOwner()).c_str());
+    const mach_port_t selfPort = pthread_mach_thread_np(pthread_self());
+    int count = 0;
+    for (OSThread* t = __OSActiveThreadQueue.head; t != nullptr && count < 64; t = t->linkActive.next, ++count) {
+        ThreadRecord r;
+        r.thread = t;
+        r.state = t->state;
+        r.priority = t->priority;
+        r.base = t->base;
+        r.suspend = t->suspend;
+        r.queue = t->queue;
+        r.mutex = t->mutex;
+        r.mutexOwner = t->mutex != nullptr ? t->mutex->thread : nullptr;
+        auto found = hosts().find(t);
+        if (found != hosts().end()) {
+            const HostThread& host = *found->second;
+            r.known = true;
+            r.entry = reinterpret_cast<std::uint64_t>(host.func);
+            r.hostBlocking = host.hostBlocking;
+            r.port = host.machThread;
+            r.stackLow = host.stackLow;
+            r.stackHigh = host.stackHigh;
+            r.self = host.machThread == selfPort;
+        }
+        records.push_back(r);
+    }
+    for (ThreadRecord& r : records) {
+        if (r.port == MACH_PORT_NULL) {
+            continue;
+        }
+        r.run = threadRunState(r.port);
+        r.cpuMs = threadCpuMs(r.port);
+        if (r.self || thread_suspend(r.port) != KERN_SUCCESS) {
+            continue;
+        }
+        arm_thread_state64_t state;
+        mach_msg_type_number_t stateCount = ARM_THREAD_STATE64_COUNT;
+        if (thread_get_state(r.port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &stateCount) == KERN_SUCCESS) {
+            r.frames[0] = arm_thread_state64_get_pc(state);
+            r.frames[1] = arm_thread_state64_get_lr(state);
+            walkSuspendedStack(arm_thread_state64_get_fp(state), r.stackLow, r.stackHigh, r.frames, 24);
+        }
+        thread_resume(r.port);
+    }
+    for (const ThreadRecord& r : records) {
+        std::fprintf(out, "[hang]   OS thread %p%s: %s, priority %d (base %d)", static_cast<void*>(r.thread),
+                     r.thread == current ? " [holds the CPU]" : "", r.hostBlocking ? "host work (CPU released)" : osStateName(r.state),
+                     static_cast<int>(r.priority), static_cast<int>(r.base));
+        if (r.suspend > 0) {
+            std::fprintf(out, ", suspended %d", static_cast<int>(r.suspend));
+        }
+        if (r.state == kStateWaiting && !r.hostBlocking) {
+            std::fprintf(out, ", on queue %p", static_cast<void*>(r.queue));
+        }
+        if (r.mutex != nullptr) {
+            std::fprintf(out, ", wants OSMutex %p owned by %p", static_cast<void*>(r.mutex), static_cast<void*>(r.mutexOwner));
+        }
+        if (!r.known) {
+            std::fprintf(out, ", no host thread\n");
+            continue;
+        }
+        std::fprintf(out, ", entry %s; host %s, %.1f ms CPU\n", r.entry != 0 ? describe(r.entry, true).c_str() : "(default thread)",
+                     r.run.state >= 0 ? runStateName(r.run.state) : "unknown", r.cpuMs);
+        if (r.frames[0] != 0) {
+            std::fprintf(out, "[hang]     at %s", describe(r.frames[0], true).c_str());
+            for (int i = 1; i < 24 && r.frames[i] != 0; ++i) {
+                std::fprintf(out, " <- %s", describe(r.frames[i], true).c_str());
+            }
+            std::fputc('\n', out);
+        } else if (r.self) {
+            std::fprintf(out, "[hang]     (the reporting thread)\n");
+        }
+    }
+    dumpAlarms(out);
+    if (locked && !held) {
+        interruptMutex().unlock();
+    }
+    std::fflush(out);
+}
+
 OSThread* boundThread() {
     // A host-blocking OS thread has given up the CPU: platform waits must
     // treat it as a host thread.
@@ -906,6 +1086,10 @@ void onInterruptsEnabling() {
 }
 
 }  // namespace PetariNative::Platform::OS
+
+void PetariNative::Platform::Diagnostics::dumpOS(std::FILE* out) {
+    PetariNative::Platform::OS::dumpThreads(out);
+}
 
 using namespace PetariNative::Platform::OS;
 
@@ -1318,25 +1502,17 @@ OSPriority OSGetThreadPriority(OSThread* thread) {
     return thread->base;
 }
 
-void petari_os_begin_host_blocking(void) {
-    if (tHostBlocking) {
-        fatal("petari_os_begin_host_blocking() nested");
-    }
-    if (interruptsDisabled()) {
-        fatal("petari_os_begin_host_blocking() with interrupts disabled");
-    }
-    OSDisableInterrupts();
-    requireRunningOsThread("petari_os_begin_host_blocking");
+// Interrupt lock held; the caller is the OS thread holding the CPU. As
+// OSSleepThread on a private queue, but the host thread keeps running (host
+// work only) instead of parking.
+static void beginHostBlockingLocked() {
     OSThread* self = tBound;
-    if (gCurrent.load(std::memory_order_relaxed) != self) {
-        fatal("petari_os_begin_host_blocking() from an OS thread that does not hold the CPU");
-    }
-    // As OSSleepThread on a private queue, but the host thread keeps running
-    // (host work only) instead of parking.
     self->state = kStateWaiting;
     self->queue = &tHostBlockingQueue;
     enqueuePrio(&tHostBlockingQueue, self);
     tHostBlocking = true;
+    tHost->hostBlocking = true;
+    ++gHostBlockingThreads;
     RunQueueHint = FALSE;
     gPreemptPending = false;
     if (RunQueueBits == 0) {
@@ -1348,7 +1524,35 @@ void petari_os_begin_host_blocking(void) {
     } else {
         giveCpu(popHighestReady());
     }
+}
+
+void petari_os_begin_host_blocking(void) {
+    if (tHostBlocking) {
+        fatal("petari_os_begin_host_blocking() nested");
+    }
+    if (interruptsDisabled()) {
+        fatal("petari_os_begin_host_blocking() with interrupts disabled");
+    }
+    OSDisableInterrupts();
+    requireRunningOsThread("petari_os_begin_host_blocking");
+    if (gCurrent.load(std::memory_order_relaxed) != tBound) {
+        fatal("petari_os_begin_host_blocking() from an OS thread that does not hold the CPU");
+    }
+    beginHostBlockingLocked();
     OSEnableInterrupts();
+}
+
+int petari_os_try_begin_host_blocking(void) {
+    if (tBound == nullptr || tHostBlocking || interruptsDisabled()) {
+        return 0;
+    }
+    OSDisableInterrupts();
+    const bool can = Reschedule == 0 && gCurrent.load(std::memory_order_relaxed) == tBound;
+    if (can) {
+        beginHostBlockingLocked();
+    }
+    OSEnableInterrupts();
+    return can ? 1 : 0;
 }
 
 void petari_os_end_host_blocking(void) {
@@ -1370,6 +1574,8 @@ void petari_os_end_host_blocking(void) {
         setRun(self);
     }
     tHostBlocking = false;
+    tHost->hostBlocking = false;
+    --gHostBlockingThreads;
     interruptReschedule();
     waitForCpu(self);
     OSEnableInterrupts();

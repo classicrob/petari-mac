@@ -7,6 +7,8 @@
 // instructions), so the realtime thread never waits on OS locks. Interrupts
 // are counted and signalled with a dispatch semaphore to an AI interrupt
 // thread, which calls the game's DMA callback with interrupts disabled.
+// Unlike the hardware, a block the game is late to follow is waited for
+// (bounded) rather than replayed; see pull() in petari/platform/audio.hpp.
 
 #include <revolution/ai.h>
 #include <revolution/os.h>
@@ -54,6 +56,7 @@ struct Block {
     const std::int16_t* samples = nullptr;  // interleaved stereo
     std::uint32_t frames = 0;
     std::uint64_t generation = 0;           // AIInitDMA count when registered
+    bool answer = false;                    // registered after a DMA interrupt of this DMA session
 };
 
 RegisterLock gRegisterLock;
@@ -64,6 +67,51 @@ std::atomic<bool> gRunning{false};
 std::atomic<std::uint32_t> gRate{32000};
 std::uint64_t gGeneration = 0;                 // under gRegisterLock
 std::atomic<std::uint64_t> gReplayed{0};       // block starts without a new AIInitDMA
+
+// Elastic DMA (see pull() in petari/platform/audio.hpp). Pull thread only,
+// except the limit and the counters.
+std::atomic<std::int64_t> gWaitLimit{std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                         std::chrono::microseconds(PAudio::kDefaultRegistrationWaitUs))
+                                         .count()};  // steady_clock ticks
+bool gWaitArmed = false;                  // gPlaying may be waited for at its end
+std::int64_t gWaitStart = 0;              // when the current wait began, 0 if not waiting
+std::int64_t gBlockStart = 0;             // when gPlaying started
+bool gBlockEndNoted = false;              // its wall time was recorded
+std::atomic<std::uint64_t> gWaits{0}, gWaitTimeouts{0}, gDspHolds{0};
+std::atomic<std::int64_t> gWorstWait{0};
+std::atomic<std::int64_t> gMinBlock{0};   // 0: none since the last take
+constexpr std::uint32_t kMinTimedBlockFrames = 256;
+
+std::int64_t steadyNow() {
+    return std::chrono::steady_clock::now().time_since_epoch().count();
+}
+
+std::int64_t ticksFromMicroseconds(std::uint32_t us) {
+    return std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::microseconds(us)).count();
+}
+
+std::int64_t microsecondsFromTicks(std::int64_t ticks) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::duration(ticks)).count();
+}
+
+void lowerMin(std::atomic<std::int64_t>& least, std::int64_t value) {
+    std::int64_t current = least.load(std::memory_order_relaxed);
+    while ((current == 0 || value < current) && !least.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
+    }
+}
+
+void raiseMaxTicks(std::atomic<std::int64_t>& worst, std::int64_t value) {
+    std::int64_t current = worst.load(std::memory_order_relaxed);
+    while (value > current && !worst.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
+    }
+}
+
+void resetElastic() {
+    gWaitArmed = false;
+    gWaitStart = 0;
+    gBlockStart = 0;
+    gBlockEndNoted = false;
+}
 // Raise times of recent interrupts (steady_clock ticks), for the delivery
 // latency diagnostic. Indexed by raise count.
 constexpr std::uint32_t kRaiseStamps = 64;
@@ -153,19 +201,50 @@ std::size_t pull(std::int16_t* out, std::size_t frames) {
             std::memset(out + written * 2, 0, (frames - written) * 2 * sizeof(std::int16_t));
             gPlaying = Block{};
             gPosition = 0;
+            resetElastic();
             return frames;
         }
         if (gPlaying.samples == nullptr || gPosition >= gPlaying.frames) {
+            if (gPlaying.samples != nullptr && !gBlockEndNoted) {
+                // The block's last frame has been pulled: its wall time is
+                // the time the game had to register the next one.
+                gBlockEndNoted = true;
+                if (gBlockStart != 0 && gPlaying.frames >= kMinTimedBlockFrames) {
+                    lowerMin(gMinBlock, std::max<std::int64_t>(1, steadyNow() - gBlockStart));
+                }
+            }
             gRegisterLock.lock();
-            const std::uint64_t previous = gPlaying.samples != nullptr ? gPlaying.generation : 0;
-            gPlaying = gRegistered;
+            const Block next = gRegistered;
             gRegisterLock.unlock();
-            if (previous != 0 && gPlaying.generation == previous) {
+            const std::uint64_t previous = gPlaying.samples != nullptr ? gPlaying.generation : 0;
+            const bool replay = previous != 0 && next.generation == previous;
+            if (replay && gWaitArmed && gCallback.load(std::memory_order_acquire) != nullptr) {
+                const std::int64_t now = steadyNow();
+                if (gWaitStart == 0) {
+                    gWaitStart = now;
+                }
+                if (now - gWaitStart < gWaitLimit.load(std::memory_order_relaxed)) {
+                    return written;  // the engine waits for the game's registration
+                }
+                gWaitTimeouts.fetch_add(1, std::memory_order_relaxed);
+                gWaitStart = 0;
+            } else if (!replay && gWaitStart != 0) {
+                gWaits.fetch_add(1, std::memory_order_relaxed);
+                raiseMaxTicks(gWorstWait, steadyNow() - gWaitStart);
+                gWaitStart = 0;
+            }
+            gPlaying = next;
+            if (replay) {
                 // The hardware replays the block: the game did not register
                 // the next one in time (for JAudio2, a late audio thread).
                 gReplayed.fetch_add(1, std::memory_order_relaxed);
             }
+            // Only a block the game registered in answer to an interrupt is
+            // waited for; a replayed one (already timed out) is not.
+            gWaitArmed = !replay && gPlaying.answer;
             gPosition = 0;
+            gBlockStart = steadyNow();
+            gBlockEndNoted = false;
             if (gPlaying.samples == nullptr || gPlaying.frames == 0) {
                 std::memset(out + written * 2, 0, (frames - written) * 2 * sizeof(std::int16_t));
                 return frames;
@@ -193,6 +272,20 @@ std::size_t pull(std::int16_t* out, std::size_t frames) {
 void setSink(const Sink& sink) {
     OS::InterruptGuard guard;
     gSink = sink;
+}
+
+void setRegistrationWaitLimit(std::uint32_t microseconds) {
+    gWaitLimit.store(ticksFromMicroseconds(microseconds), std::memory_order_relaxed);
+}
+
+DmaStats takeDmaStats() {
+    DmaStats st;
+    st.waits = gWaits.exchange(0, std::memory_order_relaxed);
+    st.worstWaitUs = microsecondsFromTicks(gWorstWait.exchange(0, std::memory_order_relaxed));
+    st.waitTimeouts = gWaitTimeouts.exchange(0, std::memory_order_relaxed);
+    st.minBlockUs = microsecondsFromTicks(gMinBlock.exchange(0, std::memory_order_relaxed));
+    st.dspHolds = gDspHolds.exchange(0, std::memory_order_relaxed);
+    return st;
 }
 
 void setTimingDiagnostics(bool enabled) {
@@ -290,6 +383,7 @@ void shutdown() {
     gReplayed.store(0);
     gPlaying = Block{};
     gPosition = 0;
+    resetElastic();
     gCallback.store(nullptr);
     gRaised.store(0);
     gDelivered.store(0);
@@ -299,6 +393,11 @@ void shutdown() {
 }  // namespace PetariNative::Platform::Audio
 
 extern "C" {
+
+// JASDriver::readDspBuffer (PETARI_NATIVE): the DSP frame was not ready.
+void petari_audio_note_dsp_hold(void) {
+    gDspHolds.fetch_add(1, std::memory_order_relaxed);
+}
 
 void AIInit(u8*) {
     if (gInitialized.exchange(true)) {
@@ -322,10 +421,12 @@ void AIInitDMA(uintptr_t start, u32 length) {
         OSPanic(__FILE__, __LINE__, "AIInitDMA(): invalid block %p, %u bytes (stereo 16-bit frames required)", reinterpret_cast<void*>(start),
                 length);
     }
+    const bool answer = gRaised.load(std::memory_order_acquire) != 0;
     gRegisterLock.lock();
     gRegistered.samples = reinterpret_cast<const std::int16_t*>(start);
     gRegistered.frames = length / 4;
     gRegistered.generation = ++gGeneration;
+    gRegistered.answer = answer;
     gRegisterLock.unlock();
     if (Timing::enabled.load(std::memory_order_relaxed)) {
         // See audio_timing.hpp for how a registration maps to interrupts.

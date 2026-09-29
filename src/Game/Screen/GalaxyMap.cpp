@@ -85,7 +85,14 @@ void GalaxyMap::init(const JMapInfoIter& rIter) {
     kill();
 }
 
+#ifdef PETARI_NATIVE
+extern "C" void petari_gx_pipeline_stage_begin(const char* stage, const char* seed_db_path);
+#endif
+
 void GalaxyMap::appear() {
+#ifdef PETARI_NATIVE
+    petari_gx_pipeline_stage_begin("GalaxyMap", nullptr);
+#endif
     LayoutActor::appear();
 
     std::for_each(mDomeIcon.begin(), mDomeIcon.end(), std::mem_func(&LayoutActor::appear));

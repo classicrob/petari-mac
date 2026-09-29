@@ -1,0 +1,74 @@
+// CPU-only inspection of serialized GX configurations; does not initialize a GPU.
+#include "gx/gx.hpp"
+#include "gx/pipeline.hpp"
+#include "gfx/hash.hpp"
+#include <sqlite3.h>
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+struct Row {
+    unsigned long long key;
+    unsigned tev, indirect;
+    size_t bytes, lines;
+    double sourceMs;
+};
+
+int main(int argc, char** argv) {
+    if (argc < 2 || argc > 3) {
+        std::fprintf(stderr, "usage: petari_pipeline_cache_inspect CACHE.db [WGSL_OUTPUT_DIRECTORY]\n");
+        return 2;
+    }
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(argv[1], &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        std::fprintf(stderr, "Cannot open pipeline cache: %s\n", db ? sqlite3_errmsg(db) : "allocation failed");
+        if (db) sqlite3_close(db);
+        return 2;
+    }
+    sqlite3_stmt* statement = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT config FROM pipeline_cache WHERE type=1 AND config_version=?", -1,
+                          &statement, nullptr) != SQLITE_OK) {
+        std::fprintf(stderr, "%s\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return 2;
+    }
+    sqlite3_bind_int(statement, 1, aurora::gx::GXPipelineConfigVersion);
+    if (argc == 3) std::filesystem::create_directories(argv[2]);
+    std::vector<Row> rows;
+    unsigned invalid = 0;
+    int result;
+    while ((result = sqlite3_step(statement)) == SQLITE_ROW) {
+        aurora::gx::PipelineConfig config{};
+        if (sqlite3_column_bytes(statement, 0) != sizeof(config)) {
+            ++invalid;
+            continue;
+        }
+        std::memcpy(&config, sqlite3_column_blob(statement, 0), sizeof(config));
+        const auto key = aurora::xxh3_hash(config, static_cast<aurora::HashType>(aurora::gfx::ShaderType::GX));
+        const auto start = std::chrono::steady_clock::now();
+        const auto source = aurora::gx::build_shader_source(config.shaderConfig, aurora::gx::DstAlphaMode::None);
+        const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        rows.push_back({key, config.shaderConfig.tevStageCount, config.shaderConfig.numIndStages,
+                        source.size(), static_cast<size_t>(std::count(source.begin(), source.end(), '\n')), ms});
+        if (argc == 3) {
+            char name[40];
+            std::snprintf(name, sizeof(name), "%016llx.wgsl", static_cast<unsigned long long>(key));
+            std::ofstream out(std::filesystem::path(argv[2]) / name, std::ios::binary);
+            out << source;
+            if (!out) { std::fprintf(stderr, "Cannot write %s\n", name); ++invalid; }
+        }
+    }
+    sqlite3_finalize(statement);
+    sqlite3_close(db);
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.bytes > b.bytes; });
+    std::puts("config,wgsl_bytes,wgsl_lines,tev_stages,indirect_stages,source_ms");
+    for (const auto& row : rows)
+        std::printf("%016llx,%zu,%zu,%u,%u,%.3f\n", row.key, row.bytes, row.lines, row.tev, row.indirect, row.sourceMs);
+    std::fprintf(stderr, "Inspected %zu GX configs; invalid=%u; DstAlphaMode=None, no normal attachment. "
+                         "Source-generation durations are not Metal compile timings.\n", rows.size(), invalid);
+    return invalid || result != SQLITE_DONE ? 1 : 0;
+}

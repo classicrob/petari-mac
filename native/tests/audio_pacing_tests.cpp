@@ -5,12 +5,18 @@
 //    at +-1% of the nominal rate, producer stalls and jitter. Every pulled
 //    frame must reach the device in order (no drops), steady state must not
 //    underrun, and time lost to a stall must be made up at a bounded rate.
+//    In steady state every 560-frame DMA block must take at least ~16 ms of
+//    real time: that is the game's deadline for registering the next one
+//    (the previous 2x refill after each device burst cut it to ~8.75 ms).
 //    The previous wall-clock pacing is modelled too, and must fail the same
 //    scenario (test sensitivity).
 // 2. Real time, real AI: the production tick drives Platform::Audio::pull
 //    while an OS thread plays JAudio2's part (on each DMA interrupt, register
 //    the next of three DAC buffers). No block may be replayed because the game
 //    had no time to register the next one, and DMA interrupts must be spaced.
+//    A game that answers each interrupt 10 ms late (within the hardware's
+//    17.5 ms), or stalls 40 ms now and then, must not have blocks replayed:
+//    the DMA engine waits for it (elastic DMA) and the ring covers the gap.
 
 #include <revolution/ai.h>
 #include <revolution/os.h>
@@ -21,6 +27,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -36,11 +43,17 @@ namespace PAudio = PetariNative::Platform::Audio;
 namespace {
 
 int checks = 0;
+int failures = 0;
+// PACING_REPORT=1: report every failed check and fail at the end (to compare
+// all real-time scenarios between builds).
 void check(bool condition, const char* label) {
     ++checks;
     if (!condition) {
         std::fprintf(stderr, "FAIL: %s\n", label);
-        std::exit(1);
+        ++failures;
+        if (!std::getenv("PACING_REPORT")) {
+            std::exit(1);
+        }
     }
 }
 
@@ -58,24 +71,29 @@ struct SimResult {
     std::uint64_t delivered = 0;
     std::size_t maxPerTick = 0;
     double recoveryMs = -1;  // after the stall, until the level is back at target - burst
+    double minBlockMs = 1e9; // steady state: shortest real time to pull a 560-frame DMA block
 };
+
+constexpr std::uint64_t kDmaBlock = 560;  // JAudio2 frame: 7 subframes of 0x50
 
 // The frame counter is encoded in the samples: L = low 15 bits, R = high.
 struct Counter {
     std::uint64_t next = 1;
-    void operator()(std::int16_t* out, std::size_t frames) {
+    std::size_t operator()(std::int16_t* out, std::size_t frames) {
         for (std::size_t i = 0; i < frames; ++i, ++next) {
             out[i * 2] = static_cast<std::int16_t>(next & 0x7FFF);
             out[i * 2 + 1] = static_cast<std::int16_t>((next >> 15) & 0x7FFF);
         }
+        return frames;
     }
 };
 
 // wallClock = true models the previous producer: exactly one quantum per
 // tick, a full ring drops the pulled quantum, and a late tick resets the
-// schedule (the lost time is never made up).
+// schedule (the lost time is never made up). doubleRefill = true models the
+// previous level-driven pacer: 2x the elapsed time per tick whatever the level.
 SimResult simulate(double drift, std::size_t burst, double stallAtMs, double stallMs, bool wallClock, double seconds = 120,
-                   double tickMs = 1.0) {
+                   double tickMs = 1.0, bool doubleRefill = false) {
     Detail::PacedRing ring;
     ring.reset(kPrebuffer);
     Counter source;
@@ -86,8 +104,9 @@ SimResult simulate(double drift, std::size_t burst, double stallAtMs, double sta
     double nextDevice = burstMs;
     double nextProducer = 0;
     double lastTick = 0;
-    const Detail::Pacer pacer(kRate);
+    Detail::Pacer pacer(kRate);
     std::vector<std::int16_t> out(burst * 2);
+    double blockStartMs = -1;  // when the current DMA block's first frame was pulled
     std::vector<std::int16_t> block(kQuantum * 2);
     const double warmup = 500;
     bool stalled = false;
@@ -112,8 +131,23 @@ SimResult simulate(double drift, std::size_t burst, double stallAtMs, double sta
                     nextProducer = t;
                 }
             } else {
-                pulled = Detail::produceTick(ring, kQuantum, pacer.allowance((t - lastTick) / 1000.0), source);
+                const double elapsed = (t - lastTick) / 1000.0;
+                const std::size_t allowance =
+                    doubleRefill ? std::max<std::size_t>(1, static_cast<std::size_t>(2.0 * kRate * std::min(elapsed, 0.005)))
+                                 : pacer.allowance(elapsed, ring);
+                const std::uint64_t before = result.pulled;
+                pulled = Detail::produceTick(ring, kQuantum, allowance, source);
                 lastTick = t;
+                // DMA blocks are consecutive runs of 560 pulled frames. A
+                // block ends with the tick that pulls its last frame.
+                const std::uint64_t after = before + pulled;
+                const bool steady = t > 2000 && !(stallMs > 0 && t >= stallAtMs && t < stallAtMs + stallMs + 2000);
+                for (std::uint64_t boundary = (before / kDmaBlock + 1) * kDmaBlock; boundary <= after; boundary += kDmaBlock) {
+                    if (steady && blockStartMs >= 0) {
+                        result.minBlockMs = std::min(result.minBlockMs, t - blockStartMs);
+                    }
+                    blockStartMs = t;
+                }
                 nextProducer = std::max(nextProducer + tickMs, t);
             }
             result.pulled += pulled;
@@ -162,9 +196,15 @@ void testSimulatedDevice() {
         check(ring.target() == kPrebuffer + 4096, "the target covers the whole device burst, not the pieces");
     }
     for (double drift : {-0.01, 0.0, 0.01}) {
-        for (std::size_t burst : {256u, 512u, 1024u}) {
+        for (std::size_t burst : {256u, 512u, 744u, 1024u}) {
             const SimResult r = simulate(drift, burst, 0, 0, false);
+            if (drift == 0.0) {
+                std::printf("burst %zu: shortest DMA block %.2f ms\n", burst, r.minBlockMs);
+            }
             check(r.underrunAfterWarmup == 0, "no underrun in steady state at +-1% device drift");
+            // 560 frames at 1.05x take 16.7 ms; a 1 ms tick can end a block
+            // up to one tick early.
+            check(r.minBlockMs >= 15.5, "a DMA block lasts at least ~16 ms: the game keeps its deadline (no 2x refill)");
             check(r.outOfOrder == 0, "every pulled frame reaches the device, in order");
             check(r.maxPerTick <= kMaxChunk, "at most 2 ms of AI per 1 ms tick");
             // A loaded host wakes the producer every 4 ms instead of every 1:
@@ -183,6 +223,12 @@ void testSimulatedDevice() {
     check(stall.recoveryMs >= 0 && stall.recoveryMs < 1000, "the ring is back at its target within 1 s of a stall");
     check(stall.underrunAfterWarmup == 0, "no underrun after recovering from a stall");
     check(stall.outOfOrder == 0, "no audio dropped across the stall");
+
+    // Sensitivity: the previous pacer (2x refill after every device burst)
+    // halves the deadline in the same steady state.
+    const SimResult doubled = simulate(0.0, 744, 0, 0, false, 30, 1.0, true);
+    std::printf("2x refill (previous): shortest DMA block %.2f ms\n", doubled.minBlockMs);
+    check(doubled.minBlockMs < 10.0, "test sensitivity: the previous 2x refill ends blocks in under 10 ms");
 
     // The previous wall-clock producer in the same scenario: the lost time
     // is never made up and the fast device drains the ring.
@@ -203,6 +249,9 @@ OSMessage gMessages[16];
 std::atomic<int> gInterrupts{0};
 std::atomic<bool> gStop{false};
 std::atomic<int> gWorkMs{3};
+std::atomic<int> gAnswerMs{0};    // delay before each registration (a late audio thread)
+std::atomic<int> gLateEvery{0};   // every Nth interrupt, also...
+std::atomic<int> gLateMs{0};      // ...stall this long before registering
 std::atomic<double> gMaxTickGapMs{0};
 std::uint32_t gWorstDelivery = 0;
 std::vector<std::chrono::steady_clock::time_point> gStarts;
@@ -222,11 +271,20 @@ void* audioThread(void*) {
     // prepare the next one (fill it with its block number after gWorkMs of
     // "DSP" work). Interrupts that arrive meanwhile wait in the queue.
     std::uint32_t prepared = 1;
+    int answered = 0;
     while (!gStop.load()) {
         OSMessage m;
         OSReceiveMessage(&gQueue, &m, OS_MESSAGE_BLOCK);
         if (gStop.load()) {
             break;
+        }
+        // A late game: the host did not run this thread for a while.
+        int delayMs = gAnswerMs.load();
+        if (gLateEvery.load() > 0 && ++answered % gLateEvery.load() == 0) {
+            delayMs += gLateMs.load();
+        }
+        if (delayMs > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
         }
         AIInitDMA(reinterpret_cast<uintptr_t>(gDac[prepared % 3]), sizeof(gDac[0]));
         if (gRegisters.size() < gRegisters.capacity()) {
@@ -251,6 +309,9 @@ struct Scenario {
     bool burstCatchUp;     // sensitivity: pull 16x the elapsed time, with no credit cap
     int stallMs;           // host stall of the producer, 1.5 s in
     int workMs;            // the game's audio thread time per DMA interrupt
+    int answerMs = 0;      // the game registers each block this late
+    int lateEvery = 0;     // and every lateEvery-th one lateMs later still
+    int lateMs = 0;
 };
 
 struct RealResult {
@@ -262,6 +323,7 @@ struct RealResult {
     std::uint64_t underrun;
     std::uint64_t distinctBlocks;  // block numbers heard (the game really produced them)
     std::uint64_t queuedBlocks;    // pulled but still in the ring at the end
+    PAudio::DmaStats dma;          // elastic waits during the run
 };
 
 RealResult runRealAi(const Scenario& sc) {
@@ -272,6 +334,10 @@ RealResult runRealAi(const Scenario& sc) {
     gInterrupts = 0;
     gStop = false;
     gWorkMs = sc.workMs;
+    gAnswerMs = sc.answerMs;
+    gLateEvery = sc.lateEvery;
+    gLateMs = sc.lateMs;
+    PAudio::takeDmaStats();
     gMaxTickGapMs = 0;
     OSInitMessageQueue(&gQueue, gMessages, 16);
     std::fill(std::begin(gDac[0]), std::end(gDac[0]), 0);
@@ -297,7 +363,7 @@ RealResult runRealAi(const Scenario& sc) {
         using Clock = std::chrono::steady_clock;
         auto next = Clock::now();
         auto last = next;
-        const Detail::Pacer pacer(kRate);
+        Detail::Pacer pacer(kRate);
         int tick = 0;
         while (!stopProducer.load()) {
             if (++tick == 1500 && sc.stallMs > 0) {
@@ -310,23 +376,30 @@ RealResult runRealAi(const Scenario& sc) {
                 gMaxTickGapMs = elapsed * 1000;
             }
             // The production allowance, or an unbounded burst (sensitivity).
-            const std::size_t allowance = sc.burstCatchUp ? static_cast<std::size_t>(std::max(elapsed * kRate * 16, 1.0)) : pacer.allowance(elapsed);
-            Detail::produceTick(ring, kQuantum, allowance, [](std::int16_t* out, std::size_t frames) { PAudio::pull(out, frames); });
+            const std::size_t allowance = sc.burstCatchUp ? static_cast<std::size_t>(std::max(elapsed * kRate * 16, 1.0)) : pacer.allowance(elapsed, ring);
+            Detail::produceTick(ring, kQuantum, allowance, [](std::int16_t* out, std::size_t frames) { return PAudio::pull(out, frames); });
             next = std::max(next + std::chrono::milliseconds(1), Clock::now());
             std::this_thread::sleep_until(next);
         }
     });
 
-    // Device: 1024-frame bursts on its own clock, 0.5% fast. This (main, OS)
-    // thread does host work here, so it gives up the CPU as the app's frame
-    // seam does; otherwise the game's audio thread could never run.
+    // Device: 744-frame bursts (the SDL device's request in the app's logs)
+    // on its own clock, 0.5% fast. This (main, OS) thread does host work here,
+    // so it gives up the CPU as the app's frame seam does; otherwise the
+    // game's audio thread could never run.
+    constexpr int kDeviceBurst = 744;
     petari_os_begin_host_blocking();
-    std::vector<std::int16_t> out(1024 * 2);
+    std::vector<std::int16_t> out(kDeviceBurst * 2);
+    PAudio::DmaStats startup{};  // the first second's DMA counters
     std::vector<std::int16_t> heard;
     heard.reserve(kRate * 5 * 2);
     const auto start = std::chrono::steady_clock::now();
-    const double burstSeconds = 1024.0 / (kRate * 1.005);
+    const double burstSeconds = kDeviceBurst / (kRate * 1.005);
+    const int startupBursts = static_cast<int>(1.0 / burstSeconds);
     for (int n = 1; n <= static_cast<int>(4.0 / burstSeconds); ++n) {
+        if (n == startupBursts) {
+            startup = PAudio::takeDmaStats();  // the shortest block is then measured after start-up only
+        }
         std::this_thread::sleep_until(start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                                   std::chrono::duration<double>(n * burstSeconds)));
         const std::uint64_t before = ring.underrunFrames();
@@ -338,7 +411,7 @@ RealResult runRealAi(const Scenario& sc) {
             std::printf("  AI replay(s) by %.0f ms\n", n * burstSeconds * 1000);
             lastReplays = PAudio::replayedBlocks();
         }
-        ring.read(out.data(), 1024);
+        ring.read(out.data(), kDeviceBurst);
         if (ring.underrunFrames() != before) {
             std::printf("  underrun of %llu frames at device burst %d (%.0f ms)\n", static_cast<unsigned long long>(ring.underrunFrames() - before), n,
                         n * burstSeconds * 1000);
@@ -352,6 +425,10 @@ RealResult runRealAi(const Scenario& sc) {
     gWorstDelivery = PAudio::takeWorstInterruptLatencyMicroseconds();
     r.queuedBlocks = ring.level() / kBlockFrames + 2;
     r.replayedByAi = PAudio::replayedBlocks();
+    r.dma = PAudio::takeDmaStats();
+    r.dma.waits += startup.waits;
+    r.dma.waitTimeouts += startup.waitTimeouts;
+    r.dma.worstWaitUs = std::max(r.dma.worstWaitUs, startup.worstWaitUs);
     AIStopDMA();
     gStop = true;
     OSSendMessage(&gQueue, nullptr, OS_MESSAGE_NOBLOCK);
@@ -405,6 +482,8 @@ RealResult runRealAi(const Scenario& sc) {
     std::printf("real AI [%s]: %d DMA interrupts, %llu blocks heard, min spacing %.2f ms, replayed %llu heard / %llu by AI, %llu silent frames, %llu underrun frames\n",
                 sc.name, r.interrupts, static_cast<unsigned long long>(r.distinctBlocks), r.minGapMs, static_cast<unsigned long long>(r.replays), static_cast<unsigned long long>(r.replayedByAi),
                 static_cast<unsigned long long>(r.silentAfterStart), static_cast<unsigned long long>(r.underrun));
+    std::printf("  elastic DMA: %llu waits (worst %lld us), %llu timed out; shortest block after start-up %lld us\n", static_cast<unsigned long long>(r.dma.waits),
+                static_cast<long long>(r.dma.worstWaitUs), static_cast<unsigned long long>(r.dma.waitTimeouts), static_cast<long long>(r.dma.minBlockUs));
     return r;
 }
 
@@ -432,16 +511,35 @@ void testRealAi() {
     check(shortStall.minGapMs > 3.0, "DMA interrupts are paced, not consumed in bursts");
     check(shortStall.underrun == 0 && shortStall.silentAfterStart == 0, "no underrun with a 0.5% fast device and a 40 ms stall");
 
-    // Long stall (the device underruns meanwhile), then sustained 2x
-    // catch-up: blocks start every ~8.75 ms, and a game audio thread needing
-    // 6 ms per block still keeps up.
-    const RealResult longStall = runRealAi({"150 ms stall, 2x catch-up, 6 ms game work", false, 150, 6});
+    // Long stall (the device underruns meanwhile), then sustained 1.25x
+    // catch-up: blocks start every ~14 ms, and a game audio thread needing
+    // 6 ms per block keeps up.
+    const RealResult longStall = runRealAi({"150 ms stall, 1.25x catch-up, 6 ms game work", false, 150, 6});
     if (longStall.replayedByAi != 0) {
         std::printf("WARNING: %llu block replay(s) during 2x catch-up\n", static_cast<unsigned long long>(longStall.replayedByAi));
     }
     check(longStall.distinctBlocks + longStall.queuedBlocks >= static_cast<std::uint64_t>(longStall.interrupts), "the game's blocks were heard after a long stall");
-    check(longStall.replayedByAi <= kReplayBound, "2x catch-up stays within the replay bound (a 16x burst replays tens)");
+    check(longStall.replayedByAi <= kReplayBound, "catch-up stays within the replay bound (a 16x burst replays tens)");
     check(longStall.minGapMs > 3.0, "catch-up keeps DMA interrupts apart (a 16x burst would put them ~1 ms apart)");
+
+    // A game answering every interrupt 10 ms late: on time by the hardware's
+    // 17.5 ms, so nothing may be replayed. (The previous 2x refill ended
+    // blocks after 8.75 ms and replayed many.)
+    const RealResult late = runRealAi({"game answers 10 ms late", false, 0, 1, 10});
+    check(late.replayedByAi <= kReplayBound && late.replays <= kReplayBound, "a game answering within the hardware's deadline has no blocks replayed");
+    check(late.underrun == 0 && late.silentAfterStart == 0, "and no underrun");
+    // 16.7 ms at the 1.05x trim; 14 ms if a late (host-delayed) answer let
+    // the ring dip below its low-water mark (1.25x catch-up); never ~8.75 ms.
+    check(late.dma.minBlockUs >= 13000, "DMA blocks last at least 13 ms of real time (no 2x pace)");
+
+    // A game whose audio thread stalls 40 ms on every 40th interrupt (beyond
+    // the hardware deadline): the engine waits for it instead of replaying,
+    // and the ring covers the waits.
+    const RealResult stalls = runRealAi({"game stalls 40 ms every 40th interrupt", false, 0, 1, 2, 40, 40});
+    check(stalls.replayedByAi <= kReplayBound && stalls.replays <= kReplayBound, "40 ms game stalls: no blocks replayed (the DMA engine waits)");
+    check(stalls.underrun == 0 && stalls.silentAfterStart == 0, "40 ms game stalls: the ring covers the waits, no underrun");
+    check(stalls.dma.waits >= 3 && stalls.dma.waitTimeouts == 0, "the waits happened and none ran out");
+    check(stalls.distinctBlocks + stalls.queuedBlocks >= static_cast<std::uint64_t>(stalls.interrupts), "every block the game produced was heard");
 
     // Sensitivity: unbounded (16x) catch-up after the same stall consumes
     // DMA blocks faster than the game can register them.
@@ -451,10 +549,17 @@ void testRealAi() {
 
 }  // namespace
 
-int main() {
+// --real-time-only: skip the simulated device (to compare real-time runs).
+int main(int argc, char** argv) {
     __OSThreadInit();
-    testSimulatedDevice();
+    if (!(argc > 1 && std::string(argv[1]) == "--real-time-only")) {
+        testSimulatedDevice();
+    }
     testRealAi();
+    if (failures != 0) {
+        std::fprintf(stderr, "audio pacing tests: %d of %d checks failed\n", failures, checks);
+        return 1;
+    }
     OSReport("audio pacing tests passed (%d checks)\n", checks);
     return 0;
 }

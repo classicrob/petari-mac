@@ -13,7 +13,14 @@ public:
     }
 
 #ifdef PETARI_NATIVE
-    u32 mNativeLastProcessed = 0;
+    // petari_gx_wait_check's state (PetariGXWaitCheck in
+    // native/platform/include/petari/platform/diagnostics.hpp).
+    struct NativeWaitCheck {
+        u64 processed;
+        u64 sinceNs;
+        u64 reportedNs;
+    };
+    NativeWaitCheck mNativeWait = {0, 0, 0};
     u64 mNativeCaptureTicket = 0;
     OSTime mNativeCaptureSince = 0;
 #endif

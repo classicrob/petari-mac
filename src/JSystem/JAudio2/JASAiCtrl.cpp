@@ -162,12 +162,21 @@ void JASDriver::updateDSP() {
     sSubFrameCounter++;
 }
 
+#ifdef PETARI_NATIVE
+// Native diagnostic (native/platform/audio/ai_host.cpp): counts DSP frames
+// that were not ready when their DMA block was due.
+extern "C" void petari_audio_note_dsp_hold(void);
+#endif
+
 void JASDriver::readDspBuffer(s16* param_0, u32 param_1) {
     s32 nbuf = sDspDacReadBuffer + 1;
     if (nbuf == sDspDacBufferSize) {
         nbuf = 0;
     }
     if (nbuf == sDspDacWriteBuffer && sDspDacBufferSize >= 3) {
+#ifdef PETARI_NATIVE
+        petari_audio_note_dsp_hold();
+#endif
         s16 r25 = (s16)sDspDacBuffer[sDspDacReadBuffer][param_1 / 2 - 1];
         s16 r24 = (s16)sDspDacBuffer[sDspDacReadBuffer][param_1 - 1];
         for (int i = 0; i < param_1; i++) {

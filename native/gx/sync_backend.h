@@ -43,6 +43,17 @@ void petari_gx_sync_abort_applied(uint64_t processed, uint64_t published);
  * sleep and yield the CPU baton; host threads block. */
 void petari_gx_sync_wait_processed(uint64_t position);
 
+/* ---- Game-thread waits for the processor's locks (patched fifo.cpp) ----
+ *
+ * A game OS thread that must wait for a lock the processor or renderer
+ * threads can hold (sBufferMutex) gives up the OS CPU for the wait, so other
+ * game threads (audio) keep running. begin returns 1 when it released the CPU
+ * (then call end once the host work is done, with no Aurora lock held),
+ * 0 when the caller cannot release it (host thread, interrupts or scheduler
+ * disabled, already in host work): it then waits holding it, as before. */
+int petari_gx_sync_begin_host_wait(void);
+void petari_gx_sync_end_host_wait(void);
+
 /* ---- Token-time snapshot contract (renderer <-> platform) ----
  *
  * Installed by the renderer. Called on the FIFO processor thread right after

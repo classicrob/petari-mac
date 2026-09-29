@@ -5,12 +5,15 @@
 
 #include <SDL3/SDL_video.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 
+#include "frame_stats.hpp"
 #include "host.hpp"
 #include "smoke.hpp"
+#include "petari/frame_telemetry.hpp"
 #include "petari/home_menu.hpp"
 #include "petari/host_allocation.hpp"
 
@@ -44,6 +47,130 @@ struct Trace {
 };
 Trace gTrace;
 
+// Frame-time statistics (frame_stats.hpp): always collected, printed at exit
+// with PETARI_TRACE_BOOT or PETARI_FRAME_STATS, per-frame rows written to
+// PETARI_FRAME_CSV. Everything here runs on the game (main) thread.
+namespace Telemetry = PetariNative::FrameTelemetry;
+unsigned long environmentNumber(const char* name, unsigned long fallback);
+struct Timing {
+    FrameStats::Recorder* recorder = nullptr;
+    FrameStats::Phase (*probe)() = nullptr;
+    bool report = false;
+    const char* csvPath = nullptr;
+    std::uint64_t frames = 0;
+    std::uint64_t lastEntry = 0;  // previous seam entry, 0 before the first
+    std::uint64_t lastExit = 0;
+    std::uint64_t seamNs[4] = {};  // previous seam: compose, end frame, begin frame, reacquire
+    std::uint64_t retraceDone = 0;  // frame loop marks, this frame
+    std::uint64_t retraceWake = 0;
+    std::uint64_t endFrame = 0;
+    bool unfocused = false;        // window focus, from events
+    bool unfocusedInFrame = false; // unfocused or unpresentable at any time this frame
+    std::uint64_t counterNs[Telemetry::CounterCount] = {};
+    std::uint64_t counterEvents[Telemetry::CounterCount] = {};
+};
+Timing gTiming;
+
+std::uint32_t microseconds(std::uint64_t ns) {
+    const std::uint64_t us = ns / 1000;
+    return us > 0xffffffffu ? 0xffffffffu : static_cast<std::uint32_t>(us);
+}
+
+// Since the previous call: time and events of a cross-thread counter.
+std::uint64_t takeCounter(Telemetry::Counter counter, std::uint64_t* events = nullptr) {
+    const std::uint64_t ns = Telemetry::slots[counter].ns.load(std::memory_order_relaxed);
+    const std::uint64_t count = Telemetry::slots[counter].events.load(std::memory_order_relaxed);
+    const std::uint64_t delta = ns - gTiming.counterNs[counter];
+    if (events != nullptr) {
+        *events = count - gTiming.counterEvents[counter];
+    }
+    gTiming.counterNs[counter] = ns;
+    gTiming.counterEvents[counter] = count;
+    return delta;
+}
+
+std::uint64_t takeMax(Telemetry::Counter counter) {
+    return Telemetry::slots[counter].maxNs.exchange(0, std::memory_order_relaxed);
+}
+
+// At a seam entry: the frame since the previous seam entry.
+void recordFrame(std::uint64_t entry, FrameStats::Phase phase) {
+    Timing& t = gTiming;
+    if (t.recorder == nullptr) {
+        return;
+    }
+    if (t.lastEntry == 0) {
+        for (unsigned counter = 0; counter < Telemetry::CounterCount; counter++) {
+            takeCounter(static_cast<Telemetry::Counter>(counter));
+            takeMax(static_cast<Telemetry::Counter>(counter));
+        }
+        t.lastEntry = entry;
+        return;
+    }
+    FrameStats::Frame frame;
+    frame.index = ++t.frames;
+    frame.intervalMs = static_cast<double>(entry - t.lastEntry) / 1e6;
+    frame.phase = t.unfocusedInFrame ? FrameStats::Phase::Unfocused : phase;
+    frame.us[FrameStats::SeamCompose] = microseconds(t.seamNs[0]);
+    frame.us[FrameStats::SeamEndFrame] = microseconds(t.seamNs[1]);
+    frame.us[FrameStats::SeamBeginFrame] = microseconds(t.seamNs[2]);
+    frame.us[FrameStats::SeamReacquire] = microseconds(t.seamNs[3]);
+    // The frame loop's marks, if they fall in order inside this frame.
+    const bool retrace = t.retraceDone >= t.lastExit && t.retraceDone <= entry && t.lastExit != 0;
+    const std::uint64_t workStart = retrace ? t.retraceDone : t.lastExit;
+    const bool endFrame = t.endFrame >= workStart && t.endFrame <= entry && t.lastExit != 0;
+    if (retrace) {
+        frame.us[FrameStats::RetraceWait] = microseconds(t.retraceDone - t.lastExit);
+        frame.us[FrameStats::RetraceWake] = microseconds(t.retraceWake);
+    }
+    if (retrace && endFrame) {
+        frame.us[FrameStats::GameWork] = microseconds(t.endFrame - t.retraceDone);
+    }
+    if (endFrame) {
+        frame.us[FrameStats::DrawDoneWait] = microseconds(entry - t.endFrame);
+    }
+    std::uint64_t attributed = 0;
+    for (unsigned part = 0; part < FrameStats::Unattributed; part++) {
+        attributed += frame.us[part];
+    }
+    const std::uint64_t intervalUs = (entry - t.lastEntry) / 1000;
+    frame.us[FrameStats::Unattributed] = microseconds(intervalUs > attributed ? (intervalUs - attributed) * 1000 : 0);
+
+    std::uint64_t events = 0;
+    frame.us[FrameStats::PipelineWait] = microseconds(takeCounter(Telemetry::PipelineWait, &events));
+    frame.pipelineWaits = static_cast<std::uint32_t>(events);
+    frame.us[FrameStats::EfbStagingWait] = microseconds(takeCounter(Telemetry::EfbStagingWait));
+    frame.us[FrameStats::EfbSubmitWait] = microseconds(takeCounter(Telemetry::EfbSubmitWait, &events));
+    frame.efbCaptures = static_cast<std::uint32_t>(events);
+    takeCounter(Telemetry::EfbCaptureLatency);
+    frame.us[FrameStats::EfbCaptureMax] = microseconds(takeMax(Telemetry::EfbCaptureLatency));
+    frame.us[FrameStats::DrawableAcquire] = microseconds(takeCounter(Telemetry::DrawableAcquire));
+    frame.us[FrameStats::FrameSubmit] = microseconds(takeCounter(Telemetry::FrameSubmit));
+    frame.us[FrameStats::PresentCall] = microseconds(takeCounter(Telemetry::PresentCall));
+    takeCounter(Telemetry::ViTimerLate);
+    frame.us[FrameStats::ViTimerLateMax] = microseconds(takeMax(Telemetry::ViTimerLate));
+    t.recorder->add(frame);
+
+    t.lastEntry = entry;
+    t.retraceDone = t.retraceWake = t.endFrame = 0;
+    t.unfocusedInFrame = t.unfocused;
+}
+
+void startTiming() {
+    const auto enabled = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    };
+    const char* csv = std::getenv("PETARI_FRAME_CSV");
+    gTiming.csvPath = csv != nullptr && csv[0] != '\0' ? csv : nullptr;
+    gTiming.report = gTiming.csvPath != nullptr || enabled("PETARI_FRAME_STATS") || enabled("PETARI_TRACE_BOOT");
+    if (gTiming.recorder == nullptr) {
+        // 30 minutes at 60 frames/s by default, about 100 bytes per frame.
+        const std::size_t csvFrames = gTiming.csvPath != nullptr ? environmentNumber("PETARI_FRAME_CSV_FRAMES", 108000) : 0;
+        gTiming.recorder = new FrameStats::Recorder(csvFrames);
+    }
+}
+
 // The automated smoke run (smoke.hpp), when PETARI_SMOKE selects a script.
 Smoke::Driver* gSmoke = nullptr;
 
@@ -72,6 +199,7 @@ void startSmoke() {
     case Smoke::Script::Gameplay: scriptName = "gameplay"; break;
     case Smoke::Script::Reload: scriptName = "reload"; break;
     case Smoke::Script::Story: scriptName = "story"; break;
+    case Smoke::Script::Galaxy: scriptName = "galaxy"; break;
     }
     std::fprintf(stderr, "PETARI SMOKE: script %s, frame limit %lu, stall limit %lu s\n", scriptName, frames, stall);
     std::fflush(stderr);
@@ -133,6 +261,9 @@ void traceFrame(const Rect& image) {
     if (!first && gTrace.frames % kTraceInterval != 0) {
         return;
     }
+    if (!first && gTiming.recorder != nullptr) {
+        gTiming.recorder->writeWindow(stderr);
+    }
     const double sinceLast = seconds(now - gTrace.last);
     std::fprintf(stderr,
                  "Petari trace: frame %lu%s at %.2f s (%.1f frames/s since last), image %.0fx%.0f at %.0f,%.0f, "
@@ -159,6 +290,11 @@ void handleEvents(const AuroraEvent* event) {
             }
             break;
         case AURORA_SDL_EVENT:
+            if (event->sdl.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+                gTiming.unfocused = gTiming.unfocusedInFrame = true;
+            } else if (event->sdl.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+                gTiming.unfocused = false;
+            }
             Events::input(event->sdl);
             break;
         default:
@@ -172,6 +308,7 @@ void handleEvents(const AuroraEvent* event) {
 void openFrame() {
     while (!aurora_begin_frame()) {
         ++gTrace.unpresentableWaits;
+        gTiming.unfocusedInFrame = true;
         handleEvents(aurora_update());
     }
 }
@@ -226,6 +363,7 @@ void openFirstFrame() {
     const char* trace = std::getenv("PETARI_TRACE_BOOT");
     gTrace.enabled = trace != nullptr && trace[0] != '\0' && trace[0] != '0';
     gTrace.start = gTrace.last = TraceClock::now();
+    startTiming();
     startSmoke();
     if (gPresent.composeFrame == nullptr) {
         std::fprintf(stderr,
@@ -246,14 +384,54 @@ void openFirstFrame() {
     }
 }
 
+void setPhaseProbe(FrameStats::Phase (*probe)()) {
+    gTiming.probe = probe;
+}
+
+const FrameStats::Recorder* frameStats() {
+    return gTiming.recorder;
+}
+
+void reportFrameStats() {
+    static std::atomic<bool> reported{false};
+    if (gTiming.recorder == nullptr || !gTiming.report || reported.exchange(true)) {
+        return;
+    }
+    HostAllocationScope host;
+    gTiming.recorder->writeSummary(stderr);
+    if (gTiming.csvPath != nullptr) {
+        if (gTiming.recorder->writeCsv(gTiming.csvPath)) {
+            std::fprintf(stderr, "Petari frame times: per-frame rows written to %s\n", gTiming.csvPath);
+        } else {
+            std::fprintf(stderr, "Petari frame times: cannot write %s\n", gTiming.csvPath);
+        }
+    }
+    std::fflush(stderr);
+}
+
 }  // namespace Seam
 
 }  // namespace PetariNative::App
 
 using namespace PetariNative::App;
 
+extern "C" void petari_host_frame_mark(int mark) {
+    const std::uint64_t now = Telemetry::nowNs();
+    if (mark == PETARI_FRAME_MARK_RETRACE_DONE) {
+        gTiming.retraceDone = now;
+        // The retrace that ended the wait, if one came after the seam.
+        const std::uint64_t retrace = Telemetry::lastRetraceNs.load(std::memory_order_relaxed);
+        gTiming.retraceWake = retrace > gTiming.lastExit && retrace <= now ? now - retrace : 0;
+    } else if (mark == PETARI_FRAME_MARK_END_FRAME) {
+        gTiming.endFrame = now;
+    }
+}
+
 extern "C" void petari_host_frame_seam(void) {
+    const std::uint64_t entry = Telemetry::nowNs();
     PetariNative::HostAllocationScope host;
+    // Game state is readable here, before the CPU is released.
+    recordFrame(entry, gTiming.probe != nullptr ? gTiming.probe() : FrameStats::Phase::Gameplay);
     if (gSmoke != nullptr) {
         runSmoke();
     }
@@ -262,18 +440,28 @@ extern "C" void petari_host_frame_seam(void) {
         gRelease.begin();
     }
 
+    const std::uint64_t composeStart = Telemetry::nowNs();
     if (gPresent.composeFrame != nullptr) {
         gPresent.composeFrame(gPresent.user);
     }
     const Rect image = updateImage();
     traceFrame(image);
     PetariNative::HomeMenu::drawImGuiOverlay(image.x, image.y, image.width, image.height);
+    const std::uint64_t endStart = Telemetry::nowNs();
     aurora_end_frame();
 
+    const std::uint64_t beginStart = Telemetry::nowNs();
     handleEvents(aurora_update());
     openFrame();
 
+    const std::uint64_t reacquireStart = Telemetry::nowNs();
     if (release) {
         gRelease.end();
     }
+    const std::uint64_t exit = Telemetry::nowNs();
+    gTiming.seamNs[0] = endStart - composeStart;
+    gTiming.seamNs[1] = beginStart - endStart;
+    gTiming.seamNs[2] = reacquireStart - beginStart;
+    gTiming.seamNs[3] = exit - reacquireStart;
+    gTiming.lastExit = exit;
 }

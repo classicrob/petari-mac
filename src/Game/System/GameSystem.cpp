@@ -323,12 +323,18 @@ void GameSystem::frameLoop() {
     update();
     calcAnim();
     mObjHolder->captureIfAllowForScreenPreserver();
+#ifdef PETARI_NATIVE
+    petari_host_frame_mark(PETARI_FRAME_MARK_END_FRAME);  // frame-time statistics
+#endif
     MainLoopFramework::sManager->endFrame();
 #ifdef PETARI_NATIVE
     // Host window, events and Aurora frame boundary (native/app).
     petari_host_frame_seam();
 #endif
     MainLoopFramework::sManager->waitForRetrace();
+#ifdef PETARI_NATIVE
+    petari_host_frame_mark(PETARI_FRAME_MARK_RETRACE_DONE);
+#endif
 }
 
 void GameSystem::draw() {

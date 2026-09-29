@@ -12,6 +12,7 @@ struct SnapshotSource {
     std::uint32_t samples;
     std::uint32_t width, height;
     float offsetX, offsetY, scaleX, scaleY;
+    std::uint64_t requestedNs = 0;  // steady clock at the capture request, for frame telemetry
 };
 
 // Recorder/FIFO thread only. Closes a pass and submits a segment without presenting.

@@ -1,3 +1,5 @@
+#include <petari/frame_telemetry.hpp>
+
 namespace aurora::gfx {
 void petari_submit_segment(detail::FramePacket&, const PetariNative::GX::SnapshotSource&,
                            uint64_t, PetariNative::GX::SnapshotReady);
@@ -11,7 +13,7 @@ void petari_capture_current_efb(uint64_t ticket, PetariNative::GX::SnapshotReady
   const auto size = previous.colorAttachments[SceneColorAttachmentIndex].size;
   PetariNative::GX::SnapshotSource source{
       previous.copySourceView, previous.copySourceDepthView, size, previous.msaaSamples,
-      logical.x, logical.y, 0.f, 0.f, 1.f, 1.f};
+      logical.x, logical.y, 0.f, 0.f, 1.f, 1.f, PetariNative::FrameTelemetry::nowNs()};
   AURORA_ASSERT(logical.x && logical.y, "EFB capture requires a configured VI mode");
   if (gx::g_gxState.viewportPolicy != AURORA_VIEWPORT_NATIVE) {
     const bool stretch = gx::g_gxState.viewportPolicy == AURORA_VIEWPORT_STRETCH;

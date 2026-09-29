@@ -25,6 +25,15 @@
 #include <JSystem/JKernel/JKRSolidHeap.hpp>
 #include <cstdio>
 
+#ifdef PETARI_NATIVE
+// Queue the stage's known pipeline configurations before its resources load, and
+// wait for residual compilation before the first gameplay frame is drawn.
+extern "C" void petari_gx_pipeline_stage_begin(const char* stage, const char* seed_db_path);
+extern "C" void petari_gx_pipeline_stage_wait(void);
+extern "C" void petari_os_begin_host_blocking(void);
+extern "C" void petari_os_end_host_blocking(void);
+#endif
+
 namespace {
     AudSystemWrapper* getAudioSystemWrapper() NO_INLINE {
         return SingletonHolder< GameSystem >::get()->mObjHolder->mAudioSystem;
@@ -202,6 +211,11 @@ bool GameSystemSceneController::isFirstUpdateSceneNerveNormal() const {
 }
 
 void GameSystemSceneController::startScene() {
+#ifdef PETARI_NATIVE
+    petari_os_begin_host_blocking();
+    petari_gx_pipeline_stage_wait();
+    petari_os_end_host_blocking();
+#endif
     mScene->start();
     GameSystemFunction::restartControllerLeaveWatcher();
     requestChangeNerve(GET_NERVE(GameSystemSceneController, GameSystemSceneControllerNormal));
@@ -276,10 +290,16 @@ bool GameSystemSceneController::isSceneInitializeState(SceneInitializeState stat
 }
 
 void GameSystemSceneController::startScenarioSelectScene() {
+#ifdef PETARI_NATIVE
+    petari_gx_pipeline_stage_begin("ScenarioSelect", nullptr);
+#endif
     mScenarioSelectScene->start();
 }
 
 void GameSystemSceneController::startScenarioSelectSceneBackground() {
+#ifdef PETARI_NATIVE
+    petari_gx_pipeline_stage_begin("ScenarioSelect", nullptr);
+#endif
     mScenarioSelectScene->startBackground();
 }
 
@@ -365,6 +385,9 @@ void GameSystemSceneController::exeChangeWaveBank() {
 void GameSystemSceneController::exeInitializeScene() {
     if (mSpine->mStep == 0) {
         mIntermissionScene->setCurrentSceneControllerState("[initialize Scene: %s]", mNextSceneControlInfo.mScene);
+#ifdef PETARI_NATIVE
+        petari_gx_pipeline_stage_begin(mNextSceneControlInfo.mStage, nullptr);
+#endif
         MR::startFunctionAsyncExecute(MR::Functor(this, &GameSystemSceneController::initializeScene), 17, "シーン初期化");
     }
 

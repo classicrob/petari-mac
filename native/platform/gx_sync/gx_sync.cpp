@@ -16,15 +16,19 @@
 #include <pthread.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <deque>
 #include <mutex>
+#include <thread>
 
 #include <revolution/gx/GXPerf.h>
 #include <revolution/os.h>
 
 #include "os_internal.hpp"
 #include "petari/host_allocation.hpp"
+#include "petari/platform/diagnostics.hpp"
 #include "petari/platform/gx_sync.hpp"
 
 namespace OS = PetariNative::Platform::OS;
@@ -537,6 +541,85 @@ std::uint64_t processedPosition() {
     return state().processed;
 }
 
+WaitVerdict checkWait(WaitCheck& check, std::uint64_t nowNs) {
+    OS::InterruptGuard interrupts;  // lock order: interrupt lock, then s.lock
+    State& s = state();
+    WaitState waitState;
+    {
+        std::lock_guard<std::mutex> guard(s.lock);
+        if (check.sinceNs == 0 || s.processed != check.processed) {
+            check.processed = s.processed;
+            check.sinceNs = nowNs;
+            return {WaitState::Progress, 0, false};
+        }
+        if (s.drawDoneDelivered.load(std::memory_order_acquire) >= s.drawDoneIssued.load(std::memory_order_acquire)) {
+            waitState = WaitState::Done;
+        } else if (!s.queue.empty()) {
+            waitState = WaitState::Delivering;
+        } else if (s.processed < s.written) {
+            waitState = s.breakpoint.load(std::memory_order_acquire) == s.processed ? WaitState::Halted : WaitState::Busy;
+        } else {
+            waitState = WaitState::Idle;
+        }
+    }
+    const std::uint64_t stalled = nowNs > check.sinceNs ? nowNs - check.sinceNs : 0;
+    const bool stuck = waitState == WaitState::Halted || waitState == WaitState::Idle;
+    return {waitState, stalled, stuck && stalled >= kWaitAbortAfterNs && OS::cpuQuiescent()};
+}
+
+const char* waitStateName(WaitState waitState) {
+    switch (waitState) {
+    case WaitState::Progress: return "progress";
+    case WaitState::Done: return "draw done delivered";
+    case WaitState::Busy: return "processor inside a command batch";
+    case WaitState::Delivering: return "GP events awaiting delivery";
+    case WaitState::Halted: return "processor halted at the FIFO breakpoint";
+    case WaitState::Idle: return "processor idle with a draw done outstanding";
+    }
+    return "?";
+}
+
+void dumpState(std::FILE* out) {
+    State& s = state();
+    bool locked = false;
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!(locked = s.lock.try_lock()) && std::chrono::steady_clock::now() < end) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const std::uint64_t bp = s.breakpoint.load(std::memory_order_acquire);
+    std::fprintf(out,
+                 "[hang] GX sync%s: processed %llu, written %llu (%llu pending), breakpoint %s%llu%s, last reported %llu, "
+                 "interrupt thread %s\n",
+                 locked ? "" : " (state lock unavailable for 2 s; read without it)",
+                 static_cast<unsigned long long>(s.processed), static_cast<unsigned long long>(s.written),
+                 static_cast<unsigned long long>(s.written > s.processed ? s.written - s.processed : 0),
+                 bp == kNoBreakpoint ? "none" : "at ", static_cast<unsigned long long>(bp == kNoBreakpoint ? 0 : bp),
+                 s.breakpointReached ? " (reached)" : "", static_cast<unsigned long long>(s.lastReported),
+                 s.running ? "running" : "stopped");
+    std::fprintf(out,
+                 "[hang] GX sync draw done: issued %llu, reported %llu, delivered %llu, waiters %d; abort pending %d "
+                 "(issued at abort %llu, lost %llu); progress waiters %d%s; last token %u\n",
+                 static_cast<unsigned long long>(s.drawDoneIssued.load()), static_cast<unsigned long long>(s.drawDonesReported),
+                 static_cast<unsigned long long>(s.drawDoneDelivered.load()), s.drawDoneWaiters, s.abortPending ? 1 : 0,
+                 static_cast<unsigned long long>(s.abortIssued), static_cast<unsigned long long>(s.lostDrawDones),
+                 s.progressWaiters, s.progressWake ? " (wake pending)" : "", static_cast<unsigned>(s.lastToken.load()));
+    std::fprintf(out, "[hang] GX sync tickets: next %llu, delivered %llu, flush requested %llu; %zu queued GP events",
+                 static_cast<unsigned long long>(s.nextTicket), static_cast<unsigned long long>(s.delivered.load()),
+                 static_cast<unsigned long long>(s.flushRequested), s.queue.size());
+    if (locked && !s.queue.empty()) {
+        const Event& e = s.queue.front();
+        std::fprintf(out, "; head: %s at %llu, ticket %llu%s",
+                     e.kind == Kind::Token ? "token" : e.kind == Kind::DrawDone ? "draw done" : "breakpoint",
+                     static_cast<unsigned long long>(e.position), static_cast<unsigned long long>(e.ticket),
+                     e.ready ? "" : " (capture incomplete: holds every later event)");
+    }
+    std::fputc('\n', out);
+    if (locked) {
+        s.lock.unlock();
+    }
+    std::fflush(out);
+}
+
 void shutdown() {
     if (OS::interruptsDisabled()) {
         OSPanic(__FILE__, __LINE__, "GX sync shutdown with interrupts disabled would deadlock the GP interrupt thread");
@@ -593,6 +676,59 @@ void GXReadXfRasMetric(u32* xfWaitIn, u32* xfWaitOut, u32* rasBusy, u32* clocks)
     *xfWaitOut = 0;
     *rasBusy = 0;
     *clocks = static_cast<u32>(PetariNative::Platform::GXSync::processedPosition());
+}
+
+}  // extern "C"
+
+namespace {
+
+std::uint64_t steadyNs() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+// Full hang reports for a stall that is not aborted: first after this long,
+// then again at this interval while it lasts.
+constexpr std::uint64_t kWaitReportAfterNs = 10000000000ull;
+
+}  // namespace
+
+extern "C" {
+
+void petari_platform_dump_hang_state(const char* reason) {
+    PetariNative::HostAllocationScope hostAllocations;
+    std::fprintf(stderr, "[hang] ---- platform state: %s ----\n", reason);
+    PetariNative::Platform::GXSync::dumpState(stderr);
+    PetariNative::Platform::Diagnostics::dumpOS(stderr);
+    std::fprintf(stderr, "[hang] ---- end of platform state ----\n");
+    std::fflush(stderr);
+}
+
+int petari_gx_wait_check(PetariGXWaitCheck* check, int pipelineWait) {
+    namespace GXSync = PetariNative::Platform::GXSync;
+    const std::uint64_t now = steadyNs();
+    GXSync::WaitCheck wait{check->processed, check->sinceNs};
+    const GXSync::WaitVerdict verdict = GXSync::checkWait(wait, now);
+    check->processed = wait.processed;
+    check->sinceNs = wait.sinceNs;
+    if (verdict.state == GXSync::WaitState::Progress) {
+        check->reportedNs = 0;
+        return 0;
+    }
+    const double seconds = static_cast<double>(verdict.stalledNs) / 1e9;
+    if (verdict.abort) {
+        std::fprintf(stderr, "GX abort: no processor progress for %.1f s (%s) and no game thread can run\n", seconds,
+                     GXSync::waitStateName(verdict.state));
+        petari_platform_dump_hang_state("GX abort");
+        return 1;
+    }
+    std::fprintf(stderr, "GX wait extended: no processor progress for %.1f s (%s), pipeline=%d\n", seconds,
+                 GXSync::waitStateName(verdict.state), pipelineWait);
+    if (verdict.stalledNs >= kWaitReportAfterNs && (check->reportedNs == 0 || now - check->reportedNs >= kWaitReportAfterNs)) {
+        check->reportedNs = now;
+        petari_platform_dump_hang_state("GXDrawDone wait without processor progress");
+    }
+    return 0;
 }
 
 }  // extern "C"

@@ -1,4 +1,5 @@
 #include "Game/Screen/ScenarioSelectLayout.hpp"
+#include "Game/Util/NativeUiObserve.hpp"
 #include "Game/Camera/CameraContext.hpp"
 #include "Game/Effect/MultiEmitter.hpp"
 #include "Game/LiveActor/Nerve.hpp"
@@ -670,6 +671,14 @@ void ScenarioSelectLayout::exeWaitScenarioSelect() {
     }
 
     updateSelectedScenario();
+#ifdef PETARI_NATIVE
+    for (s32 i = 0; i < 7; ++i) {
+        if (!mStar[i]->_30 && mStar[i]->mScenarioNo == 1) {
+            MR::Native::publishUiPaneTarget(this, ::cStarPaneName[i], "Scenario.First", 1,
+                PETARI_UI_SELECTABLE | (mSelectedScenarioNo == 1 ? PETARI_UI_POINTING : 0));
+        }
+    }
+#endif
     updateScenarioText();
     MR::startSystemLevelSE("SE_DM_LV_SENARIO_SEL_FLY");
 

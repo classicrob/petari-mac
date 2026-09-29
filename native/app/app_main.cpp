@@ -3,13 +3,19 @@
 
 #include <aurora/aurora.h>
 #include <aurora/main.h>
+#include <aurora/event.h>
+#include <aurora/gfx.h>
 
 #include <SDL3/SDL_init.h>
+#include <SDL3/SDL_timer.h>
+#include <SDL3/SDL_video.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <fstream>
+#include <petari/test_fixture.hpp>
 
 #include "host.hpp"
 
@@ -25,23 +31,44 @@ void logMessage(AuroraLogLevel level, const char* module, const char* message, u
 }
 
 void usage() {
-    std::fputs("Usage: petari [--disc DIR] [--user DIR]\n"
+    std::fputs("Usage: petari [--disc DIR] [--user DIR] [--test-fixture observatory]\n"
                "  --disc DIR  extracted disc (containing files/); default: $PETARI_GAME_DIR,\n"
                "              else build/game-data/RMGE01 under the working directory\n"
                "  --user DIR  saves, settings, controls and crash reports;\n"
-               "              default: ~/Library/Application Support/Petari\n",
+               "              default: ~/Library/Application Support/Petari\n"
+               "  --test-fixture observatory  post-tutorial test progression; requires a marked isolated --user\n",
                stderr);
 }
 
 bool resolvePaths(int argc, char** argv, App::Paths* paths) {
+    bool fixture = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
             paths->disc = argv[++i];
         } else if (std::strcmp(argv[i], "--user") == 0 && i + 1 < argc) {
             paths->user = argv[++i];
+        } else if (std::strcmp(argv[i], "--test-fixture") == 0 && i + 1 < argc &&
+                   std::strcmp(argv[i + 1], "observatory") == 0) {
+            ++i;
+            fixture = true;
         } else {
             return false;
         }
+    }
+    if (fixture) {
+        std::ifstream marker(paths->user / ".petari-test-fixture");
+        std::string kind;
+        std::getline(marker, kind);
+        const char* home = std::getenv("HOME");
+        const bool normalUser = home && !paths->user.empty() &&
+            std::filesystem::weakly_canonical(paths->user) ==
+            std::filesystem::weakly_canonical(std::filesystem::path(home) / "Library/Application Support/Petari");
+        if (paths->user.empty() || normalUser || kind != "observatory") {
+            std::fputs("petari: fixture requires explicit isolated --user with .petari-test-fixture containing observatory\n", stderr);
+            return false;
+        }
+        PetariNative::TestFixture::observatory = true;
+        std::fputs("PETARI FIXTURE: post-tutorial observatory progression; not earned progression\n", stderr);
     }
     if (paths->disc.empty()) {
         const char* env = std::getenv("PETARI_GAME_DIR");
@@ -56,6 +83,34 @@ bool resolvePaths(int argc, char** argv, App::Paths* paths) {
         }
         paths->user = std::filesystem::path(home) / "Library/Application Support/Petari";
     }
+    return true;
+}
+
+bool prepareKnownPipelines(SDL_Window* window) {
+    // Aurora queues its persisted configurations during initialization. Finish
+    // those before the game starts, instead of competing with the first draw.
+    const auto pending = [] {
+        return __atomic_load_n(&aurora_get_stats()->queuedPipelines, __ATOMIC_ACQUIRE);
+    };
+    const unsigned initial = pending();
+    if (initial == 0) return true;
+    const Uint64 start = SDL_GetTicks();
+    unsigned displayed = initial + 1;
+    while (const unsigned remaining = pending()) {
+        if (remaining != displayed) {
+            char title[128];
+            std::snprintf(title, sizeof(title), "Super Mario Galaxy — Preparing shaders (%u remaining)", remaining);
+            SDL_SetWindowTitle(window, title);
+            displayed = remaining;
+        }
+        for (const AuroraEvent* event = aurora_update(); event && event->type != AURORA_NONE; ++event) {
+            if (event->type == AURORA_EXIT) return false;
+        }
+        SDL_Delay(10);
+    }
+    SDL_SetWindowTitle(window, "Super Mario Galaxy");
+    std::fprintf(stderr, "[gx warmup] prepared %u queued pipelines before gameplay in %.2f s\n",
+                 initial, (SDL_GetTicks() - start) / 1000.0);
     return true;
 }
 
@@ -100,6 +155,10 @@ int main(int argc, char** argv) {
         aurora_shutdown();
         return 1;
     }
+    if (!prepareKnownPipelines(static_cast<SDL_Window*>(info.window))) {
+        aurora_shutdown();
+        return 0;
+    }
     // Audio opens on a game thread when the game starts AI DMA; initialize
     // SDL's audio subsystem here, on the main thread, first. The sink's own
     // initialization then only adds a reference.
@@ -108,6 +167,7 @@ int main(int argc, char** argv) {
     }
 
     App::Seam::attach(info.window);
+    App::Seam::setPhaseProbe(App::Host::framePhase);
     App::Host::startOS();
     App::Seam::openFirstFrame();
     App::Host::runGame();

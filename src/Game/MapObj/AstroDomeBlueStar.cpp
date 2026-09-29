@@ -1,4 +1,5 @@
 #include "Game/MapObj/AstroDomeBlueStar.hpp"
+#include "Game/Util/NativeUiObserve.hpp"
 #include "Game/LiveActor/HitSensor.hpp"
 #include "Game/LiveActor/Nerve.hpp"
 #include "Game/Map/SphereSelector.hpp"
@@ -174,6 +175,16 @@ void AstroDomeBlueStar::forceKill() {
 }
 
 void AstroDomeBlueStar::control() {
+#ifdef PETARI_NATIVE
+    if (petari_ui_observing() && isValidBindStart()) {
+        TVec2f screen;
+        if (MR::calcScreenPosition(&screen, mPosition)) {
+            const bool pointing = isNerve(GET_NERVE(AstroDomeBlueStar, AstroDomeBlueStarNrvPointing));
+            MR::Native::publishUiTarget("Dome.BlueStar", 0, screen,
+                PETARI_UI_SELECTABLE | (pointing ? PETARI_UI_POINTING : 0));
+        }
+    }
+#endif
     bool result = isNerve(GET_NERVE(AstroDomeBlueStar, AstroDomeBlueStarNrvGalaxySelect)) ||
                   isNerve(GET_NERVE(AstroDomeBlueStar, AstroDomeBlueStarNrvGalaxyConfirmStart)) ||
                   isNerve(GET_NERVE(AstroDomeBlueStar, AstroDomeBlueStarNrvGalaxyConfirm)) ||

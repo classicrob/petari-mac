@@ -24,12 +24,30 @@ namespace PetariNative::Platform::Audio {
 // nominal rate.)
 std::uint32_t outputRate();
 
-// Fills frames of interleaved stereo int16 (L, R), host byte order. The
+// Fills up to frames of interleaved stereo int16 (L, R), host byte order. The
 // game's DMA blocks are interleaved R, L as on the hardware (JAudio2's DAC
 // buffer, THP audio); pull() swaps them into L, R. While DMA is stopped, or
 // if no block is registered, the output is silence, as from the hardware.
-// Realtime-safe. Returns the number of frames written (always frames).
+//
+// Elastic DMA: when a block ends and the game has not yet registered the next
+// one, the hardware would replay the block (an audible 17.5 ms repeat for
+// JAudio2). Natively the engine instead waits for the registration, for at
+// most the registration wait limit: pull() then returns fewer frames than
+// asked (the rest of the buffer is untouched) and the caller retries later,
+// covering the gap from its own buffer. The wait applies only while a DMA
+// callback is installed and the ending block was itself registered after a
+// DMA interrupt (the game answers interrupts); a block registered before DMA
+// started (JAudio2's silent initial buffer) and a block that already timed out
+// replay at once, as on the hardware.
+// Realtime-safe. Returns the number of frames written.
 std::size_t pull(std::int16_t* interleaved, std::size_t frames);
+
+// Longest wait for a registration before a block is replayed; 0 replays at
+// once (the hardware's behaviour). The default suits the SDL sink's ring,
+// whose steady-state level (2048 frames, 64 ms at 32 kHz) covers the wait
+// and a device burst.
+constexpr std::uint32_t kDefaultRegistrationWaitUs = 40000;
+void setRegistrationWaitLimit(std::uint32_t microseconds);
 
 // Puts the calling host thread under Mach time-constraint (real-time)
 // scheduling suited to audio work: wakes within about a millisecond, runs
@@ -48,10 +66,27 @@ struct Sink {
 void setSink(const Sink& sink);
 
 // Diagnostic: block starts at which no new block had been registered since
-// the previous start, so the hardware replayed a block. JAudio2 registers a
-// fresh buffer on every DMA interrupt, so a nonzero count there means its
-// audio thread ran late (audible as a repeated ~17 ms fragment).
+// the previous start, so the block was replayed (immediately, or after the
+// registration wait ran out). JAudio2 registers a fresh buffer on every DMA
+// interrupt, so beyond its one silent start-up replay a nonzero count means
+// its audio thread ran late (audible as a repeated 17.5 ms fragment).
 std::uint64_t replayedBlocks();
+
+// DMA engine counters since the previous takeDmaStats() (always recorded).
+struct DmaStats {
+    std::uint64_t waits = 0;         // block ends that waited for the next registration and got it
+    std::int64_t worstWaitUs = 0;    // longest such wait
+    std::uint64_t waitTimeouts = 0;  // waits that ran out (the block was then replayed)
+    // Shortest wall time from a block's start to its last frame being pulled,
+    // blocks of at least 256 frames only; 0 if none ended. The game's deadline
+    // for registering the next block (17.5 ms for a JAudio2 block at 32 kHz).
+    std::int64_t minBlockUs = 0;
+    // JAudio2 found its DSP frame unfinished when a DMA block was due and held
+    // the last sample instead (JASDriver::readDspBuffer): an audible gap that
+    // is neither a replay nor an underrun.
+    std::uint64_t dspHolds = 0;
+};
+DmaStats takeDmaStats();
 
 // Opt-in audio-cycle timing (off by default; see audio/audio_timing.hpp). Worst
 // values since the previous takeTimingStats(), in microseconds:

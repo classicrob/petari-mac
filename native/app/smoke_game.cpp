@@ -70,6 +70,7 @@ Observation observeGame(bool wantPlayer) {
     const GameSystemSceneController* pController = pGameSystem->mSceneController;
     observation.scene = pController->mCurrSceneControlInfo.mScene;
     observation.stage = pController->mCurrSceneControlInfo.mStage;
+    observation.scenario = pController->mCurrSceneControlInfo.mScenarioNo;
     observation.sceneReady = pController->isSceneInitializeState(SceneInitializeState_End);
     observation.strap = observation.sceneReady && GameSystemFunction::isDisplayStrapRemineder();
     if (pGameSystem->mSequenceDirector != nullptr) {

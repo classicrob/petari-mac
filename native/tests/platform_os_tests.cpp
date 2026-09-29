@@ -904,6 +904,41 @@ void testHostBlocking() {
     check(aborts([] { petari_os_end_host_blocking(); }), "end without begin aborts");
 }
 
+// petari_os_try_begin_host_blocking: for waits that may happen anywhere (the
+// renderer's FIFO lock). It releases the CPU only where begin_host_blocking
+// would be legal, and otherwise leaves the caller untouched.
+void testTryHostBlocking() {
+    static OSThread spinner;
+    alignas(32) static u8 stack[0x4000];
+    gHostBlockStop = false;
+    gHostBlockSpins = 0;
+    OSCreateThread(&spinner, hostBlockSpinner, nullptr, stack + sizeof(stack), sizeof(stack), 24, 0);
+    OSResumeThread(&spinner);
+    OSThread* self = OSGetCurrentThread();
+
+    check(petari_os_try_begin_host_blocking() == 1, "an OS thread holding the CPU can release it");
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));  // a contended host lock
+    check(gHostBlockSpins.load() > 0, "other OS threads run while it waits");
+    check(petari_os_try_begin_host_blocking() == 0, "nested use does nothing");
+    petari_os_end_host_blocking();
+    check(OSGetCurrentThread() == self, "the CPU is back after end_host_blocking");
+
+    BOOL enabled = OSDisableInterrupts();
+    check(petari_os_try_begin_host_blocking() == 0, "not with interrupts disabled (a GX BP write)");
+    OSRestoreInterrupts(enabled);
+    OSDisableScheduler();
+    check(petari_os_try_begin_host_blocking() == 0, "not with the scheduler disabled");
+    OSEnableScheduler();
+    int fromHost = -1;
+    std::thread host([&] { fromHost = petari_os_try_begin_host_blocking(); });
+    host.join();
+    check(fromHost == 0, "not from a host thread (interrupt context)");
+    check(OSGetCurrentThread() == self && self->state == OS_THREAD_STATE_RUNNING, "refusals leave the caller running");
+
+    gHostBlockStop = true;
+    OSJoinThread(&spinner, nullptr);
+}
+
 }  // namespace
 
 int main() {
@@ -922,6 +957,7 @@ int main() {
     testDvdOnOsThreads();
     testCache();
     testHostBlocking();
+    testTryHostBlocking();
     testDispatchBeforeWake();
     testHolderQosOverride();
     OSReport("platform OS tests passed (%d checks)\n", checks);

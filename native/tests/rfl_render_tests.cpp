@@ -319,7 +319,21 @@ extern "C" int rfl_render_main(int argc, char** argv) {
                                                        std::to_string(stats.differentColorPixels) + " pixels)");
         check(!nearColor(center, kBackground, 8), "the frame center is face, not background (" + hex(center) + ")");
         check(channel(center, 16) > channel(center, 0), "the face center is skin-toned (red over blue): " + hex(center));
-        rfl_render_retire(ticket);
+
+        // A second capture while the first is still held: each ticket keeps
+        // its own pixels (capture buffers are shared and pooled).
+        fillScreen(kIconBackground);
+        const std::uint64_t filled = ++gTicket;
+        RflRenderStats filledStats{};
+        check(rfl_render_capture(filled, &filledStats), "EFB readback after filling the frame");
+        std::uint32_t filledCenter = 0;
+        std::uint32_t heldCenter = 0;
+        check(rfl_render_pixel(filled, kWidth / 2, kHeight / 2, &filledCenter) &&
+                  rfl_render_pixel(ticket, kWidth / 2, kHeight / 2, &heldCenter),
+              "read both captures");
+        check(nearColor(filledCenter, kIconBackground, 2), "the second capture sees the fill (" + hex(filledCenter) + ")");
+        check(heldCenter == center, "the held capture is unchanged by the second (" + hex(heldCenter) + ")");
+        rfl_render_retire(filled);
     });
 
     // RFLMakeIcon renders into the EFB and copies it out to the buffer.

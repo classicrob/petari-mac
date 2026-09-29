@@ -7,6 +7,7 @@
 #include <revolution/os.h>
 
 #include "petari/platform/gx_sync.hpp"
+#include "petari/platform/os_host.hpp"
 
 namespace GXSync = PetariNative::Platform::GXSync;
 
@@ -52,6 +53,14 @@ void petari_gx_sync_abort_applied(uint64_t processed, uint64_t published) {
 
 void petari_gx_sync_wait_processed(uint64_t position) {
     GXSync::waitProcessed(position);
+}
+
+int petari_gx_sync_begin_host_wait(void) {
+    return petari_os_try_begin_host_blocking();
+}
+
+void petari_gx_sync_end_host_wait(void) {
+    petari_os_end_host_blocking();
 }
 
 void petari_gx_sync_set_snapshot_hook(PetariGXSnapshotHook hook, void* user) {

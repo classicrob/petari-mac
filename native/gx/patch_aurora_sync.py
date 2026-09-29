@@ -13,8 +13,11 @@ include path.
 - fifo.cpp: the processor stops at the FIFO breakpoint, stops each process()
   call at synchronisation BPs, reports them in stream order outside
   sBufferMutex, applies GXAbortFrame's discard, and fifo::drain waits through
-  the platform (yielding the OS CPU baton). Exports the petari_aurora_fifo_*
-  functions.
+  the platform (yielding the OS CPU baton). process() runs on a processor-owned
+  copy of the published stream, so sBufferMutex is never held across a batch
+  (first-use pipeline compiles block inside one for seconds); game threads
+  that still find the lock busy wait with the OS CPU released. Exports the
+  petari_aurora_fifo_* functions.
 - command_processor.cpp: process() also returns after PE token BPs (0x47,
   0x48) and records which synchronisation BP ended the call.
 - GXManage.cpp: GXDrawDone, GXSetDrawDone, GXSetDrawDoneCallback removed
@@ -76,8 +79,48 @@ def replace_once(text, old, new):
     return text.replace(old, new)
 
 
+MIRROR_AND_LOCK = '''
+// Petari: the processor executes a private copy of the published stream.
+// sBufferMutex is held only while a range is copied out, and while game
+// threads grow or rebase the buffer; never while process() runs, which can
+// block for seconds in first-use pipeline compiles. A game thread waiting for
+// the lock holds the OS CPU, so a lock held across a batch stopped every game
+// thread (audio included) for the whole compile burst. Published bytes never
+// change (patch_u32 writes only above the published watermark), and process()
+// keeps no pointer into its input once it returns (vertex and index data are
+// copied into the frame's buffers).
+// Processor thread only (and fifo::init with the processor stopped). Never
+// destroyed: the processor may still run during static destruction.
+std::vector<uint8_t>& sPetariMirror = *new std::vector<uint8_t>;
+uint64_t sPetariMirrorBase = 0; // stream position of sPetariMirror[0]
+
+// Petari: game threads take sBufferMutex through this. If it stays busy past a
+// short spin (the processor copying a large range out), the OS CPU is released
+// for the wait and `work` (sync_backend.h), so other game threads keep running.
+template <typename Work>
+void petari_with_buffer_lock(Work&& work) {
+  std::unique_lock lock{sBufferMutex, std::defer_lock};
+  const auto spinUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+  while (!lock.try_lock()) {
+    if (std::chrono::steady_clock::now() >= spinUntil) {
+      const bool released = petari_gx_sync_begin_host_wait() != 0;
+      lock.lock();
+      work();
+      lock.unlock();
+      if (released) {
+        petari_gx_sync_end_host_wait();
+      }
+      return;
+    }
+    std::this_thread::yield();
+  }
+  work();
+}
+'''
+
+
 def patch_fifo(text):
-    text = replace_once(text, '#include <mutex>\n', '#include <mutex>\n\n#include "sync_backend.h"\n')
+    text = replace_once(text, '#include <mutex>\n', '#include <chrono>\n#include <mutex>\n#include <thread>\n#include <vector>\n\n#include "sync_backend.h"\n')
     text = replace_once(text, 'namespace {\nconstexpr Module Log{"aurora::gx::fifo"};',
                         '// Petari: which synchronisation BP ended the last process() call\n'
                         '// (command_processor.cpp), under sBufferMutex.\n'
@@ -94,7 +137,58 @@ def patch_fifo(text):
                         '  while (current < candidate &&\n'
                         '         !value.compare_exchange_weak(current, candidate, std::memory_order_acq_rel)) {\n'
                         '  }\n'
-                        '}\n')
+                        '}\n' + MIRROR_AND_LOCK)
+    text = replace_function(text, 'void write_data_grow(const void* data, uint32_t length) {', '''\
+  // Petari: sized and copied under the lock, which a game thread may have
+  // waited for with the OS CPU released (petari_with_buffer_lock).
+  const auto grow = [data, length] {
+    const uint64_t needed64 = static_cast<uint64_t>(detail::sBufferSize) + length;
+    AURORA_ASSERT(needed64 <= std::numeric_limits<uint32_t>::max(), "fifo::write_data: buffer size overflow");
+    const auto needed = static_cast<uint32_t>(needed64);
+    if (needed > detail::sBufferCapacity) {
+      const auto doubledCapacity = static_cast<uint64_t>(detail::sBufferCapacity) * 2;
+      const auto newCapacity = static_cast<uint32_t>(
+          std::min<uint64_t>(std::max(doubledCapacity, needed64), std::numeric_limits<uint32_t>::max()));
+      auto* resized = static_cast<uint8_t*>(realloc(detail::sBufferData, newCapacity));
+      AURORA_ASSERT(resized != nullptr, "fifo::write_data: failed to allocate {} bytes", newCapacity);
+      detail::sBufferData = resized;
+      detail::sBufferCapacity = newCapacity;
+    }
+    std::memcpy(detail::sBufferData + detail::sBufferSize, data, length);
+    detail::sBufferSize = needed;
+  };
+  if (sWorkerThread.joinable()) {
+    petari_with_buffer_lock(grow);
+  } else {
+    grow();
+  }
+}
+''')
+    text = replace_once(text, '''\
+  {
+    std::lock_guard lock{sBufferMutex};
+    sStreamBase = target;
+    detail::sBufferSize = 0;
+  }
+  sPendingDraws = 0;
+''', '''\
+  petari_with_buffer_lock([target] {
+    sStreamBase = target;
+    detail::sBufferSize = 0;
+  });
+  sPendingDraws = 0;
+''')
+    text = replace_once(text, '''\
+  sWorkerWake.store(0, std::memory_order_relaxed);
+
+  start_worker();
+''', '''\
+  sWorkerWake.store(0, std::memory_order_relaxed);
+  sPetariMirror.clear(); // positions restart: nothing mirrored is valid
+  sPetariMirrorBase = 0;
+
+  start_worker();
+''')
     # Draw done is a GP interrupt delivered by the platform, not a call here.
     text = remove_function(text, 'void dispatch_draw_done() noexcept {')
     text = replace_function(text, 'void process_to(uint64_t target, std::memory_order order) noexcept {', '''\
@@ -115,19 +209,24 @@ def patch_fifo(text):
     if (limit == processed) {
       return; // halted; worker_main waits for wake_worker
     }
-    ProcessResult result{};
-    uint32_t syncBp = 0;
-    {
-      std::lock_guard lock{sBufferMutex};
-      AURORA_ASSERT(processed >= sStreamBase && limit <= sStreamBase + detail::sBufferSize,
-                    "FIFO processing range [{}, {}) is outside buffered range [{}, {})", processed, limit, sStreamBase,
-                    sStreamBase + detail::sBufferSize);
-      const auto start = static_cast<uint32_t>(processed - sStreamBase);
-      const auto size = static_cast<uint32_t>(limit - processed);
-      petariSyncBp = 0;
-      result = process(detail::sBufferData + start, size);
-      syncBp = petariSyncBp;
+    // Petari: copy what is not mirrored yet of [processed, limit), then
+    // process outside sBufferMutex. The mirror restarts once consumed.
+    if (processed < sPetariMirrorBase || processed >= sPetariMirrorBase + sPetariMirror.size()) {
+      sPetariMirror.clear();
+      sPetariMirrorBase = processed;
     }
+    if (const uint64_t mirrored = sPetariMirrorBase + sPetariMirror.size(); limit > mirrored) {
+      std::lock_guard lock{sBufferMutex};
+      AURORA_ASSERT(mirrored >= sStreamBase && limit <= sStreamBase + detail::sBufferSize,
+                    "FIFO processing range [{}, {}) is outside buffered range [{}, {})", mirrored, limit, sStreamBase,
+                    sStreamBase + detail::sBufferSize);
+      const uint8_t* from = detail::sBufferData + static_cast<uint32_t>(mirrored - sStreamBase);
+      sPetariMirror.insert(sPetariMirror.end(), from, from + (limit - mirrored));
+    }
+    petariSyncBp = 0;
+    const ProcessResult result = process(sPetariMirror.data() + (processed - sPetariMirrorBase),
+                                         static_cast<uint32_t>(limit - processed));
+    const uint32_t syncBp = petariSyncBp;
     AURORA_ASSERT(result.bytesProcessed > 0 && result.bytesProcessed <= limit - processed,
                   "FIFO processor made invalid progress: processed {} of {} remaining bytes", result.bytesProcessed,
                   limit - processed);

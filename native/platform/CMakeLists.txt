@@ -204,6 +204,8 @@ if(BUILD_TESTING)
     add_executable(petari_audio_pacing_tests ${PETARI_REPO_ROOT}/native/tests/audio_pacing_tests.cpp)
     target_link_libraries(petari_audio_pacing_tests PRIVATE petari_platform)
     add_test(NAME native_audio_pacing COMMAND petari_audio_pacing_tests)
+    # Real-time wall-clock checks; parallel test load makes them fail spuriously.
+    set_tests_properties(native_audio_pacing PROPERTIES RUN_SERIAL TRUE)
 
     # JAudio2's own DSP host code driving the native DSP device.
     set(PETARI_JAUDIO_DSP_SOURCES

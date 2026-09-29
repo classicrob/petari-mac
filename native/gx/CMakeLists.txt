@@ -132,7 +132,9 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/efb_snapshot.cpp" TARGE
 set(_pipeline_source "${aurora_SOURCE_DIR}/lib/gfx/pipeline_cache.cpp")
 set(_pipeline_output "${CMAKE_CURRENT_BINARY_DIR}/aurora-pipeline-cache.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline.py" "${_pipeline_source}")
+    "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline.py" "${_pipeline_source}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_profile.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_runtime.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_worker.inc" "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_stage.inc")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline.py"
     "${_pipeline_source}" "${_pipeline_output}" COMMAND_ERROR_IS_FATAL ANY)
 get_target_property(_sources aurora_gx SOURCES)
@@ -159,6 +161,19 @@ if(_petari_build_testing)
     target_include_directories(petari_gx_abi_tests PRIVATE "${aurora_SOURCE_DIR}/lib")
     target_link_libraries(petari_gx_abi_tests PRIVATE petari_native_config petari_memory aurora::gx aurora::core petari_vi_bridge)
     add_test(NAME native_gx_abi COMMAND petari_gx_abi_tests)
+
+    # The generated FIFO (patch_aurora_sync.py) with a fake command processor:
+    # a compile burst inside a batch must not stop other game threads.
+    set(_fifo_aurora_sources "${CMAKE_SOURCE_DIR}/native/tests/gx_fifo_processor_fake.cpp"
+        "${CMAKE_CURRENT_BINARY_DIR}/sync/lib/gx/fifo.cpp")
+    add_executable(petari_gx_fifo_processor_tests "${CMAKE_SOURCE_DIR}/native/tests/gx_fifo_processor_tests.cpp"
+        ${_fifo_aurora_sources} sync_backend.cpp)
+    target_compile_features(petari_gx_fifo_processor_tests PRIVATE cxx_std_20)
+    set_source_files_properties(${_fifo_aurora_sources} PROPERTIES
+        COMPILE_OPTIONS "-iquote${aurora_SOURCE_DIR}/lib/gx"
+        INCLUDE_DIRECTORIES "${aurora_SOURCE_DIR}/lib/gx;${aurora_SOURCE_DIR}/lib;${aurora_SOURCE_DIR}/include;${CMAKE_CURRENT_SOURCE_DIR};$<TARGET_PROPERTY:Tracy::TracyClient,INTERFACE_INCLUDE_DIRECTORIES>")
+    target_link_libraries(petari_gx_fifo_processor_tests PRIVATE petari_platform petari_host_runtime fmt::fmt)
+    add_test(NAME native_gx_fifo_processor COMMAND petari_gx_fifo_processor_tests)
 endif()
 
 file(GLOB PETARI_J3D_SOURCES CONFIGURE_DEPENDS
@@ -275,3 +290,57 @@ if(_petari_build_testing)
 endif()
 
 include("${CMAKE_SOURCE_DIR}/native/cmake/GameLibraries.cmake")
+
+foreach(_file shader shader_info)
+    set(_source "${aurora_SOURCE_DIR}/lib/gx/${_file}.cpp")
+    set(_output "${CMAKE_CURRENT_BINARY_DIR}/indirect/${_file}.cpp")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_indirect_texcoord.py" "${_source}")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_indirect_texcoord.py"
+        "${_source}" "${_output}" COMMAND_ERROR_IS_FATAL ANY)
+    get_target_property(_sources aurora_gx SOURCES)
+    list(REMOVE_ITEM _sources "lib/gx/${_file}.cpp" "${_source}")
+    list(APPEND _sources "${_output}")
+    set_property(TARGET aurora_gx PROPERTY SOURCES "${_sources}")
+    set_source_files_properties("${_output}" TARGET_DIRECTORY aurora_gx PROPERTIES
+        COMPILE_OPTIONS "-iquote${aurora_SOURCE_DIR}/lib/gx")
+endforeach()
+
+# Pipeline stage timing composes on the indirect-texcoord output for shader.cpp.
+foreach(_pair "${CMAKE_CURRENT_BINARY_DIR}/indirect/shader.cpp|shader.cpp" "${aurora_SOURCE_DIR}/lib/gx/gx.cpp|gx.cpp")
+    string(REPLACE "|" ";" _pair "${_pair}")
+    list(GET _pair 0 _source)
+    list(GET _pair 1 _kind)
+    set(_output "${CMAKE_CURRENT_BINARY_DIR}/stages/${_kind}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline_stages.py" "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_profile.hpp" "${_source}")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline_stages.py"
+        "${_source}" "${_output}" "${_kind}" COMMAND_ERROR_IS_FATAL ANY)
+    get_target_property(_sources aurora_gx SOURCES)
+    list(REMOVE_ITEM _sources "lib/gx/${_kind}" "${aurora_SOURCE_DIR}/lib/gx/${_kind}" "${_source}")
+    list(APPEND _sources "${_output}")
+    set_property(TARGET aurora_gx PROPERTY SOURCES "${_sources}")
+    set_source_files_properties("${_output}" TARGET_DIRECTORY aurora_gx PROPERTIES
+        COMPILE_OPTIONS "-iquote${aurora_SOURCE_DIR}/lib/gx")
+endforeach()
+
+add_executable(petari_gx_shader_tests EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/native/tests/gx_shader_tests.cpp")
+target_compile_features(petari_gx_shader_tests PRIVATE cxx_std_20)
+target_include_directories(petari_gx_shader_tests PRIVATE "${aurora_SOURCE_DIR}/lib")
+target_link_libraries(petari_gx_shader_tests PRIVATE aurora::gx aurora::core)
+target_link_options(petari_gx_shader_tests PRIVATE -Wl,-dead_strip)
+if(_petari_build_testing)
+    add_test(NAME native_gx_shader COMMAND petari_gx_shader_tests)
+endif()
+
+add_executable(petari_pipeline_cache_inspect EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/native/tools/pipeline_cache_inspect.cpp")
+target_compile_features(petari_pipeline_cache_inspect PRIVATE cxx_std_20)
+target_include_directories(petari_pipeline_cache_inspect PRIVATE "${aurora_SOURCE_DIR}/lib")
+target_link_libraries(petari_pipeline_cache_inspect PRIVATE aurora::gx aurora::core SQLite::SQLite3)
+target_link_options(petari_pipeline_cache_inspect PRIVATE -Wl,-dead_strip)
+
+if(_petari_build_testing AND EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files/LayoutData/GalaxyNamePlate.arc")
+    add_test(NAME native_galaxy_name_plate COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tests/galaxy_name_plate_tests.py"
+        "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files/LayoutData/GalaxyNamePlate.arc")
+endif()

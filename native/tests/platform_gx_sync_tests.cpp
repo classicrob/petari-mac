@@ -22,6 +22,7 @@
 #include <thread>
 #include <vector>
 
+#include "petari/platform/diagnostics.hpp"
 #include "petari/platform/gx_sync.hpp"
 
 extern "C" void __OSThreadInit(void);
@@ -432,6 +433,189 @@ void testSnapshotLifetime() {
     GXS::setSnapshotHook(nullptr, nullptr);
 }
 
+// ---- Hang check (the game's GX abort alarm, MainLoopFramework.cpp) ----
+// Driven directly, without the fake renderer (after a shutdown resets the
+// positions): the test plays the processor, and a host thread plays the alarm
+// with a simulated clock advancing 0.5 s per expiry, as the game re-arms it.
+
+constexpr std::uint64_t kHalfSecond = 500000000;
+
+struct AlarmResult {
+    int checks = 0;
+    int aborts = 0;
+    int progress = 0;
+    GXS::WaitState last = GXS::WaitState::Progress;
+    bool sawBusy = false;
+};
+
+// Runs alarm expiries on a host thread until `stop`, or until the first abort
+// verdict when `recover` is set (then runs the handler's recovery: breakpoint
+// cleared, frame aborted, a new draw done written).
+AlarmResult runAlarm(std::atomic<bool>& stop, bool recover, std::atomic<std::uint64_t>* recoveryDrawDone) {
+    AlarmResult result;
+    GXS::WaitCheck wait;
+    std::uint64_t now = 1000000000;
+    GXS::checkWait(wait, now);  // at OSSetAlarm
+    while (!stop.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        now += kHalfSecond;
+        BOOL enabled = OSDisableInterrupts();  // alarm handlers run with interrupts disabled
+        const GXS::WaitVerdict verdict = GXS::checkWait(wait, now);
+        ++result.checks;
+        result.last = verdict.state;
+        result.sawBusy = result.sawBusy || verdict.state == GXS::WaitState::Busy;
+        result.progress += verdict.state == GXS::WaitState::Progress;
+        if (verdict.abort) {
+            ++result.aborts;
+            if (recover) {
+                GXS::clearBreakpoint();
+                GXS::abortFrame();
+                recoveryDrawDone->store(GXS::noteDrawDoneIssued());
+                OSRestoreInterrupts(enabled);
+                return result;
+            }
+        }
+        OSRestoreInterrupts(enabled);
+    }
+    return result;
+}
+
+// Observatory run 6: GXDrawDone waited ~11 s while one command batch compiled
+// about 30 pipelines back to back. The processed position cannot move inside
+// a batch, and between two compiles no pipeline wait is visible, so the Wii's
+// check aborted a good frame. A busy processor is never a reason to abort,
+// even with every game thread asleep.
+void testCompileBurstIsNotAHang() {
+    const std::uint64_t n = GXS::noteDrawDoneIssued();
+    GXS::processLimit(0, 4096);  // the processor starts a batch ending in the draw done
+    std::atomic<bool> stop{false};
+    AlarmResult alarm;
+    std::thread alarmThread([&] { alarm = runAlarm(stop, false, nullptr); });
+    std::thread processor([&] {
+        // ~40 expiries (20 simulated seconds) inside the batch, then its end.
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        GXS::reportDrawDone(4096);
+        GXS::reportProgress(4096, 4096);
+    });
+    GXS::waitDrawDone(n);  // sleeps: no OS thread holds or wants the CPU meanwhile
+    stop = true;
+    processor.join();
+    alarmThread.join();
+    check(alarm.checks >= 10, "the alarm expired repeatedly during the batch");
+    check(alarm.sawBusy, "a batch in progress is classified as busy");
+    check(alarm.aborts == 0, "no abort while the processor is inside a batch (pipeline compile burst)");
+}
+
+// A processor halted at the FIFO breakpoint makes no progress; that is a
+// hang only if no game thread can run to move the breakpoint.
+// Returns the outstanding draw done.
+std::uint64_t testHaltedWhileAThreadCanRunIsNotAborted() {
+    const std::uint64_t base = GXS::processedPosition();
+    GXS::setBreakpoint(base);
+    const std::uint64_t n = GXS::noteDrawDoneIssued();
+    GXS::processLimit(base, base + 1024);  // halted: limit == processed
+    GXS::WaitCheck wait;
+    std::uint64_t now = 1000000000;
+    GXS::checkWait(wait, now);
+    GXS::WaitVerdict verdict{};
+    for (int i = 0; i < 40; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));  // the breakpoint-hit event is delivered meanwhile
+        now += kHalfSecond;
+        verdict = GXS::checkWait(wait, now);  // this OS thread holds the CPU
+        check(!verdict.abort, "no abort while a game thread holds the CPU");
+    }
+    check(verdict.state == GXS::WaitState::Halted, "halted at the breakpoint");
+    check(verdict.stalledNs >= 19 * 1000000000ull, "the stall time accumulates");
+    return n;
+}
+
+// ...and when nothing can move it, the alarm aborts and the waiter wakes:
+// the draw done discarded by the abort is credited to the recovery draw done.
+void testHaltedWithNothingRunnableAborts(std::uint64_t n) {
+    const std::uint64_t written = GXS::processedPosition() + 1024;  // the previous test's halted batch
+    std::atomic<bool> stop{false};
+    std::atomic<std::uint64_t> recovery{0};
+    AlarmResult alarm;
+    std::thread alarmThread([&] { alarm = runAlarm(stop, true, &recovery); });
+    std::thread processor([&] {
+        while (recovery.load() == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        // The processor applies the abort (skips the discarded stream), then
+        // processes the recovery draw done written after it.
+        GXS::abortApplied(written, written);
+        GXS::reportDrawDone(written + 8);
+        GXS::reportProgress(written + 8, written + 8);
+    });
+    GXS::waitDrawDone(n);
+    stop = true;
+    alarmThread.join();
+    processor.join();
+    check(alarm.aborts == 1, "a halted processor with nothing runnable is aborted");
+    check(alarm.checks >= 2 && alarm.checks <= 10, "after at least a second of no progress");
+    check(recovery.load() == n + 1, "the recovery draw done follows the one lost to the abort");
+    GXS::waitDrawDone(recovery.load());  // delivered: returns at once
+    check(!GXS::gpStatus().breakpoint, "the abort cleared the breakpoint");
+}
+
+// The hang report names every OS thread, the CPU holder, what each waits
+// on and where its host thread is, and still reports when the interrupt lock
+// is held by a stuck thread.
+OSMessageQueue gBlockedQueue;
+OSMessage gBlockedSlots[1];
+void* blockedThread(void*) {
+    OSMessage msg;
+    OSReceiveMessage(&gBlockedQueue, &msg, OS_MESSAGE_BLOCK);
+    return nullptr;
+}
+
+std::string readReport(const std::function<void(std::FILE*)>& write) {
+    std::FILE* file = std::tmpfile();
+    write(file);
+    std::fflush(file);
+    std::rewind(file);
+    std::string text;
+    char buffer[4096];
+    std::size_t n;
+    while ((n = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        text.append(buffer, n);
+    }
+    std::fclose(file);
+    return text;
+}
+
+bool contains(const std::string& text, const char* part) {
+    return text.find(part) != std::string::npos;
+}
+
+void testHangReport() {
+    OSInitMessageQueue(&gBlockedQueue, gBlockedSlots, 1);
+    static OSThread thread;
+    alignas(32) static u8 stack[0x4000];
+    OSCreateThread(&thread, blockedThread, nullptr, stack + sizeof(stack), sizeof(stack), 10, 0);
+    OSResumeThread(&thread);  // it runs at once (higher priority) and blocks
+    const std::string os = readReport([](std::FILE* f) { PetariNative::Platform::Diagnostics::dumpOS(f); });
+    check(contains(os, "[holds the CPU]: running, priority 16"), "the report marks the CPU holder");
+    check(contains(os, "waiting, priority 10 (base 10), on queue"), "a blocked thread and its queue are listed");
+    check(contains(os, "blockedThread"), "threads are named by their entry function");
+    check(contains(os, "host WAITING (blocked)"), "host run states are sampled");
+    check(contains(os, "[hang]     at "), "host stacks are sampled");
+    check(contains(os, "pending alarms"), "pending alarms are listed");
+    const std::string gx = readReport([](std::FILE* f) { GXS::dumpState(f); });
+    check(contains(gx, "GX sync: processed") && contains(gx, "draw done: issued"), "GX sync state is reported");
+
+    // A thread that never releases the interrupt lock: the report still comes.
+    std::string stuck;
+    BOOL enabled = OSDisableInterrupts();
+    std::thread reporter([&] { stuck = readReport([](std::FILE* f) { PetariNative::Platform::Diagnostics::dumpOS(f); }); });
+    reporter.join();
+    OSRestoreInterrupts(enabled);
+    check(contains(stuck, "stayed unavailable for 2 s (holder: OS thread"), "a held interrupt lock is named, not waited for");
+
+    OSSendMessage(&gBlockedQueue, nullptr, OS_MESSAGE_BLOCK);
+    OSJoinThread(&thread, nullptr);
+}
+
 }  // namespace
 
 int main() {
@@ -444,6 +628,10 @@ int main() {
     testDrawSyncManagerProtocol();
     testSnapshotLifetime();
     gRenderer.stop();
+    GXS::shutdown();
+    testCompileBurstIsNotAHang();
+    testHaltedWithNothingRunnableAborts(testHaltedWhileAThreadCanRunIsNotAborted());
+    testHangReport();
     GXS::shutdown();
     testMisuse();
     OSReport("platform GX sync tests passed (%d checks)\n", checks);

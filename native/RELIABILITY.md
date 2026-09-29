@@ -153,3 +153,66 @@ and perceptual audio fidelity. Component tests and asset sweeps reduce specific
 risks but do not establish these behaviors. New failures should be fixed and
 recorded here with their reproducer and relevant regression, without relying on
 the user to report them first.
+
+
+## Observatory / first-mission work in progress
+
+The explicit isolated observatory fixture supplies tutorial progression; it
+must not be counted as earned tutorial completion. Observatory run 3 walked
+from spawn into the Terrace without physical gameplay input or stuck recovery,
+activated the Pull Star, and advanced three visible lecture pages. It then
+crashed in `GalaxyNamePlate::show` / `setAnimFrameAndStopAdjustTextWidth` before
+selecting Good Egg. The first-mission integration goal is not yet passed.
+
+An earlier observatory run exposed a separate Aurora shader-generation abort
+when an indirect texture order referenced disabled coordinate 1. The native
+patch applies coordinate-0 fallback in analysis and generation. Source-generation
+regressions and 454 captured configurations pass; startup Metal compilation of
+the seeded configurations also completed in the app.
+
+Pipeline preparation is now before game startup: 30.85 seconds for a fresh
+cache and 1.32 seconds on the next launch. This covers known configurations
+only. Run 3 still encountered 18 new blocking pipeline resolves totaling 27.27
+seconds (largest 4.61 seconds) during the newly exercised Terrace sequence.
+Cold-path frame drops remain; a warm-cache route comparison is pending.
+Run 3 had zero device underrun frames and eight replayed AI blocks, including
+the expected silent startup replay. It is not a clean audio result.
+
+### Observatory runs 5 and 6 (2026-09-29)
+
+The galaxy observer now distinguishes a newly available galaxy
+(`Galaxy.Unlock<Name>`, first click reveals it) from a selectable open galaxy.
+The driver regression covers New → reveal without input → Open → confirmation
+and the already-open path (292 driver checks).
+
+Run 5 (`build/observatory-5.log`) unlocked, revealed and selected Good Egg,
+reached mission selection and clicked mission 1, then produced no frame for
+60 s while loading (watchdog exit 124). During the stall the audio host replayed
+~57 blocks/s, so the emulated side had stopped entirely. No stacks were captured.
+This is an open, intermittent hang; see run 6.
+
+Run 6 (`build/observatory-6.log`, same fixture, launched with
+`build/run-with-hang-sampler.sh`) **passed**: observatory walk, Terrace, Pull
+Star, unlock/reveal/select Good Egg, mission 1 selected by the scenario UI,
+stage ready, then idle, jump, opposite moves, pause (no movement while paused)
+and resume. Pointer targets drove the UI; no physical input was reported.
+This is an initial gameplay smoke, not a completed mission or star.
+
+Performance was poor on this cold Good Egg path: 65 blocking pipeline resolves
+totalling 31.5 s, 63 of them over 100 ms. Immediately after mission selection,
+~30 serial compiles of 200–840 ms produced an 11.1 s frame interval, and
+`handleGXAbortAlarm` logged a false-positive "GX abort: no processor progress
+and no pipeline compilation" between two compiles (the frame was aborted and
+the game recovered). The unrelated host load was high (load average ~30), which
+inflates compile times, but serialization is the multiplier. Audio: one replay
+(startup) over the run.
+
+Correction: run 5's log contains no "GX abort" or "GX wait extended" lines during
+its hang, so the false-positive abort did not cause it (an earlier version of
+this note said otherwise). The abort itself is now fixed: the wait check
+classifies processor state and never aborts a busy processor or one whose CPU
+baton holder is doing host work (`native_platform_gx_sync`). Run 5's cause
+remains unknown; the leading hypothesis is a game thread blocked on the GX FIFO
+buffer mutex while holding the emulated-CPU baton during a compile. The smoke
+watchdog now samples host stacks and dumps OS/GX state before exiting, so the
+next occurrence should explain itself.

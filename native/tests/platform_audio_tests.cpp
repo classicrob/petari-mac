@@ -18,6 +18,7 @@
 #include "petari/platform/audio.hpp"
 
 extern "C" void __OSThreadInit(void);
+extern "C" void petari_audio_note_dsp_hold(void);
 
 namespace DSP = PetariNative::Platform::DSP;
 namespace PAudio = PetariNative::Platform::Audio;
@@ -307,6 +308,7 @@ void dmaCallback() {
 }
 
 void testAi() {
+    PAudio::setRegistrationWaitLimit(0);  // the hardware's behaviour: replay at once
     AIInit(nullptr);
     check(AIRegisterDMACallback(dmaCallback) == nullptr, "register DMA callback");
     AISetDSPSampleRate(0);
@@ -350,6 +352,118 @@ void testAi() {
     check(out[0] == 0 && out[99] == 0, "stopped DMA outputs silence");
     PAudio::shutdown();
     check(PAudio::pendingInterrupts() == 0 && PAudio::outputRate() == 32000, "shutdown resets AI");
+    PAudio::setRegistrationWaitLimit(PAudio::kDefaultRegistrationWaitUs);
+}
+
+// Elastic DMA: a block the game registered in answer to an interrupt is not
+// replayed when the game is late with the next one; the engine waits (pull
+// returns short) up to the limit, then replays as the hardware would.
+std::atomic<int> gElasticInterrupts{0};
+void elasticCallback() {
+    gElasticInterrupts++;  // the test registers by hand, late
+}
+
+void testElasticDma() {
+    constexpr std::uint32_t kFrames = 560;
+    static std::int16_t blocks[4][kFrames * 2];
+    for (int b = 0; b < 4; ++b) {
+        for (std::uint32_t i = 0; i < kFrames * 2; ++i) {
+            blocks[b][i] = static_cast<std::int16_t>(b + 1);
+        }
+    }
+    const auto reg = [&](int b) { AIInitDMA(reinterpret_cast<uintptr_t>(blocks[b]), sizeof(blocks[b])); };
+    std::vector<std::int16_t> out(kFrames * 2 * 2);
+    PAudio::setRegistrationWaitLimit(20000);
+    PAudio::takeDmaStats();
+
+    // Start-up: the block registered before DMA started is not an answer
+    // (JAudio2's silent initial buffer): it replays at once, no wait.
+    AIInit(nullptr);
+    AIRegisterDMACallback(elasticCallback);
+    reg(0);
+    AIStartDMA();
+    check(PAudio::pull(out.data(), kFrames + 100) == kFrames + 100 && PAudio::replayedBlocks() == 1,
+          "the initial (unanswered) block replays at once, as on the hardware");
+    PAudio::drainInterrupts();
+    reg(1);  // the game answers the replay's interrupt
+    check(PAudio::pull(out.data(), kFrames - 100) == kFrames - 100, "the replay plays out");
+    check(PAudio::pull(out.data(), 100) == 100 && out[0] == 2, "the answered block follows");
+    PAudio::drainInterrupts();
+    const int before = gElasticInterrupts.load();
+
+    // Late: block 1 (an answer) ends with nothing new registered.
+    check(PAudio::pull(out.data(), kFrames) == kFrames - 100, "pull stops at the end of an answered block when the next is late");
+    check(PAudio::pull(out.data(), 64) == 0, "and keeps waiting (no replay, no interrupt)");
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    check(PAudio::pull(out.data(), 64) == 0 && PAudio::replayedBlocks() == 1, "still waiting within the limit");
+    PAudio::drainInterrupts();
+    check(gElasticInterrupts.load() == before, "no block start while waiting");
+    reg(2);  // the game's late registration
+    check(PAudio::pull(out.data(), 64) == 64 && out[0] == 3 && out[127] == 3, "the late block plays as soon as it is registered");
+    PAudio::drainInterrupts();
+    check(gElasticInterrupts.load() == before + 1 && PAudio::replayedBlocks() == 1, "one block start, nothing replayed");
+    PAudio::DmaStats st = PAudio::takeDmaStats();
+    check(st.waits == 1 && st.waitTimeouts == 0 && st.worstWaitUs >= 5000, "the wait is counted with its length");
+
+    // Never answered: after the limit the block replays, as on the hardware,
+    // and the replay itself is not waited for again.
+    check(PAudio::pull(out.data(), kFrames) == kFrames - 64, "block 2 plays out, then waits");
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    check(PAudio::pull(out.data(), kFrames) == kFrames && out[0] == 3 && PAudio::replayedBlocks() == 2,
+          "past the limit the block is replayed");
+    check(PAudio::pull(out.data(), 100) == 100 && PAudio::replayedBlocks() == 3, "a replayed block is not waited for: the next replay is immediate");
+    st = PAudio::takeDmaStats();
+    check(st.waits == 0 && st.waitTimeouts == 1, "the timed-out wait is counted");
+    AIStopDMA();
+    PAudio::shutdown();
+
+    // Without a DMA callback nothing answers interrupts: replay at once.
+    AIInit(nullptr);
+    AIRegisterDMACallback(nullptr);
+    reg(0);
+    AIStartDMA();
+    PAudio::pull(out.data(), 10);
+    PAudio::drainInterrupts();
+    reg(1);  // registered after an interrupt, but no callback is installed
+    check(PAudio::pull(out.data(), kFrames * 2) == kFrames * 2 && PAudio::replayedBlocks() == 1, "no callback: replay at once");
+    AIStopDMA();
+    PAudio::shutdown();
+
+    // Block wall time: from a block's start to its last frame being pulled
+    // (noticed when the next frame is wanted).
+    AIInit(nullptr);
+    AIRegisterDMACallback(nullptr);
+    reg(0);
+    AIStartDMA();
+    PAudio::takeDmaStats();
+    PAudio::pull(out.data(), 10);
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    PAudio::pull(out.data(), kFrames - 10);
+    check(PAudio::takeDmaStats().minBlockUs == 0, "no block has ended yet");
+    PAudio::pull(out.data(), 1);
+    const std::int64_t blockUs = PAudio::takeDmaStats().minBlockUs;
+    check(blockUs >= 3000 && blockUs < 1000000, "a block's wall time is measured");
+    AIStopDMA();
+    PAudio::shutdown();
+
+    // Limit 0: the hardware's behaviour.
+    PAudio::setRegistrationWaitLimit(0);
+    AIInit(nullptr);
+    AIRegisterDMACallback(elasticCallback);
+    reg(0);
+    AIStartDMA();
+    PAudio::pull(out.data(), 10);
+    PAudio::drainInterrupts();
+    reg(1);
+    check(PAudio::pull(out.data(), kFrames * 2) == kFrames * 2 && PAudio::replayedBlocks() == 1, "limit 0: replay at once");
+    AIStopDMA();
+    PAudio::shutdown();
+
+    // JAudio2's DSP-hold report.
+    petari_audio_note_dsp_hold();
+    petari_audio_note_dsp_hold();
+    check(PAudio::takeDmaStats().dspHolds == 2 && PAudio::takeDmaStats().dspHolds == 0, "DSP holds are counted and taken");
+    PAudio::setRegistrationWaitLimit(PAudio::kDefaultRegistrationWaitUs);
 }
 
 // Channel order regression: JAudio2's DAC buffer is built exactly as
@@ -589,6 +703,7 @@ int main() {
     testReverbSend();
     testAramFaults();
     testAi();
+    testElasticDma();
     testAiReinit();
     testChannelOrder();
     testSpeakerEncodeSize();

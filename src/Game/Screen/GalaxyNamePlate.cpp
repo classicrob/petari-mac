@@ -113,7 +113,7 @@ void GalaxyNamePlate::show(const wchar_t* pName, s32 a2, bool a3, bool a4) {
 
     galaxyName = (a3) ? "GalaxyName" : "GalaxyNameU";
     MR::setTextBoxMessageRecursive(this, galaxyName, pName);
-    txtGaxyName = (a3) ? "TxtGaxyName" : "TxtGaxyNameU";
+    txtGaxyName = (a3) ? "TxtGalaxyName" : "TxtGalaxyNameU";
     MR::setAnimFrameAndStopAdjustTextWidth(this, txtGaxyName, 2);
     MR::startAnim(this, "Unknown", 1);
     MR::setAnimFrameAndStop(this, a2, 1);

@@ -26,6 +26,14 @@ extern "C" {
 void petari_os_begin_host_blocking(void);
 void petari_os_end_host_blocking(void);
 
+// For host waits that may run anywhere (a lock the renderer's threads also
+// take): gives up the CPU as petari_os_begin_host_blocking does and returns 1
+// when the caller is an OS thread holding it with interrupts and the
+// scheduler enabled and not already doing host work; otherwise does nothing
+// and returns 0 (host threads, interrupt context, disabled regions, nested
+// use). End with petari_os_end_host_blocking only when it returned 1.
+int petari_os_try_begin_host_blocking(void);
+
 #ifdef __cplusplus
 }
 #endif

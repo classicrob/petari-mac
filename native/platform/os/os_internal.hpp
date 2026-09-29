@@ -11,8 +11,10 @@
 
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <pthread.h>
 #include <pthread/qos.h>
+#include <string>
 #include <vector>
 #include <mutex>
 
@@ -25,6 +27,13 @@ std::mutex& interruptMutex();
 // True if the calling host thread currently has interrupts disabled.
 bool interruptsDisabled();
 
+// Hang diagnostics: the host thread (pthread_self) that last took the
+// interrupt lock and still holds it, or 0. Maintained by the lock's users in
+// this directory (other waits that release it inside a condition variable,
+// such as the VI thread's, leave it stale while they sleep).
+std::uintptr_t interruptOwner();
+void setInterruptOwner(bool held);  // interrupt lock held (true) / about to be released (false)
+
 // The OS thread bound to the calling host thread, or null for host threads
 // (interrupt context).
 OSThread* boundThread();
@@ -35,9 +44,27 @@ OSThread* boundThread();
 template <class Predicate>
 void hostWait(std::condition_variable& cv, Predicate predicate) {
     std::unique_lock<std::mutex> lock(interruptMutex(), std::adopt_lock);
+    setInterruptOwner(false);  // released while waiting
     cv.wait(lock, predicate);
+    setInterruptOwner(true);
     lock.release();
 }
+
+// Interrupt lock held. True when no game code can run until an interrupt
+// source (a host thread) makes an OS thread ready: no thread holds the CPU,
+// none is ready, and none is doing host work between
+// petari_os_begin_host_blocking and petari_os_end_host_blocking.
+bool cpuQuiescent();
+
+// Hang reports (petari/platform/diagnostics.hpp). dumpThreads lists every OS
+// thread with its scheduler state, host run state and a frame-pointer sample
+// of its host stack; dumpAlarms lists the pending alarms. Both take the
+// interrupt lock if the caller does not hold it, waiting at most two seconds;
+// if it stays unavailable they read the state without it (the process is
+// hung) and say so.
+void dumpThreads(std::FILE* out);
+void dumpAlarms(std::FILE* out);  // interrupt lock held, or read racily by dumpThreads
+std::string describeAddress(std::uint64_t address);  // symbol+offset, or hex
 
 // Scheduler hooks used by the interrupt layer (os_thread.cpp).
 void onInterruptsEnabling();   // interrupt lock still held

@@ -1,4 +1,5 @@
 #include "Game/MapObj/MiniatureGalaxy.hpp"
+#include "Game/Util/NativeUiObserve.hpp"
 #include "Game/LiveActor/MaterialCtrl.hpp"
 #include "Game/LiveActor/ModelObj.hpp"
 #include "Game/LiveActor/Nerve.hpp"
@@ -23,6 +24,11 @@
 #include "Game/Util/SoundUtil.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
 #include "Game/Util/StringUtil.hpp"
+
+#ifdef PETARI_NATIVE
+#include <set>
+#include <string>
+#endif
 
 void MiniatureGalaxy_FORCE_MATCH_SDATA2() {
     (void)1.0f;
@@ -265,6 +271,22 @@ void MiniatureGalaxy::control() {
     mRotation.y = MR::repeatDegree(mRotation.y);
 
     updateNamePlate();
+#ifdef PETARI_NATIVE
+    if (petari_ui_observing() && SphereSelectorFunction::isSelectWait() &&
+        SphereSelectorFunction::isValidPointing() &&
+        isNerve(GET_NERVE(MiniatureGalaxy, MiniatureGalaxyNrvWait)) &&
+        (mState == MiniatureGalaxyState_Open || mState == MiniatureGalaxyState_New)) {
+        TVec2f screen;
+        if (MR::calcScreenPosition(&screen, mPosition)) {
+            // Intern IDs for the observer's static-storage contract.
+            static std::set<std::string> targetIds;
+            const std::string id = std::string(mState == MiniatureGalaxyState_New ? "Galaxy.Unlock" : "Galaxy.") + mGalaxyName;
+            const char* targetId = targetIds.insert(id).first->c_str();
+            MR::Native::publishUiTarget(targetId, 0, screen,
+                PETARI_UI_SELECTABLE | (SphereSelectorFunction::isPointingTarget(this) ? PETARI_UI_POINTING : 0));
+        }
+    }
+#endif
 }
 
 void MiniatureGalaxy::calcAndSetBaseMtx() {

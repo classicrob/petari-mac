@@ -604,6 +604,31 @@ CMake wiring.
   delivered one, so the waiting `GXDrawDone` wakes on the recovery draw done
   and later waits count correctly. The GX callbacks, token register and
   stream positions survive `GXAbortFrame` and a later `GXInit`.
+- **Hang check.** handleGXAbortAlarm asks `GXSync::checkWait`
+  (`petari_gx_wait_check`) instead of the Wii's "no progress for 0.5 s":
+  progress is reported only between command batches, and one batch can spend
+  seconds in serial first-use pipeline compiles (observatory run 6 aborted a
+  good frame between two compiles). It aborts only when the processor is
+  halted at the breakpoint or idle with a draw done outstanding for 1 s while
+  no OS thread holds, wants, or is away doing host work with the CPU; other
+  stalls are logged, with a full platform dump after 10 s and every 10 s
+  after. Regressions: `native_platform_gx_sync` (compile burst, halted with a
+  runnable thread, halted with nothing runnable plus the lost-draw-done
+  recovery).
+- **FIFO lock and compile bursts.** The processor runs `process()` on its own
+  copy of the published stream (patch_aurora_sync.py), so Aurora's
+  `sBufferMutex` is held only while a range is copied out, never across a
+  batch that blocks in first-use pipeline compiles. Game threads that still
+  find it busy after a 1 ms spin wait with the CPU released
+  (`petari_os_try_begin_host_blocking`). Before, a game thread growing the
+  FIFO waited out the whole batch holding the CPU, stopping every game thread
+  (observatory run 5's audio signature). Regression: `native_gx_fifo_processor`
+  (the generated fifo.cpp with a fake processor that blocks like a compile).
+- **Hang reports.** `petari/platform/diagnostics.hpp`: every OS thread (state,
+  wait queue, entry, host run state, sampled host stack), the CPU baton,
+  interrupt-lock holder, pending alarms and GX sync state. The smoke watchdog
+  records it, after `/usr/bin/sample` stacks of the whole process (into the
+  user directory's `Crashes/`), before exiting 124/125.
 - **FIFO objects and pointers.** `GXGetCPUFifo`/`GXGetGPFifo` have the SDK
   ABI (`GXBool f(GXFifoObj*)`). `GXGetFifoPtrs` returns opaque stream
   positions: 4 GiB plus the byte position, never dereferenced (confirmed with

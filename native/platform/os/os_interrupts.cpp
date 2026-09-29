@@ -1,6 +1,7 @@
 // OSDisableInterrupts / OSEnableInterrupts / OSRestoreInterrupts on the host.
 // See os_internal.hpp for the model.
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -12,9 +13,11 @@ namespace PetariNative::Platform::OS {
 namespace {
 
 thread_local bool tDisabled = false;
+std::atomic<std::uintptr_t> gOwner{0};
 
 void disable() {
     interruptMutex().lock();
+    setInterruptOwner(true);
     tDisabled = true;
     onInterruptsDisabled();
 }
@@ -27,6 +30,7 @@ void enable() {
     // capacity (host allocation), so the swap under the lock does not allocate.
     thread_local std::vector<pthread_override_t> overrides;
     takeDeferredOverrides(overrides);
+    setInterruptOwner(false);
     interruptMutex().unlock();
     if (!overrides.empty()) {
         endOverrides(overrides);
@@ -46,6 +50,14 @@ std::mutex& interruptMutex() {
 
 bool interruptsDisabled() {
     return tDisabled;
+}
+
+std::uintptr_t interruptOwner() {
+    return gOwner.load(std::memory_order_relaxed);
+}
+
+void setInterruptOwner(bool held) {
+    gOwner.store(held ? reinterpret_cast<std::uintptr_t>(pthread_self()) : 0, std::memory_order_relaxed);
 }
 
 void fatal(const char* fmt, ...) {

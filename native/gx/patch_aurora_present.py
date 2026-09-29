@@ -297,6 +297,21 @@ def patch_aurora(text):
         '        if (petariDim) {\n'
         '          petari_present::draw_dim(pass, petariPresent);\n'
         '        }\n')
+    # Frame telemetry (petari/frame_telemetry.hpp): render-worker wall time of
+    # the drawable acquisition, the frame's queue submit and the present call.
+    text = replace_once(text, '#include "present_aurora.hpp"\n',
+                        '#include "present_aurora.hpp"\n#include <petari/frame_telemetry.hpp>\n')
+    text = replace_once(text, '        g_surface.GetCurrentTexture(&surfaceTexture);\n',
+                        '        {\n'
+                        '          PetariNative::FrameTelemetry::Scope petariTiming{PetariNative::FrameTelemetry::DrawableAcquire};\n'
+                        '          g_surface.GetCurrentTexture(&surfaceTexture);\n'
+                        '        }\n')
+    text = replace_once(text, '      g_queue.Submit(1, &buffer);\n',
+                        '      PetariNative::FrameTelemetry::Scope petariTiming{PetariNative::FrameTelemetry::FrameSubmit};\n'
+                        '      g_queue.Submit(1, &buffer);\n')
+    text = replace_once(text, '          status = g_surface.Present();\n',
+                        '          PetariNative::FrameTelemetry::Scope petariTiming{PetariNative::FrameTelemetry::PresentCall};\n'
+                        '          status = g_surface.Present();\n')
     return text
 
 

@@ -1,3 +1,6 @@
+#ifdef PETARI_NATIVE
+#include <petari/ui_observe.hpp>
+#endif
 #include "Game/NPC/TalkState.hpp"
 #include "Game/LiveActor/Nerve.hpp"
 #include "Game/NPC/TalkBalloon.hpp"
@@ -126,6 +129,11 @@ bool TalkStateEvent::talk(const TalkMessageCtrl* pArg1) {
         return false;
     }
 
+#ifdef PETARI_NATIVE
+    if (petari_ui_observing() && !TalkFunction::isSelectTalk(_04)) {
+        petari_ui_target("Talk.Advance", 0, 0.5f, 0.5f, PETARI_UI_SELECTABLE);
+    }
+#endif
     bool unknownBool = false;
 
     if (_1C != 0) {

@@ -26,6 +26,7 @@
 #include "os_internal.hpp"
 #include "petari/host_allocation.hpp"
 #include "petari/platform/aram.hpp"
+#include "petari/platform/audio.hpp"
 #include "petari/platform/dsp.hpp"
 #include "audio_timing.hpp"
 
@@ -341,7 +342,13 @@ void* workerMain(void*) {
 }
 
 void* interruptMain(void*) {
-    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    // Like the AI interrupt thread (ai_host.cpp): each DSP subframe is a round
+    // trip through this thread and JAudio2's audio thread, and user-interactive
+    // wake-ups were measured up to 24.8 ms late (story-9, while the real-time
+    // AI thread delivered within 65 us through the same interrupt lock).
+    if (!PetariNative::Platform::Audio::setRealtimeAudioThread()) {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    }
     Device& d = device();
     while (true) {
         dispatch_semaphore_wait(d.interruptSignal, DISPATCH_TIME_FOREVER);

@@ -1,9 +1,14 @@
+#include <petari/frame_telemetry.hpp>
+
 namespace aurora::gfx {
 // Called only by the recorder thread, stopped at the capture boundary. Queue
 // ordering finishes all earlier pass encodes before unmapping their staging slot.
 void petari_submit_segment(detail::FramePacket& frame, const PetariNative::GX::SnapshotSource& source,
                            uint64_t ticket, PetariNative::GX::SnapshotReady ready) {
-  const auto nextSlot = acquire_mapped_staging_buffer();
+  const auto nextSlot = [] {
+    PetariNative::FrameTelemetry::Scope timing{PetariNative::FrameTelemetry::EfbStagingWait};
+    return acquire_mapped_staging_buffer();
+  }();
   AURORA_ASSERT(nextSlot.has_value(), "Cannot acquire staging memory for an EFB segment");
   const auto oldSlot = frame.stagingBuffer;
   std::array<ByteBuffer, 5> next;
@@ -36,7 +41,10 @@ void petari_submit_segment(detail::FramePacket& frame, const PetariNative::GX::S
     process_events();
     complete->set_value();
   });
-  completion.get();
+  {
+    PetariNative::FrameTelemetry::Scope timing{PetariNative::FrameTelemetry::EfbSubmitWait};
+    completion.get();
+  }
   frame.stagingBuffer = *nextSlot;
   for (size_t i = 0; i < next.size(); ++i) *previous[i] = std::move(next[i]);
 }

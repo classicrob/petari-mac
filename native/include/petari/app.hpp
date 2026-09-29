@@ -13,6 +13,12 @@
 
 extern "C" void petari_host_frame_seam(void);
 
+// Frame-time marks for the seam's statistics, from GameSystem::frameLoop on
+// the same thread: the retrace wait after the seam returned, and endFrame
+// (its GXDrawDone wait) is starting. A timestamp each; no other effect.
+enum { PETARI_FRAME_MARK_RETRACE_DONE = 0, PETARI_FRAME_MARK_END_FRAME = 1 };
+extern "C" void petari_host_frame_mark(int mark);
+
 namespace PetariNative::App {
 
 struct Rect {

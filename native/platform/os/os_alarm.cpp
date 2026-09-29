@@ -135,12 +135,16 @@ void* timerMain(void*) {
     std::unique_lock<std::mutex> lock(interruptMutex(), std::adopt_lock);
     while (true) {
         if (AlarmQueue.head == nullptr) {
+            setInterruptOwner(false);
             cv.wait(lock);
+            setInterruptOwner(true);
             continue;
         }
         const auto deadline = systemTimeToHost(AlarmQueue.head->fire);
         if (std::chrono::steady_clock::now() < deadline) {
+            setInterruptOwner(false);
             cv.wait_until(lock, deadline);
+            setInterruptOwner(true);
             continue;
         }
         fireExpired();
@@ -153,6 +157,28 @@ void* timerMain(void*) {
 }
 
 }  // namespace
+
+namespace PetariNative::Platform::OS {
+
+void dumpAlarms(std::FILE* out) {
+    const OSTime now = __OSGetSystemTime();
+    std::fprintf(out, "[hang] pending alarms (timer thread %s):\n", gTimerStarted ? "started" : "not started");
+    int count = 0;
+    for (OSAlarm* alarm = AlarmQueue.head; alarm != nullptr && count < 64; alarm = alarm->next, ++count) {
+        const double inMs = static_cast<double>(alarm->fire - now) * 1000.0 / OS_TIMER_CLOCK;
+        std::fprintf(out, "[hang]   alarm %p: %s in %.1f ms", static_cast<void*>(alarm),
+                     describeAddress(reinterpret_cast<std::uint64_t>(alarm->handler)).c_str(), inMs);
+        if (alarm->period > 0) {
+            std::fprintf(out, ", period %.1f ms", static_cast<double>(alarm->period) * 1000.0 / OS_TIMER_CLOCK);
+        }
+        std::fputc('\n', out);
+    }
+    if (count == 0) {
+        std::fprintf(out, "[hang]   none\n");
+    }
+}
+
+}  // namespace PetariNative::Platform::OS
 
 extern "C" {
 

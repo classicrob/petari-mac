@@ -18,6 +18,7 @@
 #include <condition_variable>
 
 #include "os_internal.hpp"
+#include "petari/frame_telemetry.hpp"
 #include "petari/host_allocation.hpp"
 #include "petari/platform/vi.hpp"
 
@@ -113,6 +114,7 @@ VIN::DisplayState snapshotLocked() {
 // __VIRetraceHandler. Interrupts disabled, on a host (interrupt) thread.
 void retraceInterrupt() {
     gRetraceCount++;
+    PetariNative::FrameTelemetry::lastRetraceNs.store(PetariNative::FrameTelemetry::nowNs(), std::memory_order_relaxed);
     if (gPreCB) {
         gPreCB(gRetraceCount);
     }
@@ -154,6 +156,10 @@ void* viThreadMain(void*) {
         // One interrupt per wake-up, like the hardware. After a long host
         // stall the timeline restarts instead of firing a burst.
         const auto now = Clock::now();
+        if (now > next) {
+            PetariNative::FrameTelemetry::add(PetariNative::FrameTelemetry::ViTimerLate,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(now - next).count());
+        }
         if (now - next > 4 * period) {
             next = now;
         }

@@ -16,6 +16,9 @@
 
 #include <pthread.h>
 #include <pthread/qos.h>
+#include <sys/sysctl.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 #include "paced_ring.hpp"
 
@@ -63,6 +66,21 @@ void raiseMax(std::atomic<std::int64_t>& worst, std::int64_t value) {
     }
 }
 
+// Seconds since the process started, printed on the [audio] lines so they can
+// be lined up with other timestamped output (the frame trace, stall reports).
+double processSeconds() {
+    struct kinfo_proc info {};
+    std::size_t size = sizeof(info);
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, static_cast<int>(getpid())};
+    if (sysctl(mib, 4, &info, &size, nullptr, 0) != 0 || size == 0) {
+        return -1.0;
+    }
+    struct timeval now;
+    gettimeofday(&now, nullptr);
+    const struct timeval& started = info.kp_proc.p_starttime;
+    return static_cast<double>(now.tv_sec - started.tv_sec) + (now.tv_usec - started.tv_usec) / 1e6;
+}
+
 void report() {
     PetariNative::HostAllocationScope host;
     std::uint64_t reportedReplays = PetariNative::Platform::Audio::replayedBlocks();
@@ -78,10 +96,20 @@ void report() {
         // Ring starvation (underrun) versus late game audio production (AI
         // replaying a block), the ring level, and the largest device request.
         const std::uint64_t replays = PetariNative::Platform::Audio::replayedBlocks();
-        std::fprintf(stderr, "[audio] level %llu/%llu frames, largest request %zu, underrun %llu frames, AI replayed %llu blocks (since previous report, %.2f s)\n",
+        std::fprintf(stderr, "[audio] level %llu/%llu frames, largest request %zu, underrun %llu frames, AI replayed %llu blocks (since previous report, %.2f s; at %.3f s process time)\n",
                      static_cast<unsigned long long>(ring.level()), static_cast<unsigned long long>(ring.target()), ring.largestRequest(),
-                     static_cast<unsigned long long>(ring.takeUnderrunFrames()), static_cast<unsigned long long>(replays - reportedReplays), interval);
+                     static_cast<unsigned long long>(ring.takeUnderrunFrames()), static_cast<unsigned long long>(replays - reportedReplays), interval,
+                     processSeconds());
         reportedReplays = replays;
+        // The DMA engine: elastic waits for a late game (inaudible while the
+        // ring covers them), the shortest block (the game's deadline), and
+        // JAudio2's DSP holds (late DSP frames, audible, not replays).
+        const auto dma = PetariNative::Platform::Audio::takeDmaStats();
+        std::fprintf(stderr, "[audio-dma] waited for %llu late registrations (worst %lld us), %llu waits timed out; shortest block %lld us; "
+                     "DSP holds %llu\n",
+                     static_cast<unsigned long long>(dma.waits), static_cast<long long>(dma.worstWaitUs),
+                     static_cast<unsigned long long>(dma.waitTimeouts), static_cast<long long>(dma.minBlockUs),
+                     static_cast<unsigned long long>(dma.dspHolds));
         // Where the audio cycle spent its time (worst values): see
         // native/platform/audio/audio_timing.hpp.
         const auto t = PetariNative::Platform::Audio::takeTimingStats();
@@ -118,18 +146,18 @@ void produce(std::uint32_t rate) {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     }
     const std::size_t quantum = rate / 1000;  // pull granularity: 1 ms of audio
-    const PetariNative::AudioSDL::Detail::Pacer pacer(rate);
+    PetariNative::AudioSDL::Detail::Pacer pacer(rate);
     auto last = Clock::now();
     auto next = Clock::now();
     while (!stopProducer.load(std::memory_order_acquire)) {
         const auto now = Clock::now();
-        const std::size_t allowance = pacer.allowance(std::chrono::duration<double>(now - last).count());
+        const std::size_t allowance = pacer.allowance(std::chrono::duration<double>(now - last).count(), ring);
         if (diagnostics) {
             raiseMax(worstTickGapUs, std::chrono::duration_cast<std::chrono::microseconds>(now - last).count());
         }
         last = now;
         const std::size_t pulled = PetariNative::AudioSDL::Detail::produceTick(ring, quantum, allowance, [](std::int16_t* out, std::size_t frames) {
-            PetariNative::Platform::Audio::pull(out, frames);
+            return PetariNative::Platform::Audio::pull(out, frames);
         });
         if (diagnostics) {
             raiseMax(worstPullUs, std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - now).count());
@@ -137,6 +165,8 @@ void produce(std::uint32_t rate) {
         }
         // Ticks are paced in real time; a late tick does not bring extra
         // ticks (the level, not the tick count, decides how much is pulled).
+        // A short pull (the DMA engine waiting for the game's next block) is
+        // retried on the next tick; the ring covers the gap.
         next = std::max(next + std::chrono::milliseconds(1), Clock::now());
         std::this_thread::sleep_until(next);
     }
@@ -187,6 +217,13 @@ void stop(void*) {
     device = nullptr;
     if (const auto replayed = PetariNative::Platform::Audio::replayedBlocks())
         std::fprintf(stderr, "AI replayed %llu DMA blocks (the game's audio thread was late)\n", static_cast<unsigned long long>(replayed));
+    if (diagnostics) {
+        const auto dma = PetariNative::Platform::Audio::takeDmaStats();
+        if (dma.waits != 0 || dma.waitTimeouts != 0 || dma.dspHolds != 0)
+            std::fprintf(stderr, "AI DMA waited for %llu late registrations (%llu timed out); DSP holds %llu (since the last report)\n",
+                         static_cast<unsigned long long>(dma.waits), static_cast<unsigned long long>(dma.waitTimeouts),
+                         static_cast<unsigned long long>(dma.dspHolds));
+    }
     if (const auto missing = ring.takeUnderrunFrames())
         std::fprintf(stderr, "SDL audio underrun: %llu silent frames\n", static_cast<unsigned long long>(missing));
     if (initialized) SDL_QuitSubSystem(SDL_INIT_AUDIO);

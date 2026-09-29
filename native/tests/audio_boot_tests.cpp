@@ -13,8 +13,9 @@
 //
 // Output: the real JASAudioThread, JAudio2 DSP host code, native DSP device and
 // AI run unmodified; this test is the audio device. It pulls
-// Audio::pull() output in fixed amounts per frame (32000/60 frames), so the
-// consumption is deterministic, and writes it to a WAV file under $TMPDIR.
+// Audio::pull() output in fixed amounts per frame (32000/60 frames; less only
+// when the DMA engine waits for a late block), so the consumption is nearly
+// deterministic, and writes it to a WAV file under $TMPDIR.
 //
 // Usage: audio_boot_tests --disc <extracted disc root> [--seconds N]
 
@@ -114,7 +115,13 @@ void frame() {
         PetariNative::HostAllocationScope hostAllocations;
         gCapture.resize(at + frames * 2);
     }
-    PAudio::pull(gCapture.data() + at, frames);
+    // A short pull: the DMA engine is waiting for the game's next block (the
+    // audio thread has not run since the last block start); keep what came.
+    const std::size_t got = PAudio::pull(gCapture.data() + at, frames);
+    if (got < frames) {
+        PetariNative::HostAllocationScope hostAllocations;
+        gCapture.resize(at + got * 2);
+    }
     // GameSystemObjHolder::update, then updateAudioSystem.
     gWrapper->updateRhythm();
     gWrapper->movement();

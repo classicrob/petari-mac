@@ -226,3 +226,46 @@ when a higher-priority game thread waits; it ends the override after unlocking.
 Audio diagnostic formatting runs on a joined reporter thread rather than the
 real-time producer. `[audio-host]` records producer and callback interval stats;
 these help localize future failures without asserting their cause.
+
+
+### Observatory and Good Egg fixture
+
+The `galaxy` smoke loads an isolated post-tutorial fixture, walks from the
+observatory to the Terrace, points at the Pull Star, selects Good Egg Galaxy
+and mission 1 through the normal UI, then checks movement, jumping and
+pause/resume. The native UI hooks only publish visible targets; the driver
+uses the normal input bindings. This is not a full mission completion test.
+The route has simulated coverage; a live unattended pass is still pending.
+
+Create a fresh fixture from an existing saved-file seed (source is read only):
+
+```sh
+python3 native/tools/create_observatory_fixture.py --source PATH_TO_SEED_USER --output NEW_TEST_USER
+PETARI_SMOKE=galaxy PETARI_SMOKE_FRAMES=108000 PETARI_TRACE_BOOT=1 \
+  build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari \
+  --disc build/game-data/RMGE01 --user NEW_TEST_USER --test-fixture observatory
+```
+
+The explicit fixture flag requires a marker in that isolated directory and
+refuses the normal user directory. At reload it supplies the tutorial Grand
+Star and completed observatory introduction on both game-data snapshots.
+This bootstrap is not earned progression and does not validate those skipped
+sequences. Good Egg progress is otherwise unchanged. Physical bound input
+still makes an otherwise successful run `ASSISTED` (exit 3).
+
+The first observatory attempt entered the Terrace but later aborted while
+compiling a shader whose indirect texture order referenced a disabled texture
+coordinate. The native Aurora patch maps that indirect coordinate to coordinate
+0, matching Dolphin's handling, in both shader analysis and generation. Valid
+coordinates remain unchanged. The exact failing configuration and all 454
+captured GX configurations now pass source generation; this alone does not
+validate their Metal compilation or rendered appearance.
+
+Known cached pipelines now finish compiling before the game starts. The window
+title reports remaining work and closing the window cancels startup. New
+configurations encountered during play can still compile on demand. An optional
+`-DPETARI_PIPELINE_SEED=/absolute/path/to/seed.db` CMake setting bundles a curated
+Aurora pipeline-configuration database as `Resources/initial_pipeline_cache.db`.
+Export a live cache with SQLite's backup API, not a raw copy of its database
+file while WAL writes may be active. Do not substitute the device-specific Dawn
+cache. No seed is required by default.
