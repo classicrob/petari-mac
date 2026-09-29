@@ -219,7 +219,7 @@ if(BUILD_TESTING)
         add_test(NAME native_platform_allocation COMMAND petari_platform_allocation_tests)
     endif()
 
-    option(PETARI_AUDIO_BOOT_SMOKE "Build and register the audio boot smoke test (work in progress)" OFF)
+    option(PETARI_AUDIO_BOOT_SMOKE "Build and register the audio boot smoke test (needs the extracted disc in build/game-data/RMGE01)" OFF)
     if(PETARI_AUDIO_BOOT_SMOKE AND CMAKE_SOURCE_DIR STREQUAL PETARI_REPO_ROOT)
         file(GLOB_RECURSE PETARI_AUDIO_BOOT_JSYSTEM CONFIGURE_DEPENDS
             ${PETARI_REPO_ROOT}/src/JSystem/*.cpp ${PETARI_REPO_ROOT}/src/nw4r/*.cpp)
@@ -257,10 +257,7 @@ if(BUILD_TESTING)
         target_compile_options(petari_audio_boot_game PRIVATE -fno-rtti -w -Wno-inconsistent-missing-override)
         target_link_libraries(petari_audio_boot_game PUBLIC petari_audio_boot_jsystem petari_input petari_home_menu)
 
-        # Private experiments only: sources linked ahead of the libraries.
-        set(PETARI_AUDIO_BOOT_EXTRA_SOURCES "" CACHE STRING "Extra sources linked into the audio boot smoke (local diagnosis)")
-        add_executable(petari_audio_boot_tests EXCLUDE_FROM_ALL ${PETARI_REPO_ROOT}/native/tests/audio_boot_tests.cpp
-            ${PETARI_AUDIO_BOOT_EXTRA_SOURCES})
+        add_executable(petari_audio_boot_tests EXCLUDE_FROM_ALL ${PETARI_REPO_ROOT}/native/tests/audio_boot_tests.cpp)
         petari_encode_target_sources(petari_audio_boot_tests)
         target_include_directories(petari_audio_boot_tests PRIVATE ${PETARI_REPO_ROOT})
         target_compile_options(petari_audio_boot_tests PRIVATE -fno-rtti)

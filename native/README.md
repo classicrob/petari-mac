@@ -7,9 +7,12 @@ native-port progress. Native compilation and successful game behavior are separa
 milestones.
 
 The full arm64 `Petari.app` now links and starts the Metal window, platform
-services, and original game entry point. Full-game testing is currently stopped
-in startup initialization; reaching the title screen and gameplay remains
-unverified. Focused tests have rendered both a J3D Mario model and the default
+services, and original game entry point. The original frame loop runs at about
+60 Hz, audio initialization and system-wave loading complete, and startup reaches
+the Logo scene request. Layout construction there is the current blocker;
+reaching the title screen and gameplay remains unverified. A separate audio boot
+test plays a real coin sound through JAudio and the native DSP/AI path. Focused
+tests have rendered both a J3D Mario model and the default
 Mii face/icon on Metal, with GPU pixel readback checks.
 
 With the GX build configured below, build and launch the development app using:
@@ -22,6 +25,8 @@ build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari \
 
 The explicit `--user` directory keeps development saves, settings, and crash
 reports under `build/`. Native saves are not byte-compatible with Wii saves.
+Set `PETARI_TRACE_BOOT=1` when launching to log startup phases, heap headroom,
+and frame progress. The trace is disabled by default.
 
 ## Build the native core
 
