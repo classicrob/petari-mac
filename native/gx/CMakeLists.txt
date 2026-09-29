@@ -192,6 +192,8 @@ if(_petari_build_testing)
     if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
         add_test(NAME native_j3d_material_anm_assets COMMAND petari_j3d_material_anm_tests
             --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        add_test(NAME native_j3d_material_anm_corpus COMMAND petari_j3d_material_anm_tests
+            --corpus "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
     endif()
     file(GLOB PETARI_JPA_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/JSystem/JParticle/*.cpp")
     add_executable(petari_jpa_load_tests EXCLUDE_FROM_ALL
