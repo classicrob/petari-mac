@@ -10,7 +10,7 @@
 #include "JSystem/JMath/JMATrigonometric.hpp"
 #include "JSystem/JMath/random.hpp"
 #include "JSystem/JGeometry/TMatrix.hpp"
-#include <revolution/os/OSFastCast.h>
+#include <revolution/os.h>
 #include "JSystem/JAudio2/JASSeqReader.hpp"
 #include <petari/locale.hpp>
 
@@ -83,6 +83,18 @@ int main() {
     castInput = 10.9f;
     OSf32tou16(&castInput, &castOutput); check(castOutput == 10, "fast cast truncation");
     OSu16tof32(&castOutput, &castInput); check(castInput == 10, "fast cast to float");
+    const float colorInputs[] = {-40000.0f, -32768.0f, -12.9f, 0.0f, 0.9f, 127.9f, 255.0f, 256.0f, 40000.0f};
+    const s16 signedExpected[] = {-32768, -32768, -12, 0, 0, 127, 255, 256, 32767};
+    const u8 byteExpected[] = {0, 0, 0, 0, 0, 127, 255, 255, 255};
+    for (unsigned i = 0; i < std::size(colorInputs); ++i) {
+        float value = colorInputs[i];
+        s16 signedColor = 1234;
+        u8 alpha = 42;
+        OSf32tos16(&value, &signedColor);
+        OSf32tou8(&value, &alpha);
+        check(signedColor == signedExpected[i], "signed animation color saturates and truncates");
+        check(alpha == byteExpected[i], "animation opacity saturates and truncates");
+    }
     JMath::TRandom_fast_ random(0);
     check(random.rand() == 1013904223u, "RNG first value");
     check(random.rand() == 1196435762u, "RNG wraps at 32 bits");

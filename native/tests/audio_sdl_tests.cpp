@@ -1,6 +1,7 @@
 #include <petari/audio_sdl.hpp>
 #include <revolution/ai.h>
 #include <revolution/os.h>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -9,7 +10,12 @@
 extern "C" void __OSThreadInit();
 namespace {
 std::atomic<unsigned> callbacks{0};
-void dma() { ++callbacks; }
+std::array<std::chrono::steady_clock::time_point, 32> starts;
+void dma() {
+    const auto index = callbacks.load(std::memory_order_relaxed);
+    if (index < starts.size()) starts[index] = std::chrono::steady_clock::now();
+    callbacks.store(index + 1, std::memory_order_release);
+}
 }
 int main() {
     __OSThreadInit();
@@ -23,14 +29,23 @@ int main() {
         AIInitDMA(reinterpret_cast<uintptr_t>(samples), sizeof(samples));
         AIStartDMA();
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (callbacks.load() < 3 && std::chrono::steady_clock::now() < deadline) {
+        while (callbacks.load() < starts.size() && std::chrono::steady_clock::now() < deadline) {
             OSRestoreInterrupts(OSDisableInterrupts());
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        const bool ok = callbacks >= 3 && PetariNative::AudioSDL::active() &&
+        const bool ok = callbacks >= starts.size() && PetariNative::AudioSDL::active() &&
                         PetariNative::AudioSDL::submittedFrames() >= 640;
         PetariNative::AudioSDL::shutdown();
         if (!ok || PetariNative::AudioSDL::active()) return 1;
+        // A device request can span several DMA blocks, but their interrupts
+        // must be paced so the game can prepare the next block between them.
+        for (std::size_t i = 1; i < starts.size(); ++i) {
+            const auto gap = std::chrono::duration<double, std::milli>(starts[i] - starts[i - 1]).count();
+            if (gap < 2.0) {
+                std::fprintf(stderr, "DMA blocks consumed in a burst: %.3f ms apart\n", gap);
+                return 1;
+            }
+        }
     }
     std::puts("SDL audio callback, DMA interrupts, 32/48 kHz and reopen passed.");
 }

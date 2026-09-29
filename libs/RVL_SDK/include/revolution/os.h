@@ -156,6 +156,11 @@ void* OSAllocFromArenaHi(u32 size, u32 align);
 #endif
 
 inline s16 __OSf32tos16(__REGISTER f32 inF) {
+#ifdef PETARI_NATIVE
+    // PSQ stores saturate to the destination range and truncate toward zero.
+    if (inF != inF) return 0;
+    return inF <= -32768.0f ? -32768 : inF >= 32767.0f ? 32767 : (s16)inF;
+#else
     __REGISTER s16 out;
     u32 tmp;
     __REGISTER u32* tmpPtr = &tmp;
@@ -169,6 +174,7 @@ inline s16 __OSf32tos16(__REGISTER f32 inF) {
     // clang-format on
 
     return out;
+#endif
 }
 
 inline void OSf32tos16(f32* f, s16* out) {
@@ -176,6 +182,10 @@ inline void OSf32tos16(f32* f, s16* out) {
 }
 
 inline u8 __OSf32tou8(__REGISTER f32 inF) {
+#ifdef PETARI_NATIVE
+    // PSQ stores saturate to the destination range and truncate toward zero.
+    return !(inF > 0.0f) ? 0 : inF >= 255.0f ? 255 : (u8)inF;
+#else
     __REGISTER u8 out;
     u32 tmp;
     __REGISTER u32* tmpPtr = &tmp;
@@ -189,6 +199,7 @@ inline u8 __OSf32tou8(__REGISTER f32 inF) {
     // clang-format on
 
     return out;
+#endif
 }
 
 #ifdef OS_F32_TO_U8_DEFER_INLINE

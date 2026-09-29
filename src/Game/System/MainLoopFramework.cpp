@@ -347,7 +347,13 @@ void MainLoopFramework::clearEfb(int param1, int param2, int param3, int param4,
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+#ifdef PETARI_NATIVE
+    // Aurora does not implement Z-texture replacement. This clear's constant
+    // 0xffffff depth is equivalent to a quad on the orthographic far plane.
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+#else
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XY, GX_U16, 0);
+#endif
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_POS_XYZ, GX_U8, 0);
     GXSetNumChans(0);
     GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
@@ -377,16 +383,32 @@ void MainLoopFramework::clearEfb(int param1, int param2, int param3, int param4,
 
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     {
+#ifdef PETARI_NATIVE
+        GXPosition3f32(param1, param2, -1.0f);
+#else
         GXPosition2u16(param1, param2);
+#endif
         GXTexCoord2u8(0, 0);
 
+#ifdef PETARI_NATIVE
+        GXPosition3f32(param1 + param3, param2, -1.0f);
+#else
         GXPosition2u16(param1 + param3, param2);
+#endif
         GXTexCoord2u8(1, 0);
 
+#ifdef PETARI_NATIVE
+        GXPosition3f32(param1 + param3, param2 + param4, -1.0f);
+#else
         GXPosition2u16(param1 + param3, param2 + param4);
+#endif
         GXTexCoord2u8(1, 1);
 
+#ifdef PETARI_NATIVE
+        GXPosition3f32(param1, param2 + param4, -1.0f);
+#else
         GXPosition2u16(param1, param2 + param4);
+#endif
         GXTexCoord2u8(0, 1);
     }
     GXEnd();
