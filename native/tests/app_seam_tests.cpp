@@ -329,7 +329,7 @@ void testSmoke() {
     observation.scene = "Game";
     observation.stage = "FileSelect";
     observation.sceneReady = true;
-    observation.milestones = {"FileSelector.FileSelectStart"};
+    observation.milestones = {"FileSelector.FileSelect"};
     observation.targets.push_back({"FileSelect.Slot", 0, 0.25f, 0.5f,
                                    PetariNative::App::Smoke::kTargetEmpty | PetariNative::App::Smoke::kTargetSelectable});
     petari_host_frame_seam();  // image rectangle of this frame

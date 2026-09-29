@@ -21,7 +21,7 @@
 //    followed by LogoDisplay within 1800 frames (STM_TITLE not prepared).
 // 3. If the Mii error window appears (FileSelector.RFLError, a key window),
 //    tap A after 90 frames to dismiss it, as a player would.
-// 4. PASS at FileSelector.FileSelectStart.
+// 4. PASS at FileSelector.FileSelect (the files are selectable).
 // BLOCKED when the save-data sequence stays active for 900 frames (a Yes/No
 // prompt needs the pointer, which this script does not guess at). FAIL on an
 // unexpected scene or stage, or when the frame limit runs out.

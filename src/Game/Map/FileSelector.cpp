@@ -1038,6 +1038,7 @@ void FileSelector::exeFileSelectStart() {
 void FileSelector::exeFileSelect() {
     if (MR::isFirstStep(this)) {
         validateSelectAll();
+        FILE_SELECTOR_MILESTONE("FileSelector.FileSelect");
         appearAllIndex();
         MR::activeStarPointerGuidance();
     } else {

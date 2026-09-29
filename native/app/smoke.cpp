@@ -351,11 +351,15 @@ Step Driver::step(const Observation& observation) {
             }
         } else if (milestone == "FileSelector.RFLError") {
             mRflTapAt = static_cast<long>(mFrame + kRflTapDelay);
-        } else if (milestone == "FileSelector.FileSelectStart") {
+        } else if (milestone == "FileSelector.FileSelect") {
+            // Files selectable: TitleEnd leads straight here (FileSelectStart
+            // is only on the return and cancel paths).
             fileSelect = true;
         }
     }
-    if (fileSelect && mScript == Script::Playable && mPhase != Phase::ChooseSlot) {
+    // Only on the way in from the title; returning to file select later (after
+    // a cancelled prompt) does not restart the script.
+    if (fileSelect && mScript == Script::Playable && mPhase < Phase::ChooseSlot) {
         note("file select reached; creating a file");
         mPhase = Phase::ChooseSlot;
         mPhaseFrames = 0;

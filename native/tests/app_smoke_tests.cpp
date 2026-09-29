@@ -166,7 +166,7 @@ void testHappyPath() {
     check(run.driver.phase() == std::string("waiting for file select"), "TitleEnd accepted");
     run.frames(fileSelect(true), 100);
     check(run.driver.result() == Result::Running && run.quits == 0, "still running before file select");
-    run.frame(with(fileSelect(true), "FileSelector.FileSelectStart"));
+    run.frame(with(fileSelect(true), "FileSelector.FileSelect"));
     check(run.driver.result() == Result::Pass && run.quits == 1, "PASS at file select, power button once");
     check(Smoke::exitStatus(Result::Pass) == 0, "PASS exits 0");
     check(run.driver.reason().find("1 title press") != std::string::npos, "reason records the attempts");
@@ -224,7 +224,7 @@ void testMiiErrorWindow() {
     run.frame(fileSelect(true));
     check(run.count(Button::A, true) == before + 1 && run.logged("Mii error"), "A dismisses the Mii error key window");
     run.frame(with(fileSelect(true), "FileSelector.TitleEnd"));
-    run.frame(with(fileSelect(true), "FileSelector.FileSelectStart"));
+    run.frame(with(fileSelect(true), "FileSelector.FileSelect"));
     check(run.driver.result() == Result::Pass, "then file select passes");
 }
 
@@ -275,7 +275,7 @@ void testReleaseAfterResult() {
     toTitlePress(run);
     run.frame(fileSelect(true));
     run.frames(fileSelect(true), 5);
-    run.frame(with(fileSelect(true), "FileSelector.FileSelectStart"));
+    run.frame(with(fileSelect(true), "FileSelector.FileSelect"));
     check(run.driver.result() == Result::Pass, "pass while A+B are held");
     run.frames(fileSelect(true), 20);
     check(run.count(Button::A, false) == run.count(Button::A, true) && run.count(Button::B, false) == 1,
@@ -302,7 +302,7 @@ void toFileSelect(Run& run) {
     run.frame(fileSelect(true));
     run.frames(fileSelect(true), 20);
     run.frame(with(fileSelect(true), "FileSelector.TitleEnd"));
-    run.frame(with(fileSelect(true), "FileSelector.FileSelectStart"));
+    run.frame(with(fileSelect(true), "FileSelector.FileSelect"));
 }
 
 // Aims at a target until the game reports it pointed for 3 frames; returns the A presses made.
@@ -449,6 +449,29 @@ void testPrologueSameFrame() {
     check(early.count(Button::A, true) == before, "no page tap before the demo starts");
 }
 
+void testFileSelectMilestone() {
+    // Title mode passes at FileSelect (TitleEnd leads straight there), not at
+    // FileSelectStart, which only the return and cancel paths enter.
+    Run title;
+    toTitlePress(title);
+    title.frame(fileSelect(true));
+    title.frame(with(fileSelect(true), "FileSelector.TitleEnd"));
+    title.frame(with(fileSelect(true), "FileSelector.FileSelectStart"));
+    check(title.driver.result() == Result::Running, "FileSelectStart alone does not pass");
+    title.frame(with(fileSelect(true), "FileSelector.FileSelect"));
+    check(title.driver.result() == Result::Pass, "FileSelect passes");
+
+    // Playable: back in file select after a slot was chosen (a cancelled
+    // prompt) does not restart the script.
+    Run run(1000000, Smoke::Script::Playable);
+    toFileSelect(run);
+    run.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 3);
+    check(run.driver.phase() == std::string("creating the file"), "slot chosen");
+    run.frame(with(fileSelect(true), "FileSelector.FileSelect"));
+    check(run.driver.phase() == std::string("creating the file") && !run.logged("file select reached; creating a file\n"),
+          "a later FileSelect does not restart the script");
+}
+
 void testPlayableGuards() {
     Run unknown(1000000, Smoke::Script::Playable);
     toFileSelect(unknown);
@@ -533,6 +556,7 @@ int main() {
     testReleaseAfterResult();
     testPlayableFlow();
     testPrologueSameFrame();
+    testFileSelectMilestone();
     testPlayableGuards();
     testMilestones();
     std::printf("native app smoke tests passed (%d checks)\n", checks);
