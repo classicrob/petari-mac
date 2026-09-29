@@ -10,6 +10,7 @@
 #include <cstdlib>
 
 #include "host.hpp"
+#include "smoke.hpp"
 #include "petari/home_menu.hpp"
 #include "petari/host_allocation.hpp"
 
@@ -39,6 +40,60 @@ struct Trace {
     TraceClock::time_point last;
 };
 Trace gTrace;
+
+// The automated smoke run (smoke.hpp), when PETARI_SMOKE selects a script.
+Smoke::Driver* gSmoke = nullptr;
+
+unsigned long environmentNumber(const char* name, unsigned long fallback) {
+    const char* value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return fallback;
+    }
+    char* end = nullptr;
+    const unsigned long number = std::strtoul(value, &end, 10);
+    return end != nullptr && *end == '\0' && number > 0 ? number : fallback;
+}
+
+void startSmoke() {
+    if (!Smoke::enabledFromEnvironment()) {
+        return;
+    }
+    const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 7200);
+    const unsigned long stall = environmentNumber("PETARI_SMOKE_STALL_SECONDS", 60);
+    gSmoke = new Smoke::Driver(frames);
+    std::fprintf(stderr, "PETARI SMOKE: script title, frame limit %lu, stall limit %lu s\n", frames, stall);
+    std::fflush(stderr);
+    Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
+}
+
+// Game state is read here, before the seam releases the CPU, while this
+// thread owns the game.
+void runSmoke() {
+    const Smoke::Observation observation = Smoke::observeGame();
+    const Smoke::Step step = gSmoke->step(observation);
+    for (const std::string& line : gSmoke->log()) {
+        std::fprintf(stderr, "PETARI SMOKE [frame %lu]: %s\n", gSmoke->frame(), line.c_str());
+    }
+    if (!gSmoke->log().empty()) {
+        std::fflush(stderr);
+    }
+    if (step.assertFocus) {
+        Events::assertFocus();
+    }
+    for (const Smoke::Press& press : step.presses) {
+        Events::pressButton(press.button == Smoke::Button::A, press.down);
+    }
+    Smoke::heartbeat(gSmoke->frame(), gSmoke->phase());
+    if (step.requestQuit) {
+        Smoke::setProcessResult(gSmoke->result());
+        Smoke::noteQuitRequested(observation.saveSequence);
+        std::fprintf(stderr, "PETARI SMOKE RESULT: %s (%s); pressing the power button%s\n",
+                     Smoke::resultName(gSmoke->result()), gSmoke->reason().c_str(),
+                     observation.saveSequence ? " while the save-data sequence is active" : "");
+        std::fflush(stderr);
+        Host::requestQuit();
+    }
+}
 
 double seconds(TraceClock::duration d) {
     return std::chrono::duration<double>(d).count();
@@ -145,6 +200,7 @@ void openFirstFrame() {
     const char* trace = std::getenv("PETARI_TRACE_BOOT");
     gTrace.enabled = trace != nullptr && trace[0] != '\0' && trace[0] != '0';
     gTrace.start = gTrace.last = TraceClock::now();
+    startSmoke();
     if (gPresent.composeFrame == nullptr) {
         std::fprintf(stderr,
                      "Petari: no presentation hook; the window shows Aurora's frame as is (not the GXCopyDisp "
@@ -172,6 +228,9 @@ using namespace PetariNative::App;
 
 extern "C" void petari_host_frame_seam(void) {
     PetariNative::HostAllocationScope host;
+    if (gSmoke != nullptr) {
+        runSmoke();
+    }
     const bool release = gRelease.begin != nullptr && gRelease.end != nullptr;
     if (release) {
         gRelease.begin();

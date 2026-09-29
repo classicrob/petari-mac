@@ -10,6 +10,14 @@
 #include "Game/Util/SystemUtil.hpp"
 #include "Game/Util/TriggerChecker.hpp"
 
+#ifdef PETARI_NATIVE
+// Progress telemetry and the automated smoke run (native/app); observation only.
+#include <petari/milestone.hpp>
+#define TITLE_SEQUENCE_MILESTONE(name) petari_milestone(name)
+#else
+#define TITLE_SEQUENCE_MILESTONE(name)
+#endif
+
 namespace {
     static const s32 sPressABAppearFrame = 25;
 };  // namespace
@@ -76,6 +84,7 @@ void TitleSequenceProduct::exeDisplayEncouragePal60Window() {
 
 void TitleSequenceProduct::exeBgmPrepare() {
     if (MR::isFirstStep(this)) {
+        TITLE_SEQUENCE_MILESTONE("TitleSequence.BgmPrepare");
         MR::startStageBGM("STM_TITLE", true);
     }
 
@@ -115,6 +124,7 @@ void TitleSequenceProduct::exeLogoWait() {
 
 void TitleSequenceProduct::exeLogoDisplay() {
     if (MR::isFirstStep(this)) {
+        TITLE_SEQUENCE_MILESTONE("TitleSequence.LogoDisplay");
         mPressStartLayout->appear();
         MR::startAnim(mPressStartLayout, "Appear", 0);
     }

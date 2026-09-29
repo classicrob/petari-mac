@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <system_error>
+#include <revolution/dvd.h>
+#include <revolution/nand.h>
 
 #include <petari/audio_sdl.hpp>
 #include <petari/boot.hpp>
@@ -16,6 +18,7 @@
 #include <petari/platform/vi.hpp>
 
 #include "host.hpp"
+#include "smoke.hpp"
 
 extern "C" void petari_game_main(void);          // src/Game/System/GameSystem.cpp
 extern "C" void petari_attach_vi_renderer(void);  // native/gx/vi_bridge.cpp
@@ -40,7 +43,8 @@ void leave(const Platform::Power::Exit& exit, void*) {
         std::fputs("Petari: relaunching failed\n", stderr);
         std::_Exit(1);
     }
-    std::_Exit(0);
+    // 0, or the smoke run's result (smoke.hpp) when one decided.
+    std::_Exit(Smoke::processExitStatus());
 }
 
 }  // namespace
@@ -77,6 +81,13 @@ bool preparePlatform(const Paths& paths, std::string* error) {
 
 void startOS() {
     OSInit();
+    // The SDK's play-record startup initializes NAND on Wii. The native app
+    // initializes it explicitly, after DVD has made the disc ID available.
+    DVDInit();
+    const s32 nandResult = NANDInit();
+    if (nandResult != NAND_RESULT_OK) {
+        OSPanic(__FILE__, __LINE__, "Native save storage initialization failed (%d)", nandResult);
+    }
     // Retraces come from the VI thread at the mode's field rate. The game
     // waits for retraces during start-up and exit, when no frame seam runs.
     // The frame seam's host work (presenting, window events) runs with the CPU

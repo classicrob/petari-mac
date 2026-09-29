@@ -4,6 +4,7 @@
 #include "Game/Screen/SysInfoWindow.hpp"
 #include "Game/System/NANDErrorSequence.hpp"
 #include "Game/System/NANDManager.hpp"
+#include "Game/System/NativeBootTrace.hpp"
 #include "Game/System/SaveDataHandler.hpp"
 #include "Game/System/SysConfigFile.hpp"
 #include "Game/System/UserFile.hpp"
@@ -30,6 +31,39 @@ namespace {
     NEW_NERVE(SaveDataHandleSequenceNoSaveConfirmRemind, SaveDataHandleSequence, NoSaveConfirmRemind);
     NEW_NERVE(SaveDataHandleSequenceErrorHandling, SaveDataHandleSequence, ErrorHandling);
 };  // namespace
+
+#ifdef PETARI_NATIVE
+namespace {
+    const char* getSaveSequenceNerveName(const SaveDataHandleSequence* pSequence) {
+        static const struct {
+            const Nerve* mNerve;
+            const char* mName;
+        } cNerves[] = {
+            {GET_NERVE_ANON(SaveDataHandleSequenceNoOperation), "NoOperation"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceCheckEnableToCreate), "CheckEnableToCreate"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceSaveConfirm), "SaveConfirm"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceSave), "Save"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceSaveWindowDisappear), "SaveWindowDisappear"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceSaveDoneKeyWait), "SaveDoneKeyWait"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceSaveAllWithoutKeyWait), "SaveAllWithoutKeyWait"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceSaveAllWithoutKeyWaitDisappear), "SaveAllWithoutKeyWaitDisappear"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceSaveAllWithoutWindow), "SaveAllWithoutWindow"},
+            {GET_NERVE_ANON(SaveDataHandleSequencePreLoad), "PreLoad"},
+            {GET_NERVE_ANON(SaveDataHandleSequencePreLoadDone), "PreLoadDone"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceNoSaveConfirmRemind), "NoSaveConfirmRemind"},
+            {GET_NERVE_ANON(SaveDataHandleSequenceErrorHandling), "ErrorHandling"},
+        };
+
+        for (u32 i = 0; i < sizeof(cNerves) / sizeof(cNerves[0]); i++) {
+            if (pSequence->isNerve(cNerves[i].mNerve)) {
+                return cNerves[i].mName;
+            }
+        }
+
+        return "?";
+    }
+}  // namespace
+#endif
 
 SaveDataHandleSequence::SaveDataHandleSequence()
     : NerveExecutor("セーブ/ロード"), mSysConfigFile(), mCurrentUserFile(), mBackupUserFile(), mSaveDataHandler(), mNANDErrorSequence(),
@@ -68,6 +102,26 @@ void SaveDataHandleSequence::registerFunctorJustBeforeSave(const MR::FunctorBase
 
 void SaveDataHandleSequence::update() {
     updateNerve();
+
+#ifdef PETARI_NATIVE
+    // Save/load state: every nerve change, and once per second while active.
+    if (MR::Native::isTraceBoot()) {
+        static const char* sPrevNerve = nullptr;
+        static OSTime sLastReport = 0;
+        const char* pNerve = getSaveSequenceNerveName(this);
+        bool isChanged = pNerve != sPrevNerve;
+
+        if (isChanged || (isActive() && MR::Native::isTraceHeartbeat(&sLastReport))) {
+            const bool isHandlerDone = mSaveDataHandler != nullptr && mSaveDataHandler->isDone();
+            OSReport("[save] %s %s (step %d): handler done %d, last NAND result %d, NANDCheck answer 0x%x, "
+                     "error sequence %s, result flag %d\n",
+                     isChanged ? "nerve" : "still", pNerve, getNerveStep(), isHandlerDone,
+                     isHandlerDone ? mSaveDataHandler->getLastResultCode().getCode() : 0, mSaveDataHandler != nullptr ? mSaveDataHandler->_10 : 0,
+                     mNANDErrorSequence == nullptr ? "none" : (mNANDErrorSequence->mIsDead ? "dead" : "alive"), _24);
+            sPrevNerve = pNerve;
+        }
+    }
+#endif
 
     if (mSaveDataHandler != nullptr) {
         mSaveDataHandler->update();

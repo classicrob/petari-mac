@@ -40,6 +40,14 @@
 #include <JSystem/JKernel/JKRMemArchive.hpp>
 #include <nw4r/ut/ResFont.h>
 
+#ifdef PETARI_NATIVE
+// Progress telemetry and the automated smoke run (native/app); observation only.
+#include <petari/milestone.hpp>
+#define FILE_SELECTOR_MILESTONE(name) petari_milestone(name)
+#else
+#define FILE_SELECTOR_MILESTONE(name)
+#endif
+
 #define USER_FILE_NUM 6
 
 namespace {
@@ -357,6 +365,15 @@ void FileSelector::createMiiConfirmIcon() {
 }
 
 void FileSelector::createMiiFont() {
+#ifdef PETARI_NATIVE
+    // MiiFont.arc (MiiFont26.brfnt, for Hangul Mii names) ships on the Korean disc this code
+    // matches. The US disc has no such archive, and its FileInfo, MiiSelect and MiiConfirmIcon
+    // layouts name MessageFont26.brfnt for these text boxes, so without the archive they keep
+    // their layout font.
+    if (!MR::isFileExist("/LayoutData/MiiFont.arc", false)) {
+        return;
+    }
+#endif
     JKRMemArchive* pArchive = MR::receiveArchive("/LayoutData/MiiFont.arc");
     mFont = new nw4r::ut::ResFont();
     mFont->SetResource(pArchive->getResource("/MiiFont26.brfnt"));
@@ -926,6 +943,7 @@ void FileSelector::exeWaitBind() {
 
 void FileSelector::exeTitle() {
     if (MR::isFirstStep(this)) {
+        FILE_SELECTOR_MILESTONE("FileSelector.Title");
         mTitle->appear();
         MR::deactivateDefaultGameLayout();
         MR::startStarPointerModeTitle(this);
@@ -951,6 +969,7 @@ void FileSelector::exeTitle() {
 
 void FileSelector::exeTitleEnd() {
     if (MR::isFirstStep(this)) {
+        FILE_SELECTOR_MILESTONE("FileSelector.TitleEnd");
         mCameraController->goToFarPoint();
         calcBasePos(0.0f);
         appearAllItems();
@@ -969,6 +988,7 @@ void FileSelector::exeTitleEnd() {
 
 void FileSelector::exeRFLError() {
     if (MR::isFirstStep(this)) {
+        FILE_SELECTOR_MILESTONE("FileSelector.RFLError");
         mSysInfoWindow->appear("RFL_02", SysInfoWindow::Type_Key, SysInfoWindow::TextPos_Center, SysInfoWindow::MessageType_System);
     }
 
@@ -1005,6 +1025,7 @@ void FileSelector::exeRFLWaitEnd() {
 
 void FileSelector::exeFileSelectStart() {
     if (MR::isFirstStep(this)) {
+        FILE_SELECTOR_MILESTONE("FileSelector.FileSelectStart");
         mCameraController->goToFarPoint();
         calcBasePos(0.0f);
     }
@@ -1213,6 +1234,7 @@ void FileSelector::exeCreateConfirm() {
 
 void FileSelector::exeCreate() {
     if (MR::isFirstStep(this)) {
+        FILE_SELECTOR_MILESTONE("FileSelector.Create");
         GameSequenceFunction::startCreateUserFileSequence(_B4->_140);
     }
 

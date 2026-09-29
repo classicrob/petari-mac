@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "../app/host.hpp"
+#include "../app/smoke.hpp"
 #include "petari/app.hpp"
 #include "petari/host_allocation.hpp"
 
@@ -129,6 +130,12 @@ bool input(const SDL_Event& event) {
     inputEvents.push_back(static_cast<SDL_EventType>(event.type));
     return true;
 }
+void pressButton(bool buttonA, bool down) {
+    calls.push_back(std::string(down ? "press " : "release ") + (buttonA ? "A" : "B"));
+}
+void assertFocus() {
+    calls.push_back("focus");
+}
 void setImage(const Rect& image, float width, float height) {
     ++imageUpdates;
     lastImage = image;
@@ -136,6 +143,14 @@ void setImage(const Rect& image, float width, float height) {
     lastWindowHeight = height;
 }
 }  // namespace PetariNative::App::Events
+
+namespace PetariNative::App::Smoke {
+Observation smokeObservation;
+Observation observeGame() {
+    hostCall("observe");
+    return smokeObservation;
+}
+}  // namespace PetariNative::App::Smoke
 
 extern "C" {
 const AuroraEvent* aurora_update() {
@@ -260,12 +275,52 @@ void testQuit() {
     check(forced, "a second close request quits immediately");
 }
 
+void testSmoke() {
+    // Opt-in: openFirstFrame reads PETARI_SMOKE. Frames go through the real script.
+    setenv("PETARI_SMOKE", "title", 1);
+    setenv("PETARI_SMOKE_FRAMES", "100000", 1);
+    reset();
+    App::Seam::openFirstFrame();
+    auto& observation = PetariNative::App::Smoke::smokeObservation;
+    observation.scene = "Logo";
+    observation.strap = true;
+    observation.videoConfigured = true;
+    // The strap tap comes at strap frame 480 (the first seam is the move from
+    // boot to the Logo phase). Check the order of calls in the seam that taps.
+    bool tapped = false;
+    for (int i = 0; i < 600 && !tapped; i++) {
+        reset();
+        petari_host_frame_seam();
+        for (const std::string& call : calls) {
+            tapped = tapped || call == "press A";
+        }
+    }
+    check(tapped, "the smoke taps A on the strap reminder");
+    check(calls.size() >= 4 && calls[0] == "observe" && calls[1] == "focus" && calls[2] == "press A" &&
+              calls[3] == "release",
+          "the smoke reads the game and presses before the CPU is released");
+    reset();
+    observation.scene = "Intermission";
+    petari_host_frame_seam();
+    int requests = 0;
+    for (const std::string& call : calls) {
+        requests += call == "requestQuit";
+    }
+    check(requests == 1, "a decided smoke presses the power button");
+    check(PetariNative::App::Smoke::processExitStatus() == 1, "and exits with the failure status");
+    reset();
+    petari_host_frame_seam();
+    check(calls[0] == "observe" && calls[1] == "release", "after the result the seam runs as usual");
+    unsetenv("PETARI_SMOKE");
+}
+
 }  // namespace
 
 int main() {
     testFirstFrameWithoutHooks();
     testSeamWithHooks();
     testQuit();
+    testSmoke();
     std::printf("native app seam tests passed (%d checks)\n", checks);
     return 0;
 }

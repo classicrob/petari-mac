@@ -1,4 +1,5 @@
 #include "Game/Screen/SysInfoWindow.hpp"
+#include "Game/System/NativeBootTrace.hpp"
 #include "Game/LiveActor/Nerve.hpp"
 #include "Game/Screen/IconAButton.hpp"
 #include "Game/Screen/YesNoController.hpp"
@@ -87,6 +88,8 @@ void SysInfoWindow::appear() {
 }
 
 void SysInfoWindow::appear(const char* pMessageId, SysInfoType type, SysInfoTextPos textPos, SysInfoMessageType messageType) {
+    // Type: 0 key wait, 1 blocking, 2 yes/no (SysInfoType).
+    NATIVE_TRACE_BOOT("[prompt] %s: message %s, type %d, message type %d\n", mName, pMessageId, type, messageType);
     mType = type;
 
     switch (type) {

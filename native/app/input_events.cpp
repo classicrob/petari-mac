@@ -1,5 +1,6 @@
 // Window events and remapped controls for the native input layer.
 
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 
@@ -44,6 +45,25 @@ void setImage(const Rect& image, float windowWidth, float windowHeight) {
     viewport.imageWidth = image.width;
     viewport.imageHeight = image.height;
     Input::setViewport(viewport);
+}
+
+void pressButton(bool buttonA, bool down) {
+    const Input::Bindings bindings = Input::bindings();
+    const auto& inputs = bindings.inputs(buttonA ? Input::Action::A : Input::Action::B);
+    if (inputs.empty()) {
+        std::fprintf(stderr, "PETARI SMOKE: no input is bound to %s\n", buttonA ? "A" : "B");
+        return;
+    }
+    const Input::Binding& input = inputs.front();
+    if (input.device == Input::Binding::Device::Key) {
+        Input::keyEvent(input.code, down, false);
+    } else {
+        Input::mouseButtonEvent(static_cast<Input::MouseButton>(input.code), down);
+    }
+}
+
+void assertFocus() {
+    Input::focusChanged(true);
 }
 
 }  // namespace PetariNative::App::Events

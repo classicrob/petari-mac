@@ -1,0 +1,137 @@
+#pragma once
+// Automated smoke run past the title screen (PETARI_SMOKE=title). Opt-in: with
+// PETARI_SMOKE unset nothing here runs.
+//
+// The driver sees what the game shows (scene, stage, strap reminder, save-data
+// sequence, milestones) once per frame at the frame seam, and answers only
+// with Wii Remote button presses through the native input layer's bindings.
+// Presses go through the game's real KPAD path; nothing skips a load or
+// changes game state. When it is done it presses the power button, so the
+// game shuts down through its own reset process.
+//
+// Script "title":
+// 1. Logo scene. While the strap reminder is shown, tap A after 480 frames and
+//    every 120 frames after (the game accepts any button after 450 frames and
+//    moves on by itself at 1200).
+// 2. Wait for scene Game, stage FileSelect, fully initialised, and the
+//    TitleSequence.LogoDisplay milestone (the title reads A and B from then,
+//    after its BGM is prepared); 10 frames later hold A and B together for 20
+//    frames (the "Press [A][B]" title). Up to 3 attempts, 300 frames apart,
+//    until FileSelector.TitleEnd. FAIL if TitleSequence.BgmPrepare is not
+//    followed by LogoDisplay within 1800 frames (STM_TITLE not prepared).
+// 3. If the Mii error window appears (FileSelector.RFLError, a key window),
+//    tap A after 90 frames to dismiss it, as a player would.
+// 4. PASS at FileSelector.FileSelectStart.
+// BLOCKED when the save-data sequence stays active for 900 frames (a Yes/No
+// prompt needs the pointer, which this script does not guess at). FAIL on an
+// unexpected scene or stage, or when the frame limit runs out.
+
+#include <string>
+#include <vector>
+
+namespace PetariNative::App::Smoke {
+
+struct Observation {
+    std::string scene;          // current SceneControlInfo scene ("" before the first)
+    std::string stage;
+    bool sceneReady = false;    // scene initialisation finished
+    bool strap = false;         // strap reminder (Logo scene) on screen
+    bool saveSequence = false;  // save-data handling sequence active
+    bool videoConfigured = false;  // VI has latched a render mode
+    bool videoBlack = true;        // VI output blanked
+    std::vector<std::string> milestones;  // recorded since the previous frame
+};
+
+enum class Button { A, B };
+
+struct Press {
+    Button button;
+    bool down;
+};
+
+struct Step {
+    std::vector<Press> presses;
+    bool assertFocus = false;  // before presses: the input layer ignores them while unfocused
+    bool requestQuit = false;  // press the power button (once, when the result is decided)
+};
+
+enum class Result { Running, Pass, Fail, Blocked };
+
+// Process exit status for a result: 0 pass, 1 fail, 2 blocked.
+int exitStatus(Result result);
+const char* resultName(Result result);
+
+class Driver {
+public:
+    explicit Driver(unsigned long frameLimit);
+
+    // Once per frame, at the seam.
+    Step step(const Observation& observation);
+
+    Result result() const { return mResult; }
+    const std::string& reason() const { return mReason; }
+    unsigned long frame() const { return mFrame; }
+    // Static name of the current phase, for logs and the watchdog.
+    const char* phase() const;
+    // Log lines produced by the last step.
+    const std::vector<std::string>& log() const { return mLog; }
+
+private:
+    enum class Phase { Boot, Logo, WaitTitle, TitleReady, Holding, WaitTitleEnd, WaitFileSelect, Done };
+
+    void finish(Result result, const std::string& reason, Step& step);
+    void tap(Button button, unsigned long holdFrames, Step& step);
+    void pressTitle(Step& step);
+    void note(const std::string& line);
+
+    struct Release {
+        unsigned long frame;
+        Button button;
+    };
+
+    unsigned long mFrameLimit;
+    unsigned long mFrame = 0;
+    Phase mPhase = Phase::Boot;
+    Result mResult = Result::Running;
+    std::string mReason;
+    std::vector<std::string> mLog;
+    std::vector<Release> mReleases;
+    std::string mLastScene;
+    std::string mLastStage;
+    bool mLastStrap = false;
+    bool mLastSave = false;
+    int mLastVideo = -1;  // configured * 2 + black; -1 before the first frame
+    unsigned long mStrapFrames = 0;
+    unsigned long mSaveFrames = 0;
+    unsigned long mPhaseFrames = 0;
+    int mTitleAttempts = 0;
+    long mBgmPrepareAt = -1;
+    long mLogoDisplayAt = -1;
+    long mRflTapAt = -1;
+};
+
+// --- Process-wide state for the app (smoke.cpp) ---
+
+// Whether PETARI_SMOKE selects a known script; prints why not otherwise.
+bool enabledFromEnvironment();
+// Exit status the power exit handler uses: the smoke result, or 0 when the
+// smoke is not running or has not decided.
+int processExitStatus();
+void setProcessResult(Result result);
+
+// A host thread that ends the process if frames stop: status 124 when no
+// frame reaches the seam for stallSeconds (loading hangs included), 125 when
+// the game has not exited shutdownSeconds after the smoke pressed the power
+// button. It reads only values published below, never game state.
+void startWatchdog(unsigned stallSeconds, unsigned shutdownSeconds);
+void heartbeat(unsigned long frame, const char* phase);
+void noteQuitRequested(bool saveSequenceActive);
+
+}  // namespace PetariNative::App::Smoke
+
+namespace PetariNative::App::Smoke {
+// smoke_game.cpp (SDK side): what the game shows now, and the milestones
+// recorded since the previous call. Main thread, at the seam, while it holds
+// the CPU (before the seam releases it).
+Observation observeGame();
+}  // namespace PetariNative::App::Smoke
