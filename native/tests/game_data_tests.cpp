@@ -4,16 +4,23 @@
 //   the game data, compared byte-for-byte with the native resource decompressor.
 // - GhostPacket (race ghost .gst data): big-endian multi-byte reads, and a walk of every disc
 //   ghost file with the packet layout GhostPlayer::receiveGhostPacket uses.
+// - FileRipper::loadToMainRAM with decompression requested on uncompressed disc files, read
+//   through the native DVD layer: the first 0x20 bytes come from the header probe buffer,
+//   which must still be alive when they are copied (a block-scoped buffer escaped natively).
 //
 // Usage: petari_game_data_tests [--assets GAME_FILES_DIR]
-// Links: src/Game/System/FileRipper.cpp, src/Game/Player/GhostPacket.cpp, petari_resources,
-// petari_kernel/heaps/platform (DVD, OS, VI). FileRipper.cpp also references the
-// streaming/DVD paths' helpers below, which decompressSzsSub on an in-memory source never
-// reaches; this file defines them as aborting stubs.
+// Links: src/Game/System/FileRipper.cpp, src/Game/Player/GhostPacket.cpp,
+// native/tests/heap_diagnostics.cpp (panic and console output), petari_resources,
+// petari_kernel/heaps/platform (DVD, OS, VI). FileRipper.cpp also references the MR file
+// helpers below; this file implements them on top of the DVD layer.
 #include "archive.hpp"
 #include "Game/Player/GhostPacket.hpp"
 #include "Game/System/FileRipper.hpp"
+#include <JSystem/JKernel/JKRExpHeap.hpp>
+#include <petari/boot.hpp>
 #include <petari/endian.hpp>
+#include <petari/platform/dvd.hpp>
+#include <revolution/dvd.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -24,31 +31,32 @@
 #include <string>
 #include <vector>
 
-class JUTException {
-public:
-    [[noreturn]] static void panic_f(const char*, int, const char*, ...);
-};
-
 [[noreturn]] static void unreachable(const char* pName) {
     std::fprintf(stderr, "game_data_tests: unexpected call to %s\n", pName);
     std::abort();
 }
 
-void JUTException::panic_f(const char*, int, const char*, ...) {
-    unreachable("JUTException::panic_f");
-}
-
+// Disc-path forms of the MR file helpers (the tests pass full paths, no language prefix).
 namespace MR {
-    void copyMemory(void*, const void*, u32) {
-        unreachable("MR::copyMemory");
+    void copyMemory(void* pDst, const void* pSrc, u32 size) {
+        std::memcpy(pDst, pSrc, size);
     }
 
-    u32 getFileSize(const char*, bool) {
-        unreachable("MR::getFileSize");
+    u32 getFileSize(const char* pPath, bool isLocalized) {
+        DVDFileInfo fileInfo;
+        if (isLocalized || !DVDOpen(pPath, &fileInfo)) {
+            unreachable("MR::getFileSize");
+        }
+        const u32 size = fileInfo.length;
+        DVDClose(&fileInfo);
+        return size;
     }
 
-    bool isFileExist(const char*, bool) {
-        unreachable("MR::isFileExist");
+    bool isFileExist(const char* pPath, bool isLocalized) {
+        if (isLocalized) {
+            unreachable("MR::isFileExist");
+        }
+        return DVDConvertPathToEntrynum(pPath) >= 0;
     }
 }  // namespace MR
 
@@ -213,10 +221,53 @@ static void testAssets(const std::filesystem::path& filesRoot) {
     check(decompressed > 0 && ghosts > 0, "no compressed archives or ghost files found");
 }
 
+// Loads uncompressed disc files with decompress = true, the path that probes the first 0x20
+// bytes into a stack buffer and copies them to the destination after allocating it.
+static void testLoadToMainRAM(const std::filesystem::path& filesRoot) {
+    namespace fs = std::filesystem;
+    namespace PDVD = PetariNative::Platform::DVD;
+    OSInit();
+    std::string error;
+    if (!PDVD::mount({filesRoot.parent_path()}, &error)) {
+        std::fprintf(stderr, "FAIL: DVD mount: %s\n", error.c_str());
+        ++sFailures;
+        return;
+    }
+    DVDInit();
+    JKRExpHeap::createRoot(1, false);
+
+    std::size_t loaded = 0;
+    for (const fs::directory_entry& entry : fs::recursive_directory_iterator(filesRoot)) {
+        if (loaded >= 64 || !entry.is_regular_file() || entry.file_size() < 0x40 || entry.file_size() > 0x100000) {
+            continue;
+        }
+        Buffer bytes;
+        if (!readFile(entry.path(), &bytes) || std::memcmp(bytes.data(), "Yaz0", 4) == 0 || std::memcmp(bytes.data(), "Yay0", 4) == 0) {
+            continue;
+        }
+        const std::string discPath = "/" + fs::relative(entry.path(), filesRoot).generic_string();
+
+        JKRExpHeap* pHeap = JKRExpHeap::create(4 * 1024 * 1024, JKRHeap::sRootHeap, false);
+        const u8* pData = static_cast< const u8* >(FileRipper::loadToMainRAM(discPath.c_str(), nullptr, true, pHeap, FileRipper::UNK_0));
+        if (pData == nullptr || std::memcmp(pData, bytes.data(), 0x20) != 0) {
+            std::fprintf(stderr, "FAIL: %s: first 0x20 bytes differ from the file\n", discPath.c_str());
+            ++sFailures;
+        } else if (std::memcmp(pData + 0x20, bytes.data() + 0x20, bytes.size() - 0x20) != 0) {
+            std::fprintf(stderr, "FAIL: %s: data after 0x20 differs from the file\n", discPath.c_str());
+            ++sFailures;
+        }
+        JKRHeap::destroy(pHeap);
+        loaded++;
+    }
+    std::printf("FileRipper loadToMainRAM: %zu uncompressed files match\n", loaded);
+    check(loaded > 0, "no uncompressed files found");
+}
+
 int main(int argc, char** argv) {
     testGhostPacketReads();
     if (argc == 3 && std::strcmp(argv[1], "--assets") == 0) {
         testAssets(argv[2]);
+        testLoadToMainRAM(argv[2]);
     } else if (argc != 1) {
         std::fprintf(stderr, "Usage: %s [--assets GAME_FILES_DIR]\n", argv[0]);
         return 2;

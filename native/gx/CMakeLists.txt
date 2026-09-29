@@ -196,7 +196,7 @@ if(_petari_build_testing)
     target_link_libraries(petari_jpa_load_tests PRIVATE petari_j3d)
     target_link_options(petari_jpa_load_tests PRIVATE -Wl,-dead_strip)
     add_executable(petari_game_data_tests EXCLUDE_FROM_ALL
-        "${CMAKE_SOURCE_DIR}/native/tests/game_data_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/game_data_tests.cpp" "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"
         "${CMAKE_SOURCE_DIR}/src/Game/System/FileRipper.cpp"
         "${CMAKE_SOURCE_DIR}/src/Game/Player/GhostPacket.cpp")
     petari_encode_target_sources(petari_game_data_tests)

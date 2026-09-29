@@ -51,11 +51,17 @@ void* FileRipper::loadToMainRAM(const char* fpath, u8* dest, bool decompress, JK
         OSPanic(__FILE__, 0x77, "DVDOpen() failed");
     }
 
+#ifdef PETARI_NATIVE
+    // copySrc points into buf and is read after the block (the first 0x20 bytes of an
+    // uncompressed file, the Yaz0 header), so buf must outlive it; Clang reuses
+    // block-local stack slots.
+    u8 buf[0x60];
+#endif
     if (decompress) {
-        u8 buf[0x60];
 #ifdef PETARI_NATIVE
         copySrc = reinterpret_cast< u8* >((reinterpret_cast< uintptr_t >(buf) + 0x3f) / 0x40 * 0x40);
 #else
+        u8 buf[0x60];
         copySrc = (u8*)((u32)(buf + 0x3f) / 0x40 * 0x40);
 #endif
         while (true) {
