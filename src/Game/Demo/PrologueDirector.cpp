@@ -19,6 +19,14 @@
 #include "Game/Util/ScreenUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
 
+#ifdef PETARI_NATIVE
+// Progress telemetry and the automated smoke run (native/app); observation only.
+#include <petari/milestone.hpp>
+#define NATIVE_MILESTONE(name) petari_milestone(name)
+#else
+#define NATIVE_MILESTONE(name)
+#endif
+
 void PrologueDirector_FORCE_MATCH_SDATA2() {
     1.0f;
     0.0f;
@@ -116,6 +124,7 @@ void PrologueDirector::exePictureBook() {
     ActorCameraInfo cameraInfo = ActorCameraInfo();
 
     if (MR::isFirstStep(this)) {
+        NATIVE_MILESTONE("Prologue.PictureBook");
         mPictureBook->appear();
         MR::openWipeFade(::sPicBookStartWipeFrame);
         mScenery->appear();
@@ -145,6 +154,7 @@ void PrologueDirector::exePeachLetterStart() {
 
 void PrologueDirector::exePeachLetter() {
     if (MR::isFirstStep(this)) {
+        NATIVE_MILESTONE("Prologue.PeachLetter");
         MR::startStageBGM("STM_PROLOGUE_02", false);
         MR::startSystemSE("SE_SY_LETTER_APPEAR");
         MR::startSystemSE("SE_SV_PEACH_OPENING_LETTER");
@@ -201,6 +211,7 @@ void PrologueDirector::exeArrive() {
     ActorCameraInfo cameraInfo = ActorCameraInfo();
 
     if (MR::isFirstStep(this)) {
+        NATIVE_MILESTONE("Prologue.Arrive");
         MR::permitLevelSE();
 
         TPos3f baseMtx;
@@ -245,6 +256,7 @@ void PrologueDirector::exeGameStart() {
         MR::openWipeFade(::sGameStartWipeFrame);
         MR::endDemo(this, ::sArriveDemoName);
         MR::initPlayerAfterOpeningDemo();
+        NATIVE_MILESTONE("Prologue.GameStart");
         kill();
     }
 }

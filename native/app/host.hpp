@@ -46,11 +46,14 @@ bool loadControls(const std::filesystem::path& file, std::string* error);
 bool input(const SDL_Event& event);
 // Where the game image is, for the pointer. Window points.
 void setImage(const Rect& image, float windowWidth, float windowHeight);
-// Smoke run only (smoke.hpp): press or release the input bound to the Wii
-// Remote's A or B button, and tell the input layer the window has focus (it
-// ignores presses while unfocused).
-void pressButton(bool buttonA, bool down);
+// Smoke run only (smoke.hpp): press or release the input bound to a Wii
+// Remote/Nunchuk action, tell the input layer the window has focus (it ignores
+// presses while unfocused), and move the pointer.
+// button: 0 A, 1 B, 2 the stick's up (Smoke::Button order).
+void pressButton(int button, bool down);
 void assertFocus();
+// Moves the pointer to a window point.
+void movePointer(float x, float y);
 }  // namespace Events
 
 // --- frame_seam.cpp ---

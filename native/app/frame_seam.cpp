@@ -55,13 +55,15 @@ unsigned long environmentNumber(const char* name, unsigned long fallback) {
 }
 
 void startSmoke() {
-    if (!Smoke::enabledFromEnvironment()) {
+    Smoke::Script script = Smoke::Script::Title;
+    if (!Smoke::enabledFromEnvironment(&script)) {
         return;
     }
     const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 7200);
     const unsigned long stall = environmentNumber("PETARI_SMOKE_STALL_SECONDS", 60);
-    gSmoke = new Smoke::Driver(frames);
-    std::fprintf(stderr, "PETARI SMOKE: script title, frame limit %lu, stall limit %lu s\n", frames, stall);
+    gSmoke = new Smoke::Driver(frames, script);
+    std::fprintf(stderr, "PETARI SMOKE: script %s, frame limit %lu, stall limit %lu s\n",
+                 script == Smoke::Script::Playable ? "playable" : "title", frames, stall);
     std::fflush(stderr);
     Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
 }
@@ -69,7 +71,7 @@ void startSmoke() {
 // Game state is read here, before the seam releases the CPU, while this
 // thread owns the game.
 void runSmoke() {
-    const Smoke::Observation observation = Smoke::observeGame();
+    const Smoke::Observation observation = Smoke::observeGame(gSmoke->wantsPlayer());
     const Smoke::Step step = gSmoke->step(observation);
     for (const std::string& line : gSmoke->log()) {
         std::fprintf(stderr, "PETARI SMOKE [frame %lu]: %s\n", gSmoke->frame(), line.c_str());
@@ -80,8 +82,13 @@ void runSmoke() {
     if (step.assertFocus) {
         Events::assertFocus();
     }
+    if (step.pointer) {
+        // Normalised over the game image, as the input layer maps the pointer.
+        Events::movePointer(gLastImage.x + step.pointerU * gLastImage.width,
+                            gLastImage.y + step.pointerV * gLastImage.height);
+    }
     for (const Smoke::Press& press : step.presses) {
-        Events::pressButton(press.button == Smoke::Button::A, press.down);
+        Events::pressButton(static_cast<int>(press.button), press.down);
     }
     Smoke::heartbeat(gSmoke->frame(), gSmoke->phase());
     if (step.requestQuit) {

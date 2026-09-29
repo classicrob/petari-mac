@@ -8,6 +8,14 @@
 #include "Game/Util/DrawUtil.hpp"
 #include "Game/Util/EventUtil.hpp"
 #include "Game/Util/GamePadUtil.hpp"
+
+#ifdef PETARI_NATIVE
+// Progress telemetry and the automated smoke run (native/app); observation only.
+#include <petari/milestone.hpp>
+#define NATIVE_MILESTONE(name) petari_milestone(name)
+#else
+#define NATIVE_MILESTONE(name)
+#endif
 #include "Game/Util/LayoutUtil.hpp"
 #include "Game/Util/MessageUtil.hpp"
 #include "Game/Util/ObjUtil.hpp"
@@ -691,6 +699,7 @@ void PictureBookLayout::exeFadeInText() {
 
 void PictureBookLayout::exeWaitWithText() {
     if (MR::isFirstStep(this)) {
+        NATIVE_MILESTONE("PictureBook.PageReady");
         mIconAButton->openWithTurn();
     }
 

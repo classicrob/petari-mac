@@ -8,6 +8,7 @@
 
 #include <SDL3/SDL_video.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -130,8 +131,14 @@ bool input(const SDL_Event& event) {
     inputEvents.push_back(static_cast<SDL_EventType>(event.type));
     return true;
 }
-void pressButton(bool buttonA, bool down) {
-    calls.push_back(std::string(down ? "press " : "release ") + (buttonA ? "A" : "B"));
+void pressButton(int button, bool down) {
+    calls.push_back(std::string(down ? "press " : "release ") + (button == 0 ? "A" : button == 1 ? "B" : "StickUp"));
+}
+float pointerX = -1.0f, pointerY = -1.0f;
+void movePointer(float x, float y) {
+    calls.push_back("pointer");
+    pointerX = x;
+    pointerY = y;
 }
 void assertFocus() {
     calls.push_back("focus");
@@ -146,7 +153,9 @@ void setImage(const Rect& image, float width, float height) {
 
 namespace PetariNative::App::Smoke {
 Observation smokeObservation;
-Observation observeGame() {
+bool wantedPlayer = false;
+Observation observeGame(bool wantPlayer) {
+    wantedPlayer = wantPlayer;
     hostCall("observe");
     return smokeObservation;
 }
@@ -311,6 +320,30 @@ void testSmoke() {
     reset();
     petari_host_frame_seam();
     check(calls[0] == "observe" && calls[1] == "release", "after the result the seam runs as usual");
+
+    // Playable: a published target's normalised position becomes a window
+    // point over the presented image.
+    setenv("PETARI_SMOKE", "playable", 1);
+    App::Seam::openFirstFrame();
+    observation = {};
+    observation.scene = "Game";
+    observation.stage = "FileSelect";
+    observation.sceneReady = true;
+    observation.milestones = {"FileSelector.FileSelectStart"};
+    observation.targets.push_back({"FileSelect.Slot", 0, 0.25f, 0.5f,
+                                   PetariNative::App::Smoke::kTargetEmpty | PetariNative::App::Smoke::kTargetSelectable});
+    petari_host_frame_seam();  // image rectangle of this frame
+    reset();
+    observation.milestones.clear();
+    petari_host_frame_seam();
+    bool pointed = false;
+    for (const std::string& call : calls) {
+        pointed = pointed || call == "pointer";
+    }
+    check(pointed && std::fabs(PetariNative::App::Events::pointerX - (presentImage.x + 0.25f * presentImage.width)) < 0.01f &&
+              std::fabs(PetariNative::App::Events::pointerY - (presentImage.y + 0.5f * presentImage.height)) < 0.01f,
+          "a target's u,v becomes a window point over the presented image");
+    check(!PetariNative::App::Smoke::wantedPlayer, "Mario's position is not requested before the game starts");
     unsetenv("PETARI_SMOKE");
 }
 

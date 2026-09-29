@@ -25,6 +25,11 @@
 #include "Game/Util/StarPointerUtil.hpp"
 #include "Game/Util/StringUtil.hpp"
 
+#ifdef PETARI_NATIVE
+// Progress telemetry and the automated smoke run (native/app); observation only.
+#include <petari/milestone.hpp>
+#endif
+
 namespace {
     static const s32 sTimingPlayingTicoSE = 180;
 };  // namespace
@@ -105,6 +110,11 @@ void GameSequenceProgress::startScene() {
     GameSystemFunction::setAutoSleepTimeWiiRemote(isSceneLongAutoSleepWiiRemote());
 
     if (MR::isEqualSceneName("Game")) {
+#ifdef PETARI_NATIVE
+        if (MR::isEqualStageName("PeachCastleGardenGalaxy")) {
+            petari_milestone("Stage.PeachCastleGardenGalaxy");
+        }
+#endif
         mStorySequenceExecutor->setNerveSceneStart();
         MR::startGlobalTimer();
 

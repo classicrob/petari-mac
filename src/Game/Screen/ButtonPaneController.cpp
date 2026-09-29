@@ -4,6 +4,7 @@
 #include "Game/Util/LayoutUtil.hpp"
 #include "Game/Util/NerveUtil.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
+#include "Game/Util/NativeUiObserve.hpp"
 
 namespace {
     const f32 cDecidedToDisappearAnimRate = 1.5f;
@@ -79,6 +80,30 @@ bool ButtonPaneController::trySelect() {
 
     return false;
 }
+
+#ifdef PETARI_NATIVE
+void ButtonPaneController::publishUiTarget(const char* pId, s32 index) const {
+    if (!petari_ui_observing() || isHidden()) {
+        return;
+    }
+
+    u32 flags = 0;
+    if (isPointing()) {
+        flags |= PETARI_UI_POINTING;
+    }
+
+    // trySelect accepts A only when active, with a decide animation, in the Pointing nerve;
+    // Wait and NotPointing move to Pointing when the pointer is over the bounding pane.
+    bool isResting = isNerve(GET_NERVE(ButtonPaneController, ButtonPaneControllerNrvWait)) ||
+                     isNerve(GET_NERVE(ButtonPaneController, ButtonPaneControllerNrvPointing)) ||
+                     isNerve(GET_NERVE(ButtonPaneController, ButtonPaneControllerNrvNotPointing));
+    if (_24 && mDecideAnimName != nullptr && isResting) {
+        flags |= PETARI_UI_SELECTABLE;
+    }
+
+    MR::Native::publishUiPaneTarget(mHost, mBoundingPaneName, pId, index, flags);
+}
+#endif
 
 bool ButtonPaneController::isHidden() const {
     return isNerve(GET_NERVE(ButtonPaneController, ButtonPaneControllerNrvHidden));

@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +25,22 @@ constexpr unsigned long kTitleRetryFrames = 300;
 constexpr int kTitleAttempts = 3;
 constexpr unsigned long kRflTapDelay = 90;
 constexpr unsigned long kSaveBlockedFrames = 900;
+// playable
+constexpr unsigned long kPointingFramesToPress = 3;  // pointer reported over the target this long
+constexpr unsigned long kAimLimit = 240;             // frames aiming at a shown target
+constexpr unsigned long kTargetMissingLimit = 600;   // frames waiting for a target to be shown
+constexpr unsigned long kMilestoneLimit = 3600;
+constexpr unsigned long kDemoLimit = 600;
+constexpr unsigned long kPrologueTapDelay = 30;
+constexpr unsigned long kPrologueStallLimit = 3600;
+constexpr unsigned long kMoveSettle = 120;
+constexpr unsigned long kMoveHold = 90;
+constexpr unsigned long kMoveAfter = 30;
+constexpr float kMoveMinimum = 50.0f;
+
+bool isAllowedPrompt(const std::string& messageId, int type) {
+    return type == 2 && (messageId == "System_FileSelect001" || messageId == "System_FileSelect013");
+}
 
 }  // namespace
 
@@ -55,7 +72,156 @@ const char* resultName(Result result) {
     return "?";
 }
 
-Driver::Driver(unsigned long frameLimit) : mFrameLimit(frameLimit) {}
+Driver::Driver(unsigned long frameLimit, Script script) : mFrameLimit(frameLimit), mScript(script) {}
+
+bool Driver::seen(const std::string& milestone) const {
+    for (const std::string& name : mSeen) {
+        if (name == milestone) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Driver::aimAndPress(const Observation& observation, const char* id, bool emptySlot, Step& step) {
+    const Observation::Target* target = nullptr;
+    for (const Observation::Target& candidate : observation.targets) {
+        if (candidate.id != id || !(candidate.flags & kTargetSelectable)) {
+            continue;
+        }
+        if (emptySlot && !(candidate.flags & kTargetEmpty)) {
+            continue;
+        }
+        if (target == nullptr || candidate.index < target->index) {
+            target = &candidate;
+        }
+    }
+    if (target == nullptr) {
+        mAimFrames = 0;
+        mPointingFrames = 0;
+        if (++mAimMissing >= kTargetMissingLimit) {
+            finish(Result::Fail, std::string("no selectable ") + id + (emptySlot ? " (empty)" : "") + " shown for " +
+                                     std::to_string(kTargetMissingLimit) + " frames",
+                   step);
+        }
+        return false;
+    }
+    mAimMissing = 0;
+    step.pointer = true;
+    step.pointerU = target->u;
+    step.pointerV = target->v;
+    step.assertFocus = true;
+    if (mAimFrames++ == 0) {
+        note("point at " + std::string(id) + " " + std::to_string(target->index) + " (" + std::to_string(target->u) +
+             ", " + std::to_string(target->v) + ")");
+    }
+    mPointingFrames = (target->flags & kTargetPointing) ? mPointingFrames + 1 : 0;
+    if (mPointingFrames >= kPointingFramesToPress) {
+        note("tap A: " + std::string(id) + " " + std::to_string(target->index));
+        tap(Button::A, kTapFrames, step);
+        mAimFrames = 0;
+        mPointingFrames = 0;
+        return true;
+    }
+    if (mAimFrames >= kAimLimit) {
+        finish(Result::Fail, "the pointer never got over " + std::string(id) + " at (" + std::to_string(target->u) +
+                                 ", " + std::to_string(target->v) + ")",
+               step);
+    }
+    return false;
+}
+
+void Driver::playable(const Observation& observation, Step& step) {
+    auto waitFor = [&](const char* milestone, unsigned long limit, Phase next) {
+        if (seen(milestone)) {
+            mPhase = next;
+            mPhaseFrames = 0;
+            mAimMissing = 0;
+        } else if (mPhaseFrames >= limit) {
+            finish(Result::Fail, std::string("no ") + milestone + " within " + std::to_string(limit) + " frames", step);
+        }
+    };
+    switch (mPhase) {
+    case Phase::ChooseSlot:
+        if (aimAndPress(observation, "FileSelect.Slot", true, step)) {
+            mPhase = Phase::WaitMiiSelect;
+            mPhaseFrames = 0;
+        }
+        break;
+    case Phase::WaitMiiSelect:
+        waitFor("FileSelector.MiiSelect", kMilestoneLimit, Phase::ChooseMario);
+        break;
+    case Phase::ChooseMario:
+        if (aimAndPress(observation, "MiiSelect.Mario", false, step)) {
+            mPhase = Phase::WaitFileConfirm;
+            mPhaseFrames = 0;
+        }
+        break;
+    case Phase::WaitFileConfirm:
+        waitFor("FileSelector.FileConfirm", kMilestoneLimit, Phase::ChooseStart);
+        break;
+    case Phase::ChooseStart:
+        if (aimAndPress(observation, "FileSelect.Start", false, step)) {
+            mPhase = Phase::WaitDemo;
+            mPhaseFrames = 0;
+        }
+        break;
+    case Phase::WaitDemo:
+        waitFor("FileSelector.DemoStartWait", kDemoLimit, Phase::Prologue);
+        mSinceProgress = 0;
+        break;
+    case Phase::Prologue:
+        if (seen("Prologue.GameStart")) {
+            mPhase = Phase::Move;
+            mMoveFrame = 0;
+            break;
+        }
+        if (mPrologueTapAt >= 0 && mFrame >= static_cast<unsigned long>(mPrologueTapAt)) {
+            note("tap A: prologue text");
+            tap(Button::A, kTapFrames, step);
+            mPrologueTapAt = -1;
+        }
+        if (++mSinceProgress >= kPrologueStallLimit) {
+            finish(Result::Fail,
+                   "no prologue milestone for " + std::to_string(kPrologueStallLimit) + " frames (last: " +
+                       (mSeen.empty() ? std::string("none") : mSeen.back()) + ")",
+                   step);
+        }
+        break;
+    case Phase::Move:
+        ++mMoveFrame;
+        if (mMoveFrame == kMoveSettle) {
+            if (!observation.playerValid) {
+                finish(Result::Fail, "no player position after Prologue.GameStart", step);
+                break;
+            }
+            mStartX = observation.playerX;
+            mStartY = observation.playerY;
+            mStartZ = observation.playerZ;
+            note("hold stick up for " + std::to_string(kMoveHold) + " frames from (" + std::to_string(mStartX) + ", " +
+                 std::to_string(mStartY) + ", " + std::to_string(mStartZ) + ")");
+            tap(Button::StickUp, kMoveHold, step);
+        } else if (mMoveFrame == kMoveSettle + kMoveHold + kMoveAfter) {
+            if (!observation.playerValid) {
+                finish(Result::Fail, "no player position after moving", step);
+                break;
+            }
+            const float dx = observation.playerX - mStartX;
+            const float dy = observation.playerY - mStartY;
+            const float dz = observation.playerZ - mStartZ;
+            const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (distance >= kMoveMinimum) {
+                finish(Result::Pass, "Mario moved " + std::to_string(distance) + " units with the stick", step);
+            } else {
+                finish(Result::Fail, "Mario did not move: " + std::to_string(distance) + " units after holding the stick",
+                       step);
+            }
+        }
+        break;
+    default:
+        break;
+    }
+}
 
 const char* Driver::phase() const {
     switch (mPhase) {
@@ -72,6 +238,22 @@ const char* Driver::phase() const {
         return "pressing A+B on the title";
     case Phase::WaitFileSelect:
         return "waiting for file select";
+    case Phase::ChooseSlot:
+        return "choosing an empty file";
+    case Phase::WaitMiiSelect:
+        return "creating the file";
+    case Phase::ChooseMario:
+        return "choosing the Mario icon";
+    case Phase::WaitFileConfirm:
+        return "confirming the icon";
+    case Phase::ChooseStart:
+        return "choosing Start";
+    case Phase::WaitDemo:
+        return "starting the file";
+    case Phase::Prologue:
+        return "prologue";
+    case Phase::Move:
+        return "moving Mario";
     case Phase::Done:
         return "done";
     }
@@ -149,6 +331,15 @@ Step Driver::step(const Observation& observation) {
     bool fileSelect = false;
     for (const std::string& milestone : observation.milestones) {
         note("milestone " + milestone);
+        mSeen.push_back(milestone);
+        mSinceProgress = 0;
+        // Once the file's demo started (possibly earlier in this same
+        // observation, before the phase moves on), each ready page or letter
+        // gets its tap; an earlier pending tap is kept.
+        if (mScript == Script::Playable && seen("FileSelector.DemoStartWait") && !seen("Prologue.GameStart") &&
+            (milestone == "PictureBook.PageReady" || milestone == "PrologueLetter.Ready") && mPrologueTapAt < 0) {
+            mPrologueTapAt = static_cast<long>(mFrame + kPrologueTapDelay);
+        }
         if (milestone == "TitleSequence.BgmPrepare") {
             mBgmPrepareAt = static_cast<long>(mFrame);
         } else if (milestone == "TitleSequence.LogoDisplay") {
@@ -164,7 +355,12 @@ Step Driver::step(const Observation& observation) {
             fileSelect = true;
         }
     }
-    if (fileSelect) {
+    if (fileSelect && mScript == Script::Playable && mPhase != Phase::ChooseSlot) {
+        note("file select reached; creating a file");
+        mPhase = Phase::ChooseSlot;
+        mPhaseFrames = 0;
+        mAimMissing = 0;
+    } else if (fileSelect && mScript == Script::Title) {
         finish(Result::Pass,
                "file select reached after " + std::to_string(mTitleAttempts) + " title press(es), frame " +
                    std::to_string(mFrame),
@@ -172,12 +368,32 @@ Step Driver::step(const Observation& observation) {
         return step;
     }
 
+    // Prompts (playable): answer the allow-listed yes/no ones, stop at any other.
+    if (mScript == Script::Playable) {
+        for (const Observation::Prompt& prompt : observation.prompts) {
+            note("prompt " + prompt.messageId + " type " + std::to_string(prompt.type));
+            if (!isAllowedPrompt(prompt.messageId, prompt.type)) {
+                finish(Result::Blocked,
+                       "prompt " + prompt.messageId + " (type " + std::to_string(prompt.type) + ") is not on the allow-list",
+                       step);
+                return step;
+            }
+            mPrompt = prompt.messageId;
+            mAimFrames = 0;
+            mAimMissing = 0;
+            mPointingFrames = 0;
+        }
+    }
+
+    // After the file's demo started, the game moves on to other scenes and stages.
+    const bool anyScene = mScript == Script::Playable && seen("FileSelector.DemoStartWait");
+
     // Anything the script does not expect ends the run with a reason.
-    if (!observation.scene.empty() && observation.scene != "Logo" && observation.scene != "Game") {
+    if (!anyScene && !observation.scene.empty() && observation.scene != "Logo" && observation.scene != "Game") {
         finish(Result::Fail, "unexpected scene " + observation.scene, step);
         return step;
     }
-    if (observation.scene == "Game" && !observation.stage.empty() && observation.stage != "FileSelect") {
+    if (!anyScene && observation.scene == "Game" && !observation.stage.empty() && observation.stage != "FileSelect") {
         finish(Result::Fail, "unexpected stage " + observation.stage, step);
         return step;
     }
@@ -206,6 +422,14 @@ Step Driver::step(const Observation& observation) {
         note("tap A: dismiss the Mii error window");
         tap(Button::A, kTapFrames, step);
         mRflTapAt = -1;
+    }
+
+    if (!mPrompt.empty()) {
+        if (aimAndPress(observation, "Prompt.Yes", false, step)) {
+            note("answered " + mPrompt + ": yes");
+            mPrompt.clear();
+        }
+        return step;
     }
 
     switch (mPhase) {
@@ -260,6 +484,9 @@ Step Driver::step(const Observation& observation) {
     case Phase::WaitFileSelect:
     case Phase::Done:
         break;
+    default:
+        playable(observation, step);
+        break;
     }
     return step;
 }
@@ -283,15 +510,20 @@ long long nowNs() {
 
 }  // namespace
 
-bool enabledFromEnvironment() {
+bool enabledFromEnvironment(Script* script) {
     const char* value = std::getenv("PETARI_SMOKE");
     if (value == nullptr || value[0] == '\0') {
         return false;
     }
     if (std::strcmp(value, "title") == 0) {
+        *script = Script::Title;
         return true;
     }
-    std::fprintf(stderr, "PETARI SMOKE: unknown script \"%s\" (known: title); not running\n", value);
+    if (std::strcmp(value, "playable") == 0) {
+        *script = Script::Playable;
+        return true;
+    }
+    std::fprintf(stderr, "PETARI SMOKE: unknown script \"%s\" (known: title, playable); not running\n", value);
     return false;
 }
 

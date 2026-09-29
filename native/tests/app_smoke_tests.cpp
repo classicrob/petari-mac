@@ -38,8 +38,11 @@ struct Run {
     std::vector<Event> events;
     std::vector<std::string> log;
     int quits = 0;
+    int pointerMoves = 0;
+    float pointerU = -1.0f, pointerV = -1.0f;
+    bool wantedPlayer = false;
 
-    explicit Run(unsigned long limit = 100000) : driver(limit) {}
+    explicit Run(unsigned long limit = 100000, Smoke::Script script = Smoke::Script::Title) : driver(limit, script) {}
 
     void frames(const Observation& observation, unsigned long count) {
         for (unsigned long i = 0; i < count; i++) {
@@ -51,6 +54,12 @@ struct Run {
                 log.push_back(line);
             }
             quits += step.requestQuit ? 1 : 0;
+            if (step.pointer) {
+                ++pointerMoves;
+                pointerU = step.pointerU;
+                pointerV = step.pointerV;
+            }
+            wantedPlayer = wantedPlayer || driver.wantsPlayer();
         }
     }
     void frame(const Observation& observation) { frames(observation, 1); }
@@ -273,6 +282,229 @@ void testReleaseAfterResult() {
           "held buttons are released after the result");
 }
 
+Observation target(Observation o, const char* id, int index, float u, float v, unsigned flags) {
+    o.targets.push_back({id, index, u, v, flags});
+    return o;
+}
+
+Observation prompt(Observation o, const char* id, int type) {
+    o.prompts.push_back({id, type});
+    return o;
+}
+
+constexpr unsigned kSel = Smoke::kTargetSelectable;
+constexpr unsigned kPoint = Smoke::kTargetPointing;
+constexpr unsigned kEmpty = Smoke::kTargetEmpty;
+
+// Title, then file select, in playable mode.
+void toFileSelect(Run& run) {
+    toTitlePress(run);
+    run.frame(fileSelect(true));
+    run.frames(fileSelect(true), 20);
+    run.frame(with(fileSelect(true), "FileSelector.TitleEnd"));
+    run.frame(with(fileSelect(true), "FileSelector.FileSelectStart"));
+}
+
+// Aims at a target until the game reports it pointed for 3 frames; returns the A presses made.
+int pointAndPress(Run& run, Observation base, const char* id, int index, unsigned extraFlags = 0) {
+    const int before = run.count(Button::A, true);
+    run.frames(target(base, id, index, 0.3f, 0.6f, kSel | extraFlags), 5);  // pointer travelling
+    run.frames(target(base, id, index, 0.3f, 0.6f, kSel | kPoint | extraFlags), 3);
+    return run.count(Button::A, true) - before;
+}
+
+void testPlayableFlow() {
+    Run run(1000000, Smoke::Script::Playable);
+    toFileSelect(run);
+    check(run.driver.result() == Result::Running && run.logged("creating a file"), "playable continues past file select");
+
+    // Lowest empty slot: slot 0 is used, slot 1 and 2 are empty.
+    Observation slots = fileSelect(true);
+    slots = target(slots, "FileSelect.Slot", 0, 0.1f, 0.5f, kSel);
+    slots = target(slots, "FileSelect.Slot", 2, 0.7f, 0.5f, kSel | kEmpty);
+    slots = target(slots, "FileSelect.Slot", 1, 0.4f, 0.5f, kSel | kEmpty);
+    const int aBefore = run.count(Button::A, true);
+    run.frames(slots, 10);
+    check(run.pointerU == 0.4f && run.pointerV == 0.5f, "aims at the lowest empty slot");
+    check(run.count(Button::A, true) == aBefore, "no A until the game reports the pointer over it");
+    Observation pointed = fileSelect(true);
+    pointed = target(pointed, "FileSelect.Slot", 1, 0.4f, 0.5f, kSel | kEmpty | kPoint);
+    run.frames(pointed, 2);
+    check(run.count(Button::A, true) == aBefore, "pointing must hold 3 frames");
+    run.frame(pointed);
+    check(run.count(Button::A, true) == aBefore + 1 && run.events.back().focus, "A on the pointed empty slot");
+
+    // Create prompt: yes.
+    run.frames(fileSelect(true), 10);
+    run.frame(prompt(fileSelect(true), "System_FileSelect001", 2));
+    check(run.logged("prompt System_FileSelect001 type 2"), "prompt logged");
+    run.frames(fileSelect(true), 20);  // yes/no appearing
+    check(run.driver.result() == Result::Running, "waiting for the Yes button");
+    check(pointAndPress(run, fileSelect(true), "Prompt.Yes", 0) == 1 && run.logged("answered System_FileSelect001"),
+          "System_FileSelect001 answered yes");
+
+    // Save while creating, Mii select, icon prompt, Start.
+    Observation saving = with(fileSelect(true), "FileSelector.Create");
+    saving.saveSequence = true;
+    run.frame(saving);
+    saving.milestones.clear();
+    run.frames(saving, 100);
+    run.frame(with(fileSelect(true), "FileSelector.MiiSelect"));
+    check(pointAndPress(run, fileSelect(true), "MiiSelect.Mario", 0) == 1, "Mario icon chosen");
+    run.frame(prompt(fileSelect(true), "System_FileSelect013", 2));
+    check(pointAndPress(run, fileSelect(true), "Prompt.Yes", 0) == 1, "System_FileSelect013 answered yes");
+    run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+    check(pointAndPress(run, fileSelect(true), "FileSelect.Start", 0) == 1, "Start chosen");
+    run.frame(with(fileSelect(true), "FileSelector.DemoStartWait"));
+
+    // Other scenes and stages are fine now.
+    Observation intermission;
+    intermission.scene = "Intermission";
+    run.frames(intermission, 100);
+    Observation garden;
+    garden.scene = "Game";
+    garden.stage = "PeachCastleGardenGalaxy";
+    garden.sceneReady = true;
+    run.frames(garden, 50);
+    check(run.driver.result() == Result::Running, "scenes after the demo start are allowed");
+
+    // Prologue: A only after page and letter milestones.
+    const int aPrologue = run.count(Button::A, true);
+    run.frame(with(garden, "Prologue.PictureBook"));
+    run.frames(garden, 200);
+    check(run.count(Button::A, true) == aPrologue, "no blind prose presses");
+    run.frame(with(garden, "PictureBook.PageReady"));
+    run.frames(garden, 29);
+    check(run.count(Button::A, true) == aPrologue, "page settles 30 frames");
+    run.frame(garden);
+    check(run.count(Button::A, true) == aPrologue + 1, "A after a page is ready");
+    run.frame(with(garden, "PictureBook.PageReady"));
+    run.frames(garden, 40);
+    run.frame(with(garden, "Prologue.PeachLetter"));
+    run.frame(with(garden, "PrologueLetter.Ready"));
+    run.frames(garden, 40);
+    check(run.count(Button::A, true) == aPrologue + 3, "one A per page and for the letter");
+    run.frame(with(garden, "Prologue.Arrive"));
+    run.frames(garden, 300);
+    check(run.count(Button::A, true) == aPrologue + 3, "the arrival cutscene gets no presses");
+
+    // Game start: Mario moves with the stick.
+    run.frame(with(garden, "Prologue.GameStart"));
+    Observation mario = garden;
+    mario.playerValid = true;
+    mario.playerX = 100.0f;
+    mario.playerY = 0.0f;
+    mario.playerZ = 200.0f;
+    run.frames(mario, 119);
+    check(run.wantedPlayer && run.count(Button::StickUp, true) == 0, "Mario's position requested; settling first");
+    run.frame(mario);
+    check(run.count(Button::StickUp, true) == 1 && run.logged("hold stick up"), "stick held up");
+    run.frames(mario, 89);
+    check(run.count(Button::StickUp, false) == 0, "for 90 frames");
+    mario.playerZ = 520.0f;
+    run.frame(mario);
+    check(run.count(Button::StickUp, false) == 1, "then released");
+    run.frames(mario, 29);
+    check(run.driver.result() == Result::Running, "measured 30 frames after release");
+    run.frame(mario);
+    check(run.driver.result() == Result::Pass && run.driver.reason().find("moved 320") != std::string::npos &&
+              run.quits == 1,
+          "PASS with the measured distance");
+}
+
+void testPrologueSameFrame() {
+    // The first page can be ready in the same observation as the demo start,
+    // or while the driver still waits for it: its tap must not be lost.
+    for (int variant = 0; variant < 2; variant++) {
+        Run run(1000000, Smoke::Script::Playable);
+        toFileSelect(run);
+        run.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty | kPoint), 3);
+        run.frame(with(fileSelect(true), "FileSelector.MiiSelect"));
+        run.frames(target(fileSelect(true), "MiiSelect.Mario", 0, 0.5f, 0.5f, kSel | kPoint), 3);
+        run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+        run.frames(target(fileSelect(true), "FileSelect.Start", 0, 0.5f, 0.5f, kSel | kPoint), 3);
+        check(run.driver.phase() == std::string("starting the file"), "reached the demo start");
+        const int before = run.count(Button::A, true);
+        Observation demo = fileSelect(true);
+        if (variant == 0) {
+            demo.milestones = {"FileSelector.DemoStartWait", "PictureBook.PageReady"};
+            run.frame(demo);
+        } else {
+            demo.milestones = {"FileSelector.DemoStartWait"};
+            run.frame(demo);
+            run.frame(with(fileSelect(true), "PictureBook.PageReady"));
+        }
+        run.frames(fileSelect(true), 40);
+        check(run.count(Button::A, true) == before + 1,
+              variant == 0 ? "a page ready with the demo start gets its tap" : "a page ready right after it gets its tap");
+    }
+
+    // Before the demo starts, page milestones (e.g. an unrelated storybook)
+    // are not answered.
+    Run early(1000000, Smoke::Script::Playable);
+    toFileSelect(early);
+    const int before = early.count(Button::A, true);
+    early.frame(with(fileSelect(true), "PictureBook.PageReady"));
+    early.frames(fileSelect(true), 40);
+    check(early.count(Button::A, true) == before, "no page tap before the demo starts");
+}
+
+void testPlayableGuards() {
+    Run unknown(1000000, Smoke::Script::Playable);
+    toFileSelect(unknown);
+    unknown.frame(prompt(fileSelect(true), "System_FileSelect002", 2));
+    check(unknown.driver.result() == Result::Blocked &&
+              unknown.driver.reason().find("System_FileSelect002") != std::string::npos,
+          "an unlisted prompt blocks with its ID");
+
+    Run keyPrompt(1000000, Smoke::Script::Playable);
+    toFileSelect(keyPrompt);
+    keyPrompt.frame(prompt(fileSelect(true), "System_FileSelect001", 0));
+    check(keyPrompt.driver.result() == Result::Blocked, "an allowed ID with the wrong type blocks");
+
+    Run neverPointed(1000000, Smoke::Script::Playable);
+    toFileSelect(neverPointed);
+    Observation slot = target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel | kEmpty);
+    neverPointed.frames(slot, 239);
+    check(neverPointed.driver.result() == Result::Running, "aiming");
+    neverPointed.frame(slot);
+    check(neverPointed.driver.result() == Result::Fail &&
+              neverPointed.driver.reason().find("never got over FileSelect.Slot") != std::string::npos &&
+              neverPointed.count(Button::A, true) == 1,  // the title's A only
+          "FAIL when the pointer never gets over the target");
+
+    Run missing(1000000, Smoke::Script::Playable);
+    toFileSelect(missing);
+    missing.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kSel), 600);
+    check(missing.driver.result() == Result::Fail && missing.driver.reason().find("(empty)") != std::string::npos,
+          "FAIL when no empty slot is shown");
+
+    Run unselectable(1000000, Smoke::Script::Playable);
+    toFileSelect(unselectable);
+    unselectable.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.5f, 0.5f, kEmpty | kPoint), 100);
+    check(unselectable.pointerMoves == 0 && unselectable.count(Button::A, true) == 1,
+          "targets not selectable are not aimed at");
+
+    Run still(1000000, Smoke::Script::Playable);
+    toFileSelect(still);
+    still.driver.step(with(fileSelect(true), "FileSelector.MiiSelect"));
+    Observation garden;
+    garden.scene = "Game";
+    garden.stage = "PeachCastleGardenGalaxy";
+    garden.sceneReady = true;
+    garden.playerValid = true;
+    // Jump straight to the game start (milestones in one frame).
+    Observation start = garden;
+    start.milestones = {"FileSelector.FileConfirm", "FileSelector.DemoStartWait", "Prologue.GameStart"};
+    still.frames(start, 1);
+    still.frames(garden, 400);
+    check(still.driver.result() != Result::Pass, "no PASS without movement");
+
+    Run title;  // title mode ignores prompts and targets
+    title.frames(prompt(logo(false), "System_FileSelect999", 2), 5);
+    check(title.driver.result() == Result::Running, "title mode unchanged by prompts");
+}
+
 void testMilestones() {
     const unsigned long start = petari_milestone_count();
     check(petari_milestone_at(start) == nullptr, "no milestone beyond the count");
@@ -299,6 +531,9 @@ int main() {
     testSavePromptBlocks();
     testUnexpected();
     testReleaseAfterResult();
+    testPlayableFlow();
+    testPrologueSameFrame();
+    testPlayableGuards();
     testMilestones();
     std::printf("native app smoke tests passed (%d checks)\n", checks);
     return 0;

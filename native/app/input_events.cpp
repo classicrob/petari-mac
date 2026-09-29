@@ -47,11 +47,12 @@ void setImage(const Rect& image, float windowWidth, float windowHeight) {
     Input::setViewport(viewport);
 }
 
-void pressButton(bool buttonA, bool down) {
+void pressButton(int button, bool down) {
+    const Input::Action action = button == 0 ? Input::Action::A : button == 1 ? Input::Action::B : Input::Action::StickUp;
     const Input::Bindings bindings = Input::bindings();
-    const auto& inputs = bindings.inputs(buttonA ? Input::Action::A : Input::Action::B);
+    const auto& inputs = bindings.inputs(action);
     if (inputs.empty()) {
-        std::fprintf(stderr, "PETARI SMOKE: no input is bound to %s\n", buttonA ? "A" : "B");
+        std::fprintf(stderr, "PETARI SMOKE: no input is bound to %s\n", Input::actionName(action));
         return;
     }
     const Input::Binding& input = inputs.front();
@@ -64,6 +65,10 @@ void pressButton(bool buttonA, bool down) {
 
 void assertFocus() {
     Input::focusChanged(true);
+}
+
+void movePointer(float x, float y) {
+    Input::mouseMoved(x, y);
 }
 
 }  // namespace PetariNative::App::Events

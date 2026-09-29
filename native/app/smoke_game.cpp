@@ -2,15 +2,20 @@
 // state. SDK side: no Aurora or SDL headers here.
 
 #include "Game/System/GameSequenceFunction.hpp"
+#include "Game/System/GameSequenceDirector.hpp"
 #include "Game/System/GameSystem.hpp"
 #include "Game/System/GameSystemFunction.hpp"
 #include "Game/System/GameSystemSceneController.hpp"
+#include "Game/Player/MarioActor.hpp"
+#include "Game/Player/MarioHolder.hpp"
+#include "Game/Scene/SceneObjHolder.hpp"
 #include "Game/Util/SingletonHolder.hpp"
 
 #include <petari/milestone.hpp>
 #include <petari/platform/vi.hpp>
 
 #include "smoke.hpp"
+#include "ui_observe_store.hpp"
 
 namespace PetariNative::App::Smoke {
 
@@ -18,7 +23,7 @@ namespace {
 unsigned long gMilestonesRead = 0;
 }
 
-Observation observeGame() {
+Observation observeGame(bool wantPlayer) {
     Observation observation;
 
     const PetariNative::Platform::VI::DisplayState display = PetariNative::Platform::VI::displayState();
@@ -31,16 +36,51 @@ Observation observeGame() {
         observation.milestones.push_back(name != nullptr ? name : "(milestone history overflowed)");
     }
 
+    std::vector<UiObserve::Target> targets;
+    std::vector<UiObserve::Prompt> prompts;
+    UiObserve::take(&targets, &prompts);
+    for (const UiObserve::Target& target : targets) {
+        observation.targets.push_back({target.id, target.index, target.u, target.v, target.flags});
+    }
+    for (const UiObserve::Prompt& prompt : prompts) {
+        observation.prompts.push_back({prompt.messageId, prompt.type});
+    }
+
     GameSystem* pGameSystem = SingletonHolder< GameSystem >::get();
     if (pGameSystem == nullptr || pGameSystem->mSceneController == nullptr) {
         return observation;
     }
+    // Construction and deletion windows (audited):
+    // - The scene is created and initialised on the async executor thread
+    //   (GameSystemSceneController::initializeScene). A seam can fall between
+    //   createScene and Scene::init, when the scene exists but its nerve does
+    //   not. SceneInitializeState_End is set on this thread only after that
+    //   initialisation ended, and is reset by requestChangeScene before the
+    //   scene is destroyed, so scene objects are queried only in End.
+    // - The scene/stage names are values in the controller: always readable.
+    // - The save-data sequence is created with its nerve in
+    //   GameSequenceDirector's constructor (GameSystem::init, before the first
+    //   frame) and never deleted.
     const GameSystemSceneController* pController = pGameSystem->mSceneController;
     observation.scene = pController->mCurrSceneControlInfo.mScene;
     observation.stage = pController->mCurrSceneControlInfo.mStage;
     observation.sceneReady = pController->isSceneInitializeState(SceneInitializeState_End);
-    observation.strap = GameSystemFunction::isDisplayStrapRemineder();
-    observation.saveSequence = GameSequenceFunction::isActiveSaveDataHandleSequence();
+    observation.strap = observation.sceneReady && GameSystemFunction::isDisplayStrapRemineder();
+    if (pGameSystem->mSequenceDirector != nullptr) {
+        observation.saveSequence = GameSequenceFunction::isActiveSaveDataHandleSequence();
+    }
+    // Mario: only when asked (after Prologue.GameStart), in a ready Game scene,
+    // through the scene's MarioHolder when it and its actor exist.
+    if (wantPlayer && observation.sceneReady && observation.scene == "Game" && MR::isExistSceneObj(SceneObj_MarioHolder)) {
+        const MarioHolder* pHolder = MR::getSceneObj< MarioHolder >(SceneObj_MarioHolder);
+        const MarioActor* pMario = pHolder != nullptr ? pHolder->getMarioActor() : nullptr;
+        if (pMario != nullptr) {
+            observation.playerValid = true;
+            observation.playerX = pMario->mPosition.x;
+            observation.playerY = pMario->mPosition.y;
+            observation.playerZ = pMario->mPosition.z;
+        }
+    }
     return observation;
 }
 

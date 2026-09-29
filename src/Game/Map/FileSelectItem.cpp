@@ -20,6 +20,8 @@
 #include "Game/Util/ScreenUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
+#include "Game/Util/NativeUiObserve.hpp"
+#include "Game/Screen/StarPointerTarget.hpp"
 
 void FileSelectItem_FORCE_MATCH_SDATA2() {
     (void)1.0f;
@@ -463,6 +465,15 @@ void FileSelectItem::updatePointing() {
             mDelegator->notify(this, 0);
         }
     }
+
+#ifdef PETARI_NATIVE
+    // Smoke observation: the slot's star pointer target as the hit test projects it.
+    TVec2f targetScreenPos;
+    if (petari_ui_observing() && mStarPointerTarget != nullptr && mStarPointerTarget->calcScreenPosition(&targetScreenPos)) {
+        u32 flags = (_144 ? PETARI_UI_POINTING : 0) | (isNew() ? PETARI_UI_EMPTY : 0) | (!mIsInvalidateSelect ? PETARI_UI_SELECTABLE : 0);
+        MR::Native::publishUiTarget("FileSelect.Slot", _140 - 1, targetScreenPos, flags);
+    }
+#endif
 
     if (!mIsInvalidateSelect && _144 && MR::testDPDMenuPadDecideTrigger()) {
         if (mDelegator != nullptr) {

@@ -34,6 +34,11 @@ public:
     bool startPointingAnimAtFirstStep(const char*);
     void setNerveAtAnimStopped(const Nerve*);
     bool isPointingPane() const;
+#ifdef PETARI_NATIVE
+    // Smoke observation (petari/ui_observe.hpp): publishes the bounding pane's centre and
+    // pointing state while the button is shown. Observation only.
+    void publishUiTarget(const char* pId, s32 index) const;
+#endif
     bool tryPointing(bool);
     bool tryNotPointing(bool);
     f32 calcPointingAnimStartFrame() const;

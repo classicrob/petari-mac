@@ -6,6 +6,7 @@
 #include "Game/Scene/SceneFunction.hpp"
 #include "Game/Screen/ButtonPaneController.hpp"
 #include "Game/Util/LayoutUtil.hpp"
+#include "Game/Util/NativeUiObserve.hpp"
 #include "Game/Util/ObjUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
 #include <nw4r/lyt/texMap.h>
@@ -192,6 +193,11 @@ void MiiSelectIcon::exeWait() {
 
     if (_3D) {
         _20->trySelect();
+#ifdef PETARI_NATIVE
+        if (!mIsMiiDummy && mIconID->isFellow() && mIconID->getFellowID() == FileSelectIconID::Mario) {
+            _20->publishUiTarget("MiiSelect.Mario", 0);
+        }
+#endif
     }
 
     if (_20->isPointingTrigger()) {

@@ -1,11 +1,16 @@
-// petari/milestone.hpp. A lock-free history of the last kHistory names.
+// petari/milestone.hpp (a lock-free history of the last kHistory names) and
+// petari/ui_observe.hpp (targets and prompts published since the last take).
 
 #include "petari/milestone.hpp"
+#include "petari/ui_observe.hpp"
+#include "ui_observe_store.hpp"
 
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
+#include <algorithm>
+#include <mutex>
 
 namespace {
 
@@ -55,3 +60,92 @@ extern "C" const char* petari_milestone_at(unsigned long index) {
     }
     return gNames[index % kHistory].load(std::memory_order_relaxed);
 }
+
+// --- petari/ui_observe.hpp ---
+// Fixed arrays of plain values: the hooks run on game threads, where operator
+// new would take game heap memory. IDs are static strings per the contract.
+
+namespace {
+
+struct RawTarget {
+    const char* id;
+    int index;
+    float u, v;
+    unsigned flags;
+};
+struct RawPrompt {
+    const char* messageId;
+    int type;
+};
+
+constexpr int kMaxTargets = 128;
+constexpr int kMaxPrompts = 32;
+
+std::mutex gUiMutex;
+RawTarget gUiTargets[kMaxTargets];
+int gUiTargetCount = 0;
+RawPrompt gUiPrompts[kMaxPrompts];
+int gUiPromptCount = 0;
+
+bool isObserving() {
+    static const bool observing = [] {
+        const char* value = std::getenv("PETARI_SMOKE");
+        return value != nullptr && value[0] != '\0';
+    }();
+    return observing;
+}
+
+}  // namespace
+
+extern "C" int petari_ui_observing(void) {
+    return isObserving() ? 1 : 0;
+}
+
+extern "C" void petari_ui_target(const char* id, int index, float u, float v, unsigned flags) {
+    if (!isObserving() || id == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(gUiMutex);
+    if (gUiTargetCount < kMaxTargets) {
+        gUiTargets[gUiTargetCount++] = {id, index, u, v, flags};
+    }
+}
+
+extern "C" void petari_ui_prompt(const char* messageId, int type) {
+    if (!isObserving() || messageId == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(gUiMutex);
+    if (gUiPromptCount < kMaxPrompts) {
+        gUiPrompts[gUiPromptCount++] = {messageId, type};
+    }
+}
+
+namespace PetariNative::App::UiObserve {
+
+// App side (under the seam's host allocation scope): copies into strings.
+void take(std::vector<Target>* targets, std::vector<Prompt>* prompts) {
+    RawTarget rawTargets[kMaxTargets];
+    RawPrompt rawPrompts[kMaxPrompts];
+    int targetCount;
+    int promptCount;
+    {
+        std::lock_guard<std::mutex> lock(gUiMutex);
+        targetCount = gUiTargetCount;
+        promptCount = gUiPromptCount;
+        std::copy(gUiTargets, gUiTargets + targetCount, rawTargets);
+        std::copy(gUiPrompts, gUiPrompts + promptCount, rawPrompts);
+        gUiTargetCount = 0;
+        gUiPromptCount = 0;
+    }
+    targets->clear();
+    prompts->clear();
+    for (int i = 0; i < targetCount; i++) {
+        targets->push_back({rawTargets[i].id, rawTargets[i].index, rawTargets[i].u, rawTargets[i].v, rawTargets[i].flags});
+    }
+    for (int i = 0; i < promptCount; i++) {
+        prompts->push_back({rawPrompts[i].messageId, rawPrompts[i].type});
+    }
+}
+
+}  // namespace PetariNative::App::UiObserve

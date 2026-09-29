@@ -1107,6 +1107,7 @@ void FileSelector::exeFileConfirmMiiDeleteSave() {
 
 void FileSelector::exeFileConfirm() {
     if (MR::isFirstStep(this)) {
+        FILE_SELECTOR_MILESTONE("FileSelector.FileConfirm");
         mOperationButton->appear();
         mBackButton->appear();
 
@@ -1151,6 +1152,7 @@ void FileSelector::exeFileConfirm() {
 
 void FileSelector::exeDemoStartWait() {
     if (MR::isFirstStep(this)) {
+        FILE_SELECTOR_MILESTONE("FileSelector.DemoStartWait");
         MR::startSystemSE("SE_SY_FILE_SELECTED");
         MR::stopStageBGM(90);
         disappearAllLayout();
@@ -1500,6 +1502,7 @@ void FileSelector::exeMiiSelectStart() {
 
 void FileSelector::exeMiiSelect() {
     if (MR::isFirstStep(this)) {
+        FILE_SELECTOR_MILESTONE("FileSelector.MiiSelect");
         if (!mIsMiiSelectStartFirst) {
             mBackButton->appear();
         }
