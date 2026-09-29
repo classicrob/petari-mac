@@ -7,6 +7,8 @@
 // - FileRipper::loadToMainRAM with decompression requested on uncompressed disc files, read
 //   through the native DVD layer: the first 0x20 bytes come from the header probe buffer,
 //   which must still be alive when they are copied (a block-scoped buffer escaped natively).
+//   Also on Yaz0 disc files, decoded while streaming from DVD (decompressFromDVD's refills)
+//   on the OS-bound main thread, where decompressSzsSub offers preemption points.
 //
 // Usage: petari_game_data_tests [--assets GAME_FILES_DIR]
 // Links: src/Game/System/FileRipper.cpp, src/Game/Player/GhostPacket.cpp,
@@ -261,6 +263,35 @@ static void testLoadToMainRAM(const std::filesystem::path& filesRoot) {
     }
     std::printf("FileRipper loadToMainRAM: %zu uncompressed files match\n", loaded);
     check(loaded > 0, "no uncompressed files found");
+
+    // Yaz0 files streamed through the 0x20000 read buffer (as GameSystem sets it up), so large
+    // archives take several DVD refills; the result must equal the reference decompressor.
+    FileRipper::setup(0x20000, JKRHeap::sRootHeap);
+    std::size_t streamed = 0, refilled = 0;
+    for (const fs::directory_entry& entry : fs::recursive_directory_iterator(filesRoot)) {
+        if (streamed >= 16 || !entry.is_regular_file() || entry.path().extension() != ".arc" || entry.file_size() <= 0x20000 ||
+            entry.file_size() > 0x400000) {
+            continue;
+        }
+        Buffer bytes;
+        if (!readFile(entry.path(), &bytes) || bytes.size() < 0x10 || std::memcmp(bytes.data(), "Yaz0", 4) != 0) {
+            continue;
+        }
+        const Buffer reference = PetariNative::Resource::decompress({bytes.data(), bytes.size()});
+        const std::string discPath = "/" + fs::relative(entry.path(), filesRoot).generic_string();
+
+        JKRExpHeap* pHeap = JKRExpHeap::create(24 * 1024 * 1024, JKRHeap::sRootHeap, false);
+        const u8* pData = static_cast< const u8* >(FileRipper::loadToMainRAM(discPath.c_str(), nullptr, true, pHeap, FileRipper::UNK_0));
+        if (pData == nullptr || std::memcmp(pData, reference.data(), reference.size()) != 0) {
+            std::fprintf(stderr, "FAIL: %s: streamed Yaz0 output differs from the reference\n", discPath.c_str());
+            ++sFailures;
+        }
+        JKRHeap::destroy(pHeap);
+        refilled += bytes.size() > 0x20000;
+        streamed++;
+    }
+    std::printf("FileRipper loadToMainRAM: %zu streamed Yaz0 files match (%zu larger than the read buffer)\n", streamed, refilled);
+    check(streamed > 0 && refilled == streamed, "no streamed Yaz0 files needing DVD refills");
 }
 
 int main(int argc, char** argv) {

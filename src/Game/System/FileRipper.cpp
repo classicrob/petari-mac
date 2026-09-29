@@ -190,9 +190,23 @@ bool FileRipper::decompressSzsSub(u8* src, u8* dest) {
 #endif
     u8* dest_end = dest + data_len;
     src += 0x10;
+#ifdef PETARI_NATIVE
+    // Natively a higher-priority thread readied by an interrupt (the audio thread) only
+    // preempts at an interrupt-state change; the Wii preempts at any instruction. Offer that
+    // point every 16 KiB of output so a long decode does not hold the CPU for tens of ms.
+    // Inside an interrupts-disabled region the pair is a no-op, as on the Wii.
+    const u32 cPreemptionStride = 0x4000;
+    u8* last_preemption = dest;
+#endif
 
     do {
         if (!group_count) {
+#ifdef PETARI_NATIVE
+            if (static_cast< u32 >(dest - last_preemption) >= cPreemptionStride) {
+                OSRestoreInterrupts(OSDisableInterrupts());
+                last_preemption = dest;
+            }
+#endif
             if (src > ::sReadBufferLimit && ::sReadDvdLeftSize) {
                 if (!(src = readSrcDataNext(src))) {
                     return false;
