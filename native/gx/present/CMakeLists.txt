@@ -62,6 +62,7 @@ function(petari_present_patch target relative output)
 endfunction()
 petari_present_patch(aurora_gx lib/dolphin/gx/GXFrameBuffer.cpp "${CMAKE_BINARY_DIR}/patched/GXFrameBuffer.cpp")
 petari_present_patch(aurora_core lib/aurora.cpp "${CMAKE_BINARY_DIR}/patched/aurora.cpp")
+petari_present_patch(aurora_core lib/window.cpp "${CMAKE_BINARY_DIR}/patched/window.cpp")
 target_sources(aurora_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/present_aurora.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/present_aurora.cpp" TARGET_DIRECTORY aurora_core PROPERTIES
     COMPILE_OPTIONS "-iquote${PETARI_AURORA_DIR}/lib")
@@ -111,6 +112,8 @@ if(PETARI_PRESENT_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/present_patch_tests.py"
             "${PETARI_AURORA_DIR}" "${PETARI_REPO_ROOT}/native/gx")
     add_executable(petari_present_gpu_tests "${PETARI_REPO_ROOT}/native/tests/present_gpu_tests.cpp")
+    # Unoptimised test code, so hangs and failures show readable stacks.
+    set_source_files_properties("${PETARI_REPO_ROOT}/native/tests/present_gpu_tests.cpp" PROPERTIES COMPILE_OPTIONS "-O0;-g")
     target_include_directories(petari_present_gpu_tests PRIVATE "${PETARI_AURORA_DIR}/lib" "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(petari_present_gpu_tests PRIVATE aurora::core aurora::gx aurora::vi aurora::main)
     add_test(NAME native_present_gpu COMMAND petari_present_gpu_tests)

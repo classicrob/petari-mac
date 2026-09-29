@@ -25,6 +25,12 @@ void petari_present_enable(void);
 /* The video state for the frame the next aurora_end_frame presents. */
 void petari_present_set_video(const PetariPresentVideo* video);
 
+/* The displayed image's aspect (16:9 or 4:3) while XFBs are presented, for
+ * the patched aurora::window::get_window_size: the EFB render target takes
+ * this aspect inside the drawable, so the XFB is shown pixel for pixel.
+ * Returns 0 before petari_present_enable. Any thread. */
+int petari_present_content_aspect(unsigned* width, unsigned* height);
+
 /* Where the game image is presented, in window points. Returns 0 while there
  * is no surface. */
 int petari_present_image_rect(float* x, float* y, float* width, float* height);

@@ -51,11 +51,46 @@ when Aurora ends its frame.
    - ImGui (the Home menu) draws afterwards.
    - Until `petari_present_install()` runs, the RmlUi-replaces-game branch
      and upstream EFB presentation are unchanged.
-5. **Image rectangle.** `imageRect` returns that viewport in window points,
+5. **Render-target aspect.** While XFBs are presented, `patch_aurora_present.py`
+   makes `aurora::window::get_window_size` fit the EFB render target to the
+   displayed aspect (16:9 or 4:3) inside the drawable. The XFB copy then has
+   exactly the presented viewport's size and is drawn pixel for pixel, in any
+   window shape. Previously the EFB took the window's shape and a mismatch was
+   resampled: 16:9 in a 4:3 window at 1.00 x 0.75, a 16:10 fullscreen at about
+   1.00 x 0.87. A normal 16:9 window (1280x720 points, 2560x1440 on Retina) was
+   already 1:1 and is unchanged. Changing the aspect requests an Aurora
+   frame-buffer resize. Aurora drops all copy textures on any EFB resize, as
+   for a window resize, so the latched XFB shows black for one frame until the
+   game copies it again.
+6. **Image rectangle.** `imageRect` returns that viewport in window points,
    for the pointer (`Input::setViewport`) and the overlay.
 
 The XFB on screen is the one VI latched: with the game's triple buffering,
 the copy from the previous frame, as on the console.
+
+## Measuring (PETARI_TRACE_BOOT)
+
+- `Petari present: surface WxH, EFB WxH, XFB texture WxH, viewport WxH (a:b),
+  scale sx x sy` whenever these change. A scale of 1.00 x 1.00 means the XFB is
+  shown pixel for pixel.
+- `[gx copy] display|texture WxH -> WxH, format F` once per distinct copy
+  (logical GX sizes; the texture is that scaled to the render target). Effect
+  copies drawn back over the scene at a reduced size show up here.
+
+Measured (component test, 960x720-point window, 1920x1440 drawable):
+
+- The 640x456 game mode gives XFB 1920x1440 in 4:3 and 1920x1080 in 16:9.
+- A drawn edge at logical x 100.4 is a hard 0 -> 255 step at texel 301 (expected
+  301.2). A 640-wide image scaled up would show a ramp.
+
+Source art is lower resolution and looks soft when magnified; that is not a
+rendering loss:
+
+- the prologue storybook pages (`LayoutData/PrologueDemo.arc`,
+  `prologuecomet1-5.tpl`) are 608x224 CMPR, drawn about 608 logical pixels
+  wide, roughly 4.2x magnified at 2560 wide;
+- UI icons are 24-64 px (`PauseMenu.arc`, `FileSelect.arc`,
+  `StarCounter.arc`).
 
 ## Fidelity limits
 
@@ -90,6 +125,8 @@ the copy from the previous frame, as on the console.
 ## Wiring (root)
 
 - `aurora.cpp`: run `patch_aurora_allocations.py`, then `patch_aurora_present.py`.
+- `window.cpp` (`aurora_core`): replace it with the patched original
+  (`patch_aurora_present.py`). No other generator touches it.
   The output includes `"present_aurora.hpp"`, so give it
   `-iquote native/gx/present`.
 - `GXFrameBuffer.cpp`: replace it in `aurora_gx` with the patched original,

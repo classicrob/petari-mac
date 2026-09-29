@@ -3,13 +3,17 @@
 
 usage: patch_aurora_present.py SOURCE OUTPUT
 
-SOURCE is Aurora's lib/dolphin/gx/GXFrameBuffer.cpp (original) or lib/aurora.cpp
-(original or the output of patch_aurora_allocations.py; run that first).
+SOURCE is Aurora's lib/dolphin/gx/GXFrameBuffer.cpp (original), lib/window.cpp
+(original) or lib/aurora.cpp (original or the output of
+patch_aurora_allocations.py; run that first).
 
 - GXFrameBuffer.cpp: GXCopyDisp snapshots the EFB display-copy rectangle into a
   render texture kept by XFB address, in FIFO order, through Aurora's texture
   copy path. The display-copy setters keep real state; GXSetCopyClamp is
   defined. Texture-copy state is restored after each display copy.
+- window.cpp: while XFBs are presented, the EFB render target takes the
+  displayed image's aspect (16:9 or 4:3, present_aurora.cpp) inside the
+  drawable, so the XFB is shown pixel for pixel whatever the window's shape.
 - aurora.cpp: aurora_end_frame presents the XFB that VI latched (see
   present_aurora.hpp) instead of the EFB, with VI black and dimming, at the
   display aspect. The patched file includes "present_aurora.hpp", so the
@@ -63,6 +67,44 @@ struct TexCopyState {
 };
 TexCopyState sTexCopy;
 
+// PETARI_TRACE_BOOT: each distinct display or texture copy (source rectangle,
+// destination size and format, in logical GX units) is logged once, so the
+// resolution of effect copies drawn back over the scene can be measured. The
+// copy's texture is these sizes scaled to the render target.
+bool traceCopies() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("PETARI_TRACE_BOOT");
+    return value != nullptr && value[0] != '\\0' && value[0] != '0';
+  }();
+  return enabled;
+}
+
+void traceCopy(const char* kind, u32 srcW, u32 srcH, u32 dstW, u32 dstH, u32 format, bool clear) {
+  if (!traceCopies()) {
+    return;
+  }
+  struct Seen {
+    const char* kind;
+    u32 srcW, srcH, dstW, dstH, format;
+  };
+  static Seen seen[64];
+  static int seenCount = 0;
+  static unsigned long copies = 0;
+  ++copies;
+  for (int i = 0; i < seenCount; ++i) {
+    const Seen& s = seen[i];
+    if (s.kind == kind && s.srcW == srcW && s.srcH == srcH && s.dstW == dstW && s.dstH == dstH && s.format == format) {
+      return;
+    }
+  }
+  if (seenCount == 64) {
+    return;
+  }
+  seen[seenCount++] = {kind, srcW, srcH, dstW, dstH, format};
+  std::fprintf(stderr, "[gx copy] %s %ux%u -> %ux%u, format %u%s (copy #%lu)\\n", kind, srcW, srcH, dstW, dstH, format,
+               clear ? ", clears" : "", copies);
+}
+
 void write_copy_src(u32 left, u32 top, u32 width, u32 height) {
   GX_WRITE_AURORA(GX_AURORA_LOAD_COPY_SRC);
   GX_WRITE_U32(left);
@@ -109,6 +151,7 @@ void GXCopyDisp(void* dest, GXBool clear) {
   // The XFB receives the source rectangle scaled vertically by the display
   // copy's Y scale; its lines are counted as the hardware does.
   const u32 lines = GXGetNumXfbLines(sDisplayCopy.height, sDisplayCopy.yScale);
+  traceCopy("display", sDisplayCopy.width, sDisplayCopy.height, sDisplayCopy.width, lines, GX_TF_RGBA8, clear != GX_FALSE);
   write_copy_src(sDisplayCopy.left, sDisplayCopy.top, sDisplayCopy.width, sDisplayCopy.height);
   write_copy_dst(sDisplayCopy.width, lines, GX_TF_RGBA8, 0);
   GX_WRITE_AURORA(GX_AURORA_LOAD_COPY_DEST);
@@ -131,7 +174,11 @@ void GXCopyDisp(void* dest, GXBool clear) {
 
 def patch_framebuffer(text):
     text = replace_once(text, '#include <algorithm>\n#include <cmath>\n',
-                        '#include <algorithm>\n#include <cmath>\n#include <cstdio>\n#include <cstring>\n')
+                        '#include <algorithm>\n#include <cmath>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n')
+    text = replace_once(text, 'void GXCopyTex(void* dest, GXBool clear) {\n',
+                        'void GXCopyTex(void* dest, GXBool clear) {\n'
+                        '  traceCopy("texture", sTexCopy.width, sTexCopy.height, sTexCopy.dstWidth, sTexCopy.dstHeight,\n'
+                        '            sTexCopy.format, clear != GX_FALSE);\n')
     # State after the file's own anonymous namespace.
     text = replace_once(text, '} // namespace\n\nnamespace aurora::gx {\n',
                         '} // namespace\n' + FRAMEBUFFER_STATE + '\nnamespace aurora::gx {\n')
@@ -253,6 +300,32 @@ def patch_aurora(text):
     return text
 
 
+def patch_window(text):
+    text = replace_once(text, 'namespace aurora::window {\n',
+                        '// Petari: the displayed image\'s aspect (native/gx/present/present.h); 0 while\n'
+                        '// XFBs are not presented.\n'
+                        'extern "C" int petari_present_content_aspect(unsigned* width, unsigned* height);\n\n'
+                        'namespace aurora::window {\n')
+    text = replace_once(text,
+                        '  if (g_frameBufferAspectFit) {\n'
+                        '    const auto [baseW, baseH] = vi::configured_fb_size();\n',
+                        '  // Petari: the EFB has the displayed image\'s aspect (the game draws 16:9\n'
+                        '  // anamorphically into its 640-wide frame, so the logical size is not it).\n'
+                        '  {\n'
+                        '    unsigned aspectW = 0;\n'
+                        '    unsigned aspectH = 0;\n'
+                        '    if (petari_present_content_aspect(&aspectW, &aspectH) != 0 && aspectW != 0 && aspectH != 0) {\n'
+                        '      const auto [fitW, fitH] =\n'
+                        '          fit_frame_buffer_to_aspect(fb_w, fb_h, static_cast<float>(aspectW) / static_cast<float>(aspectH));\n'
+                        '      fb_w = fitW;\n'
+                        '      fb_h = fitH;\n'
+                        '    }\n'
+                        '  }\n'
+                        '  if (g_frameBufferAspectFit) {\n'
+                        '    const auto [baseW, baseH] = vi::configured_fb_size();\n')
+    return text
+
+
 def main():
     if len(sys.argv) != 3:
         fail('usage: patch_aurora_present.py SOURCE OUTPUT')
@@ -262,6 +335,8 @@ def main():
         text = patch_framebuffer(text)
     elif source.name == 'aurora.cpp':
         text = patch_aurora(text)
+    elif source.name == 'window.cpp':
+        text = patch_window(text)
     else:
         fail(f'unexpected source {source.name}')
     output.parent.mkdir(parents=True, exist_ok=True)

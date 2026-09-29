@@ -66,6 +66,26 @@ def main():
         check('PetariNative::HostAllocationScope petariHostAllocations;' in text
               and 'petari_present::take()' in text, 'both patches present')
 
+        window = aurora / 'lib/window.cpp'
+        wout = tmp / 'window/window.cpp'
+        check(run(present, window, wout).returncode == 0, 'window.cpp patches')
+        text = wout.read_text()
+        check('petari_present_content_aspect(&aspectW, &aspectH)' in text and
+              'extern "C" int petari_present_content_aspect' in text,
+              'the EFB takes the displayed aspect while XFBs are presented')
+        check(text.index('petari_present_content_aspect(&aspectW') < text.index('if (g_frameBufferAspectFit) {'),
+              'the display aspect applies before any logical aspect fit')
+        brokenWindow = tmp / 'brokenwindow/window.cpp'
+        brokenWindow.parent.mkdir()
+        brokenWindow.write_text(window.read_text().replace('  if (g_frameBufferAspectFit) {\n', '  if (fit) {\n'))
+        result = run(present, brokenWindow, tmp / 'brokenwindow-out/window.cpp')
+        check(result.returncode != 0 and 'anchor mismatch' in result.stderr + result.stdout,
+              'a moved window.cpp anchor fails')
+
+        fb = (tmp / 'fb/GXFrameBuffer.cpp').read_text()
+        check('traceCopy("display"' in fb and 'traceCopy("texture"' in fb and 'PETARI_TRACE_BOOT' in fb,
+              'copy sizes are traced (opt-in)')
+
         broken = tmp / 'broken/GXFrameBuffer.cpp'
         broken.parent.mkdir()
         broken.write_text(framebuffer.read_text().replace('void GXCopyDisp(void* dest, GXBool clear) {}', ''))
