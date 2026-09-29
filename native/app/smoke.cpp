@@ -86,6 +86,7 @@ constexpr unsigned long kMovieFrames[2] = {5591, 7076};
 constexpr unsigned long kMovieMargin = 400;
 constexpr unsigned long kStoryReadyLimit = 7200;
 constexpr unsigned long kStageLimit = 3600;
+constexpr unsigned long kStageReadyFrames = 60;  // HeavensDoorGalaxy ready in a row before PASS
 constexpr unsigned long kRouteLogInterval = 120;
 constexpr float kMinimumUpY = 0.5f;     // gravity within 60 degrees of the stage's down
 constexpr float kMinimumAxis = 1e-3f;   // shorter axes are degenerate
@@ -377,13 +378,19 @@ void Driver::playable(const Observation& observation, Step& step) {
 }
 
 bool Driver::gameplayReady(const Observation& observation) {
-    const bool ready = observation.playerValid && !observation.demoActive && observation.pausePermitted;
+    const bool ready = observation.scene == "Game" && observation.sceneReady && observation.playerValid &&
+                       !observation.demoActive && observation.pausePermitted;
     mReadyFrames = ready ? mReadyFrames + 1 : 0;
     return mReadyFrames >= kReadyFrames;
 }
 
 void Driver::gameplay(const Observation& observation, Step& step) {
-    if (mPhase != Phase::Ready && !observation.playerValid) {
+    // Waiting for gameplay checks the player itself. The story checks him in
+    // story(): needed while walking, not during the movies and stage load
+    // (after a movie's start milestone is handled).
+    const bool checkedElsewhere = mPhase == Phase::Ready || mPhase == Phase::Calibrate || mPhase == Phase::Route ||
+                                  mPhase == Phase::WaitMovie || mPhase == Phase::MovieEnd || mPhase == Phase::WaitStage;
+    if (!checkedElsewhere && !observation.playerValid) {
         finish(Result::Fail, std::string("no player position while ") + phase(), step);
         return;
     }
@@ -613,6 +620,7 @@ void Driver::startSegment(int segment) {
 
 void Driver::story(const Observation& observation, Step& step) {
     const Vec pos = position(observation);
+    const std::string where = observation.playerValid ? text(pos) : std::string("(no player position)");
     // Steering works in the plane perpendicular to the observed gravity field
     // at Mario (Mario::getAirGravityVec): the camera axes and the direction to
     // each waypoint are projected onto it, so the steering holds whatever the
@@ -628,9 +636,23 @@ void Driver::story(const Observation& observation, Step& step) {
     auto next = [&](Phase phase) {
         mPhase = phase;
         mPhaseFrames = 0;
+        mStageReadyFrames = 0;
     };
     const bool walking = mPhase == Phase::Calibrate || mPhase == Phase::Route;
-    if (observation.playerDead) {
+    // A movie can start before the last waypoint (the trigger is an area) or
+    // some frames after Mario stands in it; its milestone counts even if the
+    // player is already gone from the observation.
+    if ((walking || mPhase == Phase::WaitMovie) && seenCount(kMovieStart[mSegment]) > 0) {
+        steer(StickKeys{}, step);
+        note(std::string(kMovieStart[mSegment]) + " at " + where);
+        next(Phase::MovieEnd);
+        return;
+    }
+    if (walking && !observation.playerValid) {
+        finish(Result::Fail, std::string("no player position while ") + this->phase(), step);
+        return;
+    }
+    if (observation.playerValid && observation.playerDead) {
         finish(Result::Fail, "Mario died at " + text(pos) + " (segment " + std::to_string(mSegment) + ")", step);
         return;
     }
@@ -669,14 +691,6 @@ void Driver::story(const Observation& observation, Step& step) {
         finish(Result::Fail, "segment " + std::to_string(mSegment) + " took over " + std::to_string(kSegmentLimit) +
                                  " frames (waypoint " + std::to_string(mWaypoint) + ", at " + text(pos) + ")",
                step);
-        return;
-    }
-    // A movie can start before the last waypoint (the trigger is an area) or
-    // some frames after Mario stands in it.
-    if ((walking || mPhase == Phase::WaitMovie) && seenCount(kMovieStart[mSegment]) > 0) {
-        steer(StickKeys{}, step);
-        note(std::string(kMovieStart[mSegment]) + " at " + text(pos));
-        next(Phase::MovieEnd);
         return;
     }
 
@@ -794,7 +808,7 @@ void Driver::story(const Observation& observation, Step& step) {
     case Phase::WaitMovie:
         if (mPhaseFrames >= kMovieStartLimit) {
             finish(Result::Fail, std::string("no ") + kMovieStart[mSegment] + " within " +
-                                     std::to_string(kMovieStartLimit) + " frames of the last waypoint (at " + text(pos) + ")",
+                                     std::to_string(kMovieStartLimit) + " frames of the last waypoint (at " + where + ")",
                    step);
         }
         break;
@@ -820,16 +834,27 @@ void Driver::story(const Observation& observation, Step& step) {
                    step);
         }
         break;
-    case Phase::WaitStage:
-        if (seen("Stage.HeavensDoorGalaxy") && observation.scene == "Game" && observation.stage == "HeavensDoorGalaxy" &&
-            observation.sceneReady) {
-            finish(Result::Pass, "story route reached HeavensDoorGalaxy", step);
+    case Phase::WaitStage: {
+        // Ready for a run of frames, so the stage has updated and drawn, not
+        // just finished initialising.
+        const bool ready = seen("Stage.HeavensDoorGalaxy") && observation.scene == "Game" &&
+                           observation.stage == "HeavensDoorGalaxy" && observation.sceneReady;
+        if (!ready && mStageReadyFrames > 0) {
+            note("HeavensDoorGalaxy not ready again after " + std::to_string(mStageReadyFrames) + " ready frames");
+        }
+        mStageReadyFrames = ready ? mStageReadyFrames + 1 : 0;
+        if (mStageReadyFrames >= kStageReadyFrames) {
+            finish(Result::Pass,
+                   "story route reached HeavensDoorGalaxy (ready " + std::to_string(kStageReadyFrames) + " frames, " +
+                       std::to_string(mPhaseFrames) + " frames after PrologueB)",
+                   step);
         } else if (mPhaseFrames >= kStageLimit) {
             finish(Result::Fail, "HeavensDoorGalaxy not ready within " + std::to_string(kStageLimit) +
                                      " frames of PrologueB (scene " + observation.scene + ", stage " + observation.stage + ")",
                    step);
         }
         break;
+    }
     default:
         break;
     }

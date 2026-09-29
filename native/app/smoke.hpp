@@ -91,6 +91,10 @@
 // closer in 180 frames): a sidestep,
 // then a jump; the fifth time on one waypoint FAILs. FAIL also on any prompt,
 // an open talk, an unexpected scene or stage, or a segment/movie timeout.
+// Mario's position is needed only while walking: during the movies and the
+// stage load he may be absent (the scene is torn down after PrologueB), and
+// no input is sent. PASS needs HeavensDoorGalaxy ready for 60 frames in a row
+// (so it has updated and drawn), within 3600 frames of PrologueB's end.
 // Steering and distances use the plane perpendicular to the observed gravity
 // field at Mario. Non-finite or degenerate gravity/camera axes FAIL. So does
 // gravity tilted beyond 60 degrees from the stage's down: a limitation of this
@@ -288,6 +292,7 @@ private:
     float mSignForward = 0.0f, mSignRight = 0.0f;  // camera axis signs from calibration
     float mBestDistance = 0.0f;          // closest to the waypoint in the stuck window
     unsigned long mStuckFrames = 0;
+    unsigned long mStageReadyFrames = 0;  // consecutive frames HeavensDoorGalaxy is ready
     int mRecoveries = 0;
     unsigned long mRecoverUntil = 0;
     unsigned long mSegmentFrames = 0;

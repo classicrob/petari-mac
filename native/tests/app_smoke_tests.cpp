@@ -1000,6 +1000,22 @@ struct StorySim {
     float hillUpY = 0.896431f;  // overridable for a too-steep case
     bool zeroGravity = false, cameraAlongGravity = false, nanPosition = false;
     float speed = 15.0f;
+    // Scene changes: Mario absent while a movie plays; HeavensDoorGalaxy
+    // loading (not ready, no player) for stageLoad frames from PrologueB's end;
+    // then, until flickerUntil frames after the load, not ready one frame in
+    // every flickerEvery.
+    bool absentInMovies = false;
+    int stageLoad = 0;
+    int afterLoad = -1;
+    int flickerEvery = 0, flickerUntil = 0;
+    int pressesWhileWaiting = 0;  // key downs during a movie or the stage load
+
+    bool stageReady() const {
+        if (!heavensDoor || stageLoad > 0) {
+            return !heavensDoor;
+        }
+        return !(flickerEvery > 0 && afterLoad < flickerUntil && afterLoad % flickerEvery == flickerEvery - 1);
+    }
 
     Observation observe() {
         Observation o;
@@ -1052,6 +1068,12 @@ struct StorySim {
         }
         o.talkActive = talk && x < 12000.0f;
         o.playerDead = dies && x < 8000.0f;
+        if ((absentInMovies && movie >= 0) || !stageReady()) {
+            o.sceneReady = stageReady();
+            o.playerValid = false;
+            o.playerX = o.playerZ = 0.0f;
+            o.playerDead = true;  // stale: only meaningful with a player
+        }
         o.milestones = pending;
         pending.clear();
         return o;
@@ -1059,6 +1081,9 @@ struct StorySim {
     void apply(const Smoke::Step& step) {
         for (const Smoke::Press& p : step.presses) {
             const int i = static_cast<int>(p.button);
+            if (p.down && (movie >= 0 || heavensDoor)) {
+                ++pressesWhileWaiting;
+            }
             if (p.down && !held[i] && p.button == Button::A) {
                 pressedA = true;
             }
@@ -1067,6 +1092,14 @@ struct StorySim {
     }
     void advance() {
         yaw += 0.002f;
+        if (heavensDoor) {
+            if (stageLoad > 0) {
+                --stageLoad;
+            } else {
+                ++afterLoad;
+            }
+            return;
+        }
         if (movie >= 0) {
             if (++movieFrames == movieLength[movie]) {
                 pending.push_back(movie == 0 ? "Movie.PrologueA.End" : "Movie.PrologueB.End");
@@ -1232,6 +1265,60 @@ void testStoryRoute() {
               overlong.driver.reason() == "no Movie.PrologueB.End within 7476 frames",
           "an overlong PrologueB FAILs: " + overlong.driver.reason());
     check(allKeysReleased(overlong), "keys released after an overlong movie");
+
+    // The scenes change under the driver: Mario absent during both movies,
+    // HeavensDoorGalaxy loading (not ready, no player) from the frame of
+    // PrologueB's end, then ready but dropping out for a frame every 50 until
+    // 200 frames in. PASS only after 60 ready frames in a row, and no input
+    // while the movies and the load run.
+    Run changes(10000000, Smoke::Script::Story);
+    toStoryStart(changes);
+    StorySim moving;
+    moving.absentInMovies = true;
+    moving.stageLoad = 900;
+    moving.flickerEvery = 50;
+    moving.flickerUntil = 200;
+    simulateStory(changes, moving, 40000);
+    check(changes.driver.result() == Result::Pass, "absent player in movies and stage load passes: " +
+                                                       changes.driver.reason());
+    check(changes.logged("Movie.PrologueB.End after") && changes.logged("not ready again after 49 ready frames") &&
+              moving.afterLoad >= 199 + 60,
+          "PASS needs 60 ready frames in a row after the last drop");
+    check(moving.pressesWhileWaiting == 0, "no input during the movies and the stage load");
+    check(allKeysReleased(changes), "keys released after the stage change");
+    // A stage that never stays ready for 60 frames FAILs on the stage clock.
+    Run flaky(10000000, Smoke::Script::Story);
+    toStoryStart(flaky);
+    StorySim unstable;
+    unstable.stageLoad = 100;
+    unstable.flickerEvery = 50;
+    unstable.flickerUntil = 1000000;
+    simulateStory(flaky, unstable, 40000);
+    check(flaky.driver.result() == Result::Fail &&
+              flaky.driver.reason().find("HeavensDoorGalaxy not ready within 3600 frames") == 0,
+          "a stage never ready 60 frames in a row FAILs: " + flaky.driver.reason());
+    // Mario missing while walking still FAILs.
+    Run gone(10000000, Smoke::Script::Story);
+    toStoryStart(gone);
+    StorySim vanish;
+    for (int i = 0; i < 20000 && gone.driver.result() == Result::Running; i++) {
+        Observation o = vanish.observe();
+        if (gone.logged("waypoint 2 reached")) {
+            o.playerValid = false;
+        }
+        const Smoke::Step step = gone.driver.step(o);
+        for (const Smoke::Press& press : step.presses) {
+            gone.events.push_back({gone.driver.frame(), press.button, press.down, step.assertFocus});
+        }
+        for (const std::string& line : gone.driver.log()) {
+            gone.log.push_back(line);
+        }
+        vanish.apply(step);
+        vanish.advance();
+    }
+    check(gone.driver.result() == Result::Fail && gone.driver.reason().find("no player position while") == 0,
+          "no player while walking FAILs: " + gone.driver.reason());
+    check(allKeysReleased(gone), "keys released after losing the player");
 
     // The stage change can come without Movie.PrologueB.End.
     Run noEnd(10000000, Smoke::Script::Story);
