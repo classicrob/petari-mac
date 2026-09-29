@@ -89,3 +89,87 @@ Verification after the fixes:
 - Fresh full-app `PETARI_SMOKE=gameplay`: PASS at frame 5398, normal shutdown
   exit 0. Log: `build/visual-fix-gameplay.log`. This includes file creation,
   prologue, idle, jump/landing, opposite movement, pause/freeze, and resume.
+
+## Follow-up fidelity checks
+
+- Generated collision now has a typed initialization path, preserving its mutable
+  descriptor and explicit triangle count. Its octree leaf is written in host
+  order. The root generated-collision and asset tests pass, including 22,293
+  triangle queries over 150 disc collision files. This addresses the manual
+  playtest crash that treated runtime-generated collision as unconverted disc data.
+- Actor lights previously left their direction uninitialized. A live debugger
+  read found directions around 2.3e20 in lights 0 and 1, large enough to overflow
+  the spotlight calculation. Native light objects now start initialized. The
+  optimized regression passes. Desktop inspection confirms the white wash is
+  gone. A second bug kept the eyes closed: `getMaterialAnm()` rejected all host
+  pointers above 4 GiB using a Wii address test. The native accessor now rejects
+  only the original 32-bit sentinel range. Desktop inspection confirms open
+  blue irises. Both root material-animation tests pass, covering texture swaps,
+  TEV colors, material colors and texture transforms with real disc resources.
+- The normal 1280x720-point Retina window already renders at 2560x1440. GPU
+  tests show a hard edge at its native texel and a 1:1 presentation scale. The
+  prologue illustrations are 608x224 source textures, and many UI icons are
+  24–64 pixels; raising render resolution does not add detail to those assets.
+  Presentation now fits the render target to the displayed aspect when the
+  window has a different shape, avoiding an extra resampling step. The GPU
+  regression covers 4:3 and 16:9, resizing, and replacement of stale copies.
+
+The integrated reload run (`build/fidelity-reload.log`) passed at frame 4702
+and exited normally with status 0. Idle, jump/landing, opposite movement, pause
+freeze and resumed movement passed. The isolated NAND files remained identical
+by SHA-256. Across 83 device-audio reports there were zero output underrun
+frames, but 17 AI block replays; audio fidelity is not yet established. Replays
+cluster around slow frames, so scheduling diagnostics are the next check.
+
+
+## Audio scheduling follow-up
+
+The first pacing revision eliminated output-ring starvation but still repeated
+DMA blocks. CPU-wait samples identified two separate causes:
+
+- A lower-priority thread could be assigned the simulated CPU while its host
+  thread was still asleep. An audio interrupt then waited for that sleeper to
+  wake before it could yield. The scheduler now immediately redirects an
+  unstarted dispatch to the highest-priority ready thread. A deterministic
+  dispatch regression fails without this change; OS tests pass in Release,
+  ASan and TSan.
+- After that fix, `build/fidelity-scheduler-reload.log` passed the gameplay
+  checks with zero underruns over 79 reports, but five replays remained during
+  a sampled 78.2 ms `FileRipper::decompressSzsSub` call. The native decoder now
+  offers higher-priority preemption between groups every 16 KiB of output,
+  preserving Wii code and decode state. Root game-data checks pass on 311
+  archives, 55 uncompressed files and 16 streamed archives requiring refills.
+
+The sink now refills to a level based on whole device requests, with catch-up
+bounded by elapsed time; it never discards pulled samples. The producer and AI
+interrupt thread use real-time scheduling, with higher QoS for the DSP and
+high-priority OS threads. Buffer latency is roughly 64 ms plus the device's
+largest request at 32 kHz. Diagnostics distinguish underruns from repeated AI
+blocks (`PETARI_AUDIO_DIAG=1`); optional CPU-wait sampling uses
+`PETARI_BATON_DIAG=1`. The diagnostic mutex has process lifetime so its detached
+reporter remains safe during normal exit.
+
+
+Final integrated run: `build/fidelity-final-reload.log`, rebuilt with both
+scheduler and decoder fixes. The existing-save gameplay sequence passed and
+exited 0. All 79 audio reports had zero underrun frames; one AI block replay
+occurred during startup, with none subsequently reported through title, file
+load, prologue and gameplay. No CPU-wait report exceeded the diagnostic's 5 ms
+reporting threshold. The isolated NAND hashes remained unchanged. This shows
+the measured sustained distortion mechanisms are corrected on this route; it
+does not establish perceptual audio fidelity or zero stalls in untested levels.
+
+Desktop capture during the arrival sequence confirms white Toad caps with
+red/green/blue/yellow spots and distinct clothing colors, without the previous
+gold wash. Mario has his red cap and blue overalls. The earlier file-select
+capture confirmed open blue irises. These are visual spot checks, not a
+pixel-level comparison against Wii output.
+
+
+The one startup replay is expected silent JAudio2 initialization, not a late
+production block: `JASDriver::initAI` clears all DAC buffers and starts buffer 2;
+`lastRspMadep` is initially null, so the first `updateDac` interrupt registers
+no successor. The zeroed initial buffer therefore plays twice, as on the Wii.
+Subsequent interrupts register the prepared buffer. The diagnostic intentionally
+counts this event rather than masking it. No unexpected replay was measured
+in the final route; listening remains a separate fidelity check.
