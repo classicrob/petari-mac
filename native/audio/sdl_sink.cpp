@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <condition_variable>
+#include <mutex>
 
 #include <pthread.h>
 #include <pthread/qos.h>
@@ -34,6 +36,79 @@ PetariNative::AudioSDL::Detail::PacedRing ring;
 std::atomic<bool> stopProducer{false};
 std::thread producer;
 
+// PETARI_AUDIO_DIAG=1 diagnostics. The realtime producer and the SDL callback
+// only update these atomics; a separate reporter thread (started by start(),
+// joined by stop()) does all formatting and stderr I/O, so the realtime paths
+// never block on the stderr lock or spend their budget on formatting.
+bool diagnostics = false;  // set by start() before the threads start
+std::atomic<std::int64_t> worstTickGapUs{0};     // producer: time between ticks
+std::atomic<std::int64_t> worstPullUs{0};        // producer: one tick's AI pulls (includes lock waits)
+std::atomic<std::uint64_t> pulledFrames{0};
+std::atomic<std::int64_t> worstCallbackGapUs{0}; // SDL callback: time between calls
+std::atomic<std::uint64_t> callbacks{0};
+std::atomic<std::uint64_t> requestedFrames{0};
+std::int64_t lastCallbackUs = 0;                 // SDL callback thread only
+std::mutex reporterLock;
+std::condition_variable reporterWake;
+bool reporterStop = false;                       // under reporterLock
+std::thread* reporter = nullptr;                 // joined and deleted by stop(); never left to static destruction
+
+std::int64_t nowUs() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void raiseMax(std::atomic<std::int64_t>& worst, std::int64_t value) {
+    std::int64_t current = worst.load(std::memory_order_relaxed);
+    while (value > current && !worst.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
+    }
+}
+
+void report() {
+    PetariNative::HostAllocationScope host;
+    std::uint64_t reportedReplays = PetariNative::Platform::Audio::replayedBlocks();
+    auto previous = std::chrono::steady_clock::now();
+    std::unique_lock<std::mutex> lock(reporterLock);
+    while (!reporterWake.wait_for(lock, std::chrono::seconds(1), [] { return reporterStop; })) {
+        lock.unlock();
+        // Counters cover the interval since the previous report, which can be
+        // longer than a second if this thread was delayed; it is printed.
+        const auto now = std::chrono::steady_clock::now();
+        const double interval = std::chrono::duration<double>(now - previous).count();
+        previous = now;
+        // Ring starvation (underrun) versus late game audio production (AI
+        // replaying a block), the ring level, and the largest device request.
+        const std::uint64_t replays = PetariNative::Platform::Audio::replayedBlocks();
+        std::fprintf(stderr, "[audio] level %llu/%llu frames, largest request %zu, underrun %llu frames, AI replayed %llu blocks (since previous report, %.2f s)\n",
+                     static_cast<unsigned long long>(ring.level()), static_cast<unsigned long long>(ring.target()), ring.largestRequest(),
+                     static_cast<unsigned long long>(ring.takeUnderrunFrames()), static_cast<unsigned long long>(replays - reportedReplays), interval);
+        reportedReplays = replays;
+        // Where the audio cycle spent its time (worst values): see
+        // native/platform/audio/audio_timing.hpp.
+        const auto t = PetariNative::Platform::Audio::takeTimingStats();
+        std::fprintf(stderr, "[audio-timing] AI deliver %lld us; registration: %lld us after the latest DMA raise (%lld after its delivery), "
+                     "%lld us after the oldest retained unanswered raise, up to %lld DMA interrupts per registration, %llu registrations missing blocks "
+                     "(%llu beyond the record ring), "
+                     "%lld DSP interrupts before it; DSP deliver %lld us, subframe render %lld us, frame %lld us\n",
+                     static_cast<long long>(t.dmaDeliverUs), static_cast<long long>(t.latestRaiseToRegisterUs),
+                     static_cast<long long>(t.latestDeliverToRegisterUs), static_cast<long long>(t.oldestRaiseToRegisterUs),
+                     static_cast<long long>(t.generationsPerRegistration), static_cast<unsigned long long>(t.registrationsMissingBlocks),
+                     static_cast<unsigned long long>(t.registrationsTruncated), static_cast<long long>(t.dspInterruptsBeforeRegister),
+                     static_cast<long long>(t.dspDeliverUs), static_cast<long long>(t.subframeRenderUs), static_cast<long long>(t.frameUs));
+        // The host side of the ring. Interval aggregates: they help
+        // distinguish producer-side from device-side starvation around an
+        // underrun, but do not by themselves establish its cause.
+        std::fprintf(stderr, "[audio-host] producer: worst tick gap %lld us, worst pull %lld us, pulled %llu frames; device: %llu callbacks, "
+                     "worst gap %lld us, requested %llu frames (since previous report, %.2f s)\n",
+                     static_cast<long long>(worstTickGapUs.exchange(0, std::memory_order_relaxed)),
+                     static_cast<long long>(worstPullUs.exchange(0, std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(pulledFrames.exchange(0, std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(callbacks.exchange(0, std::memory_order_relaxed)),
+                     static_cast<long long>(worstCallbackGapUs.exchange(0, std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(requestedFrames.exchange(0, std::memory_order_relaxed)), interval);
+        lock.lock();
+    }
+}
+
 void produce(std::uint32_t rate) {
     PetariNative::HostAllocationScope host;
     using Clock = std::chrono::steady_clock;
@@ -45,31 +120,21 @@ void produce(std::uint32_t rate) {
     const std::size_t quantum = rate / 1000;  // pull granularity: 1 ms of audio
     const PetariNative::AudioSDL::Detail::Pacer pacer(rate);
     auto last = Clock::now();
-    // PETARI_AUDIO_DIAG=1: once a second, report what could make audio
-    // distort: ring starvation (device underrun) versus late game audio
-    // production (AI replaying a block), plus the ring level and the largest
-    // device request.
-    const char* diagValue = std::getenv("PETARI_AUDIO_DIAG");  // unset, empty, or leading '0' = off
-    const bool diagnostics = diagValue != nullptr && diagValue[0] != '\0' && diagValue[0] != '0';
-    auto nextReport = Clock::now() + std::chrono::seconds(1);
-    std::uint64_t reportedReplays = 0;
     auto next = Clock::now();
     while (!stopProducer.load(std::memory_order_acquire)) {
-        if (diagnostics && Clock::now() >= nextReport) {
-            const std::uint64_t replays = PetariNative::Platform::Audio::replayedBlocks();
-            std::fprintf(stderr, "[audio] level %llu/%llu frames, largest request %zu, underrun %llu frames, AI replayed %llu blocks (last second)\n",
-                         static_cast<unsigned long long>(ring.level()), static_cast<unsigned long long>(ring.target()),
-                         ring.largestRequest(), static_cast<unsigned long long>(ring.takeUnderrunFrames()),
-                         static_cast<unsigned long long>(replays - reportedReplays));
-            reportedReplays = replays;
-            nextReport += std::chrono::seconds(1);
-        }
         const auto now = Clock::now();
         const std::size_t allowance = pacer.allowance(std::chrono::duration<double>(now - last).count());
+        if (diagnostics) {
+            raiseMax(worstTickGapUs, std::chrono::duration_cast<std::chrono::microseconds>(now - last).count());
+        }
         last = now;
-        PetariNative::AudioSDL::Detail::produceTick(ring, quantum, allowance, [](std::int16_t* out, std::size_t frames) {
+        const std::size_t pulled = PetariNative::AudioSDL::Detail::produceTick(ring, quantum, allowance, [](std::int16_t* out, std::size_t frames) {
             PetariNative::Platform::Audio::pull(out, frames);
         });
+        if (diagnostics) {
+            raiseMax(worstPullUs, std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - now).count());
+            pulledFrames.fetch_add(pulled, std::memory_order_relaxed);
+        }
         // Ticks are paced in real time; a late tick does not bring extra
         // ticks (the level, not the tick count, decides how much is pulled).
         next = std::max(next + std::chrono::milliseconds(1), Clock::now());
@@ -81,6 +146,15 @@ void SDLCALL fill(void*, SDL_AudioStream* stream, int additionalBytes, int) {
     PetariNative::HostAllocationScope host;
     alignas(16) std::int16_t buffer[1024 * 2];
     int frames = additionalBytes > 0 ? (additionalBytes + 3) / 4 : 0;
+    if (diagnostics) {
+        const std::int64_t t = nowUs();
+        if (lastCallbackUs != 0) {
+            raiseMax(worstCallbackGapUs, t - lastCallbackUs);
+        }
+        lastCallbackUs = t;
+        callbacks.fetch_add(1, std::memory_order_relaxed);
+        requestedFrames.fetch_add(static_cast<std::uint64_t>(frames), std::memory_order_relaxed);
+    }
     ring.noteRequest(static_cast<std::size_t>(frames));  // the whole burst, before splitting
     while (frames > 0) {
         const int count = std::min(frames, 1024);
@@ -98,6 +172,17 @@ void stop(void*) {
     running.store(false);
     stopProducer.store(true, std::memory_order_release);
     if (producer.joinable()) producer.join();
+    if (reporter != nullptr) {
+        {
+            std::lock_guard<std::mutex> guard(reporterLock);
+            reporterStop = true;
+        }
+        reporterWake.notify_all();
+        reporter->join();
+        delete reporter;
+        reporter = nullptr;
+    }
+    PetariNative::Platform::Audio::setTimingDiagnostics(false);
     if (device) SDL_DestroyAudioStream(device);
     device = nullptr;
     if (const auto replayed = PetariNative::Platform::Audio::replayedBlocks())
@@ -118,9 +203,17 @@ void start(std::uint32_t rate, void*) {
     initialized = true;
     ring.reset(prebuffer);
     stopProducer.store(false);
+    const char* diagValue = std::getenv("PETARI_AUDIO_DIAG");  // unset, empty, or leading '0' = off
+    diagnostics = diagValue != nullptr && diagValue[0] != '\0' && diagValue[0] != '0';
+    PetariNative::Platform::Audio::setTimingDiagnostics(diagnostics);
+    lastCallbackUs = 0;
     SDL_AudioSpec spec{SDL_AUDIO_S16, 2, static_cast<int>(rate)};
     device = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, fill, nullptr);
     if (device) producer = std::thread(produce, rate);
+    if (device && diagnostics) {
+        reporterStop = false;
+        reporter = new std::thread(report);
+    }
     if (!device || !SDL_ResumeAudioStreamDevice(device)) {
         std::fprintf(stderr, "SDL audio output failed: %s\n", SDL_GetError());
         stop(nullptr);

@@ -419,6 +419,127 @@ void testSpeakerEncodeSize() {
     check(written > 16, "40 speaker samples encode to 20 bytes, more than the Wii's 16-byte array holds");
 }
 
+// Opt-in audio-cycle timing: DMA interrupts -> AIInitDMA of the next block
+// (mapping documented in native/platform/audio/audio_timing.hpp).
+void testTimingDiagnostics() {
+    AIInit(nullptr);
+    AIRegisterDMACallback(nullptr);
+    static std::int16_t blockA[64 * 2], blockB[64 * 2];  // 2 ms blocks at 32 kHz
+    std::vector<std::int16_t> out(64 * 2);
+    const auto interrupt = [&] {  // one block start, delivered
+        PAudio::pull(out.data(), 64);
+        PAudio::drainInterrupts();
+    };
+
+    // Disabled: nothing is recorded.
+    PAudio::setTimingDiagnostics(false);
+    PAudio::takeTimingStats();
+    AIInitDMA(reinterpret_cast<uintptr_t>(blockA), sizeof(blockA));
+    AIStartDMA();
+    interrupt();
+    AIInitDMA(reinterpret_cast<uintptr_t>(blockB), sizeof(blockB));
+    const PAudio::TimingStats off = PAudio::takeTimingStats();
+    check(off.latestRaiseToRegisterUs == 0 && off.dmaDeliverUs == 0 && off.registrationsMissingBlocks == 0 && off.generationsPerRegistration == 0,
+          "timing off: nothing recorded");
+
+    PAudio::setTimingDiagnostics(true);
+    // Prompt: one interrupt, answered at once.
+    interrupt();
+    AIInitDMA(reinterpret_cast<uintptr_t>(blockA), sizeof(blockA));
+    const PAudio::TimingStats quick = PAudio::takeTimingStats();
+    check(quick.generationsPerRegistration == 1 && quick.registrationsMissingBlocks == 0, "a prompt registration answers one interrupt");
+    check(quick.latestRaiseToRegisterUs < 2000 && quick.oldestRaiseToRegisterUs == quick.latestRaiseToRegisterUs,
+          "prompt: latest and oldest are the same interrupt");
+
+    // Late across blocks: two interrupts go by (the first block was
+    // replayed), then the registration comes 20 ms after the second.
+    interrupt();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    interrupt();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    AIInitDMA(reinterpret_cast<uintptr_t>(blockB), sizeof(blockB));
+    AIInitDMA(reinterpret_cast<uintptr_t>(blockA), sizeof(blockA));  // a second call answers nothing new: not measured
+    const PAudio::TimingStats late = PAudio::takeTimingStats();
+    check(late.generationsPerRegistration == 2 && late.registrationsMissingBlocks == 1,
+          "a registration after two interrupts answers two generations (one block missed), counted once");
+    check(late.latestRaiseToRegisterUs >= 20000 && late.latestDeliverToRegisterUs >= 20000, "measured from the latest interrupt");
+    check(late.oldestRaiseToRegisterUs >= late.latestRaiseToRegisterUs + 4000,
+          "and from the oldest unanswered one, which is earlier (the latest-only delta would hide the missed block)");
+    check(late.dspInterruptsBeforeRegister == 0, "no DSP interrupts in between (no DSP running)");
+
+    // Rollover: more unanswered interrupts than the record ring holds.
+    for (int i = 0; i < 70; ++i) {
+        interrupt();
+    }
+    AIInitDMA(reinterpret_cast<uintptr_t>(blockB), sizeof(blockB));
+    const PAudio::TimingStats wrapped = PAudio::takeTimingStats();
+    check(wrapped.generationsPerRegistration == 70 && wrapped.registrationsMissingBlocks == 1,
+          "70 unanswered interrupts: the count is exact past the 64-record ring");
+    check(wrapped.oldestRaiseToRegisterUs >= wrapped.latestRaiseToRegisterUs, "the oldest is clamped to the ring, never later than the latest");
+    check(wrapped.registrationsTruncated == 1 && late.registrationsTruncated == 0 && quick.registrationsTruncated == 0,
+          "a registration beyond the ring is marked truncated (its oldest is retained-only); in-ring ones are not");
+
+    PAudio::setTimingDiagnostics(false);
+    AIStopDMA();
+    PAudio::shutdown();
+}
+
+// The block register (AIInitDMA vs the pull latch) under contention: a torn
+// snapshot would pair one block's samples with another's length. Each block
+// has its own fill value and length, so every run of a value heard must be a
+// whole number of that block's length (a replay repeats the whole block).
+// Bounded, no timing assertions.
+void testRegisterContention() {
+    AIInit(nullptr);
+    AIRegisterDMACallback(nullptr);
+    constexpr int kBlocks = 4;
+    static const std::uint32_t kFrames[kBlocks] = {48, 80, 112, 144};
+    static std::int16_t blocks[kBlocks][144 * 2];
+    for (int b = 0; b < kBlocks; ++b) {
+        for (std::uint32_t i = 0; i < kFrames[b] * 2; ++i) {
+            blocks[b][i] = static_cast<std::int16_t>(b + 1);
+        }
+    }
+    AIInitDMA(reinterpret_cast<uintptr_t>(blocks[0]), kFrames[0] * 4);
+    AIStartDMA();
+    std::atomic<bool> stop{false};
+    std::thread registrar([&] {
+        for (int i = 0; !stop.load(); ++i) {
+            const int b = i % kBlocks;
+            AIInitDMA(reinterpret_cast<uintptr_t>(blocks[b]), kFrames[b] * 4);
+        }
+    });
+    std::vector<std::int16_t> heard;
+    std::vector<std::int16_t> out(97 * 2);
+    for (int n = 0; n < 2000; ++n) {
+        PAudio::pull(out.data(), 97);
+        for (std::size_t i = 0; i < out.size(); i += 2) {
+            heard.push_back(out[i]);
+        }
+    }
+    stop = true;
+    registrar.join();
+    AIStopDMA();
+    PAudio::shutdown();
+    // Runs of equal values; the first and last may be partial.
+    bool whole = true;
+    std::size_t runs = 0;
+    std::size_t start = 0;
+    for (std::size_t i = 1; i <= heard.size(); ++i) {
+        if (i == heard.size() || heard[i] != heard[start]) {
+            const std::int16_t v = heard[start];
+            const std::size_t length = i - start;
+            if (start != 0 && i != heard.size() && v >= 1 && v <= kBlocks) {
+                whole = whole && length % kFrames[v - 1] == 0;
+                ++runs;
+            }
+            start = i;
+        }
+    }
+    check(runs > 100, "many block latches under contention");
+    check(whole, "every latched block plays whole with its own length: no torn register snapshot");
+}
+
 std::atomic<int> gSecondSession{0};
 void secondSessionCallback() {
     gSecondSession++;
@@ -471,6 +592,8 @@ int main() {
     testAiReinit();
     testChannelOrder();
     testSpeakerEncodeSize();
+    testTimingDiagnostics();
+    testRegisterContention();
     OSReport("platform audio tests passed (%d checks)\n", checks);
     return 0;
 }

@@ -27,6 +27,9 @@
 #include "petari/host_allocation.hpp"
 #include "petari/platform/aram.hpp"
 #include "petari/platform/dsp.hpp"
+#include "audio_timing.hpp"
+
+namespace Timing = PetariNative::Platform::Audio::Timing;
 
 // Defined by JAudio2 (osdsp_task.cpp), replacing the SDK's handler as on the Wii.
 extern "C" void __DSPHandler(__OSInterrupt interrupt, OSContext* context);
@@ -86,6 +89,12 @@ struct Device {
     std::uint16_t voicesPerFrame = 0;
     std::uint8_t* voiceBase = nullptr;
     std::uint32_t requestedFrames = 0;
+    // Timing diagnostics (worker thread only, except the raise stamps).
+    std::int64_t frameRequestedAt = 0;   // render command received
+    std::int64_t voicesReleasedAt = 0;   // current subframe's voices released
+    static constexpr std::uint32_t kRaiseStamps = 64;
+    std::atomic<std::uint64_t> raisedCount{0}, deliveredCount{0};
+    std::atomic<std::int64_t> raisedAt[kRaiseStamps];
     std::uint32_t currentFrame = 0;
     std::uint32_t currentVoice = 0;
     std::uint32_t syncMaxVoice = 0;
@@ -125,6 +134,13 @@ void pushMails(Device& d, std::initializer_list<std::uint32_t> mails, int interr
         }
     }
     if (interrupts > 0) {
+        if (Timing::enabled.load(std::memory_order_relaxed)) {
+            const std::int64_t t = Timing::now();
+            for (int i = 0; i < interrupts; ++i) {
+                const std::uint64_t n = d.raisedCount.fetch_add(1, std::memory_order_relaxed);
+                d.raisedAt[n % Device::kRaiseStamps].store(t, std::memory_order_relaxed);
+            }
+        }
         d.pendingInterrupts.fetch_add(interrupts, std::memory_order_acq_rel);
         dispatch_semaphore_signal(d.interruptSignal);
     }
@@ -169,6 +185,9 @@ void renderAudio(Device& d) {
         // answered with MAIL_CONTINUE) before the audio thread runs again and
         // releases the next frame's voices.
         d.renderer.finalizeFrame(d.outLeft, d.outRight, d.outputVolume);
+        if (Timing::enabled.load(std::memory_order_relaxed) && d.voicesReleasedAt != 0) {
+            Timing::raiseMax(Timing::worstSubframeRender, Timing::now() - d.voicesReleasedAt);
+        }
         d.outLeft += kSubframeSamples;
         d.outRight += kSubframeSamples;
         const std::uint16_t sync = static_cast<std::uint16_t>(0xFF00 | d.currentFrame);
@@ -179,6 +198,9 @@ void renderAudio(Device& d) {
             ackStandard(d, sync);
         } else {
             d.canExecute = false;  // until the CPU answers with MAIL_CONTINUE
+            if (Timing::enabled.load(std::memory_order_relaxed) && d.frameRequestedAt != 0) {
+                Timing::raiseMax(Timing::worstFrame, Timing::now() - d.frameRequestedAt);
+            }
             pushMails(d, {kDspSync, 0xF3550000u | sync, kDspFrameEnd}, 2);
         }
     }
@@ -220,6 +242,7 @@ void runPendingCommands(Device& d) {
         }
         case 0x02:  // render frames; acknowledged by sync mails, not a command ack
             d.requestedFrames = (mail >> 16) & 0xFF;
+            d.frameRequestedAt = Timing::enabled.load(std::memory_order_relaxed) ? Timing::now() : 0;
             d.outputVolume = extra;
             d.outLeft = static_cast<std::int16_t*>(resolve(d, readCommand(d)));
             d.outRight = static_cast<std::int16_t*>(resolve(d, readCommand(d)));
@@ -279,6 +302,9 @@ void handleMail(Device& d, std::uint32_t mail) {
         }
         d.syncMaxVoice = (((mail >> 16) & 0xF) + 1) << 4;
         d.syncFlags[group] = static_cast<std::uint16_t>(mail & 0xFFFF);
+        if (d.currentVoice == 0 && Timing::enabled.load(std::memory_order_relaxed)) {
+            d.voicesReleasedAt = Timing::now();  // first release of this subframe
+        }
         renderAudio(d);
         d.state = MailState::Waiting;
         break;
@@ -326,7 +352,16 @@ void* interruptMain(void*) {
         BOOL enabled = OSDisableInterrupts();
         while (!d.stopInterrupts.load(std::memory_order_acquire) && d.pendingInterrupts.load(std::memory_order_acquire) > 0) {
             d.pendingInterrupts.fetch_sub(1, std::memory_order_acq_rel);
+            if (Timing::enabled.load(std::memory_order_relaxed)) {
+                const std::uint64_t n = d.deliveredCount.fetch_add(1, std::memory_order_relaxed);
+                if (n < d.raisedCount.load(std::memory_order_relaxed)) {
+                    Timing::raiseMax(Timing::worstDspDeliver, Timing::now() - d.raisedAt[n % Device::kRaiseStamps].load(std::memory_order_relaxed));
+                }
+            }
             __DSPHandler(__OS_INTERRUPT_DSP_DSP, nullptr);
+            if (Timing::enabled.load(std::memory_order_relaxed)) {
+                Timing::dspDelivered.fetch_add(1, std::memory_order_relaxed);
+            }
         }
         OSRestoreInterrupts(enabled);
     }
@@ -388,6 +423,8 @@ void shutdown() {
     d.stop = false;
     d.stopInterrupts.store(false);
     d.pendingInterrupts.store(0);
+    d.raisedCount.store(0);
+    d.deliveredCount.store(0);
     d.state = MailState::Waiting;
     d.expectedCommandMails = 0;
     d.commandBuffer.clear();

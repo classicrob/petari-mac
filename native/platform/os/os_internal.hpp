@@ -10,6 +10,10 @@
 // the running thread to reschedule.
 
 #include <condition_variable>
+#include <cstdint>
+#include <pthread.h>
+#include <pthread/qos.h>
+#include <vector>
 #include <mutex>
 
 #include <revolution/os.h>
@@ -38,6 +42,22 @@ void hostWait(std::condition_variable& cv, Predicate predicate) {
 // Scheduler hooks used by the interrupt layer (os_thread.cpp).
 void onInterruptsEnabling();   // interrupt lock still held
 void onInterruptsDisabled();   // interrupt lock just acquired
+// Host QoS inheritance for the baton holder (os_thread.cpp). Interrupt lock
+// held: take the overrides detached by changes of hands; the caller ends them
+// with endOverrides() AFTER releasing the interrupt mutex.
+void takeDeferredOverrides(std::vector<pthread_override_t>& out);  // swaps; no allocation under the lock
+void endOverrides(std::vector<pthread_override_t>& overrides);       // clears
+// For tests; read with the interrupt lock held for a consistent view.
+struct HolderOverrideStats {
+    std::uint64_t started;
+    std::uint64_t detached;
+    std::uint64_t ended;
+    bool active;
+    OSThread* target;
+    int deferred;
+};
+HolderOverrideStats holderOverrideStats();
+
 // PETARI_BATON_DIAG: counts the calling OS thread's OSDisableInterrupts calls
 // (nested = interrupts were already disabled, so it was a no-op).
 void noteInterruptDisable(bool nested);

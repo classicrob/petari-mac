@@ -22,7 +22,15 @@ void disable() {
 void enable() {
     onInterruptsEnabling();
     tDisabled = false;
+    // QoS overrides detached by changes of hands are ended only once the
+    // mutex is released (see os_thread.cpp). The thread-local list keeps its
+    // capacity (host allocation), so the swap under the lock does not allocate.
+    thread_local std::vector<pthread_override_t> overrides;
+    takeDeferredOverrides(overrides);
     interruptMutex().unlock();
+    if (!overrides.empty()) {
+        endOverrides(overrides);
+    }
 }
 
 }  // namespace

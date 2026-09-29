@@ -41,6 +41,7 @@
 #include <condition_variable>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include "os_internal.hpp"
 #include "os_sdk_private.h"
@@ -60,6 +61,7 @@ constexpr std::size_t kMinHostStack = 2 * 1024 * 1024;
 struct HostThread {
     OSThread* thread = nullptr;
     mach_port_t machThread = MACH_PORT_NULL;  // for the preemption diagnostic's PC sample
+    pthread_t pthread{};                        // target of the host QoS override while it holds the baton
     std::uintptr_t stackLow = 0, stackHigh = 0; // host stack bounds, for its bounded frame walk
     // PETARI_BATON_DIAG: incremented only by this OS thread (relaxed), read by
     // the episode bookkeeping for per-episode deltas.
@@ -86,6 +88,35 @@ bool gPreemptPending;
 // dispatch, so a higher-priority thread readied meanwhile may take the baton
 // from it directly (see interruptReschedule).
 bool gCurrentRunning;
+
+// Host QoS inheritance for the baton holder. While a strictly higher-priority
+// OS thread is ready and waits for the running holder to reach its next
+// interrupt-state change, the holder's host thread gets a QoS override to
+// user-interactive, so macOS is asked to keep it on a CPU. Emulated (OS)
+// priorities are not affected. Measured need: holders at default host QoS were
+// runnable but off-CPU for 20-53 ms while JAudio2's audio thread waited
+// (PETARI_BATON_DIAG, story7).
+// Teardown is deferred past the interrupt mutex: a change of hands only
+// detaches the override (under the lock); it is ended by the next thread that
+// releases the interrupt mutex, after releasing it (normally the recipient,
+// once it runs). Ending it inside the handoff would demote the old holder
+// while it still holds the mutex the woken thread needs, recreating the
+// inversion. The override objects are allocated by libpthread (malloc, not
+// operator new), so the game-heap routing does not apply.
+// All state below: interrupt lock.
+pthread_override_t gHolderOverride = nullptr;
+OSThread* gOverrideTarget = nullptr;
+std::vector<pthread_override_t>& deferredOverrides() {
+    static auto* list = [] {
+        PetariNative::HostAllocationScope hostAllocations;
+        return new std::vector<pthread_override_t>;
+    }();
+    return *list;
+}
+std::uint64_t gOverridesStarted = 0, gOverridesDetached = 0;
+std::atomic<std::uint64_t> gOverridesEnded{0};
+void startHolderOverride(OSThread* holder);
+void detachHolderOverride();
 
 // ---- Preemption-latency diagnostic (PETARI_BATON_DIAG=1) ----
 // An episode starts when an interrupt makes a thread ready that outranks the
@@ -391,6 +422,7 @@ void updatePriority(OSThread* thread) {
 // ---- Baton ----
 
 void giveCpu(OSThread* next) {
+    detachHolderOverride();
     if (gBatonDiag) {
         closeEpisode();
     }
@@ -464,8 +496,16 @@ void interruptReschedule() {
         giveCpu(popHighestReady());
         return;
     }
+    if (current->state == kStateRunning && (RunQueueBits == 0 || highestReadyPriority() >= current->priority)) {
+        // No strictly higher thread waits (for example it was suspended,
+        // cancelled or lowered): the dependency the override expressed ended.
+        detachHolderOverride();
+    }
     if (current->state != kStateRunning || highestReadyPriority() < current->priority) {
         gPreemptPending = true;
+        if (current->state == kStateRunning && RunQueueBits != 0 && highestReadyPriority() < current->priority) {
+            startHolderOverride(current);  // it must run to its next preemption point
+        }
         if (gBatonDiag && current->state == kStateRunning) {
             openEpisode(current, highestReadyPriority());
         }
@@ -485,6 +525,7 @@ void selectThread(BOOL yield) {
     if (self->state == kStateRunning) {
         if (!yield && self->priority <= highestReadyPriority()) {
             gPreemptPending = false;
+            detachHolderOverride();  // nothing strictly higher waits any more
             return;
         }
         self->state = kStateReady;
@@ -494,6 +535,7 @@ void selectThread(BOOL yield) {
     RunQueueHint = FALSE;
     gPreemptPending = false;
     if (RunQueueBits == 0) {
+        detachHolderOverride();
         if (gBatonDiag) {
             closeEpisode();
         }
@@ -532,6 +574,7 @@ void* hostEntry(void* arg) {
     }
     tBound = tHost->thread;
     tHost->machThread = pthread_mach_thread_np(pthread_self());
+    tHost->pthread = pthread_self();
     tHost->stackHigh = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(pthread_self()));
     tHost->stackLow = tHost->stackHigh - pthread_get_stacksize_np(pthread_self());
     // An OS thread runs game code: plain new/delete follow the current JKR heap
@@ -782,7 +825,56 @@ void* batonReporter(void*) {
     }
 }
 
+void startHolderOverride(OSThread* holder) {
+    if (gHolderOverride != nullptr) {
+        return;  // one at a time; detached at the next change of hands
+    }
+    auto found = hosts().find(holder);
+    if (found == hosts().end()) {
+        return;
+    }
+    gHolderOverride = pthread_override_qos_class_start_np(found->second->pthread, QOS_CLASS_USER_INTERACTIVE, 0);
+    if (gHolderOverride != nullptr) {
+        gOverrideTarget = holder;
+        ++gOverridesStarted;
+    }
+}
+
+void detachHolderOverride() {
+    if (gHolderOverride == nullptr) {
+        return;
+    }
+    {
+        // Host bookkeeping: a game thread may be the one handing over.
+        PetariNative::HostAllocationScope hostAllocations;
+        deferredOverrides().push_back(gHolderOverride);
+    }
+    gHolderOverride = nullptr;
+    gOverrideTarget = nullptr;
+    ++gOverridesDetached;
+}
+
 }  // namespace
+
+void takeDeferredOverrides(std::vector<pthread_override_t>& out) {
+    std::vector<pthread_override_t>& list = deferredOverrides();
+    if (!list.empty()) {
+        out.swap(list);  // no allocation under the lock
+    }
+}
+
+void endOverrides(std::vector<pthread_override_t>& overrides) {
+    for (pthread_override_t o : overrides) {
+        pthread_override_qos_class_end_np(o);
+    }
+    gOverridesEnded.fetch_add(overrides.size(), std::memory_order_relaxed);
+    overrides.clear();
+}
+
+HolderOverrideStats holderOverrideStats() {
+    return {gOverridesStarted, gOverridesDetached, gOverridesEnded.load(std::memory_order_relaxed), gHolderOverride != nullptr,
+            gOverrideTarget, static_cast<int>(deferredOverrides().size())};
+}
 
 OSThread* boundThread() {
     // A host-blocking OS thread has given up the CPU: platform waits must
@@ -854,6 +946,7 @@ void __OSThreadInit(void) {
         auto host = std::make_shared<HostThread>();
         host->thread = thread;
         host->machThread = pthread_mach_thread_np(pthread_self());
+        host->pthread = pthread_self();
         host->stackHigh = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(pthread_self()));
         host->stackLow = host->stackHigh - pthread_get_stacksize_np(pthread_self());
         hosts()[thread] = host;
@@ -1247,6 +1340,7 @@ void petari_os_begin_host_blocking(void) {
     RunQueueHint = FALSE;
     gPreemptPending = false;
     if (RunQueueBits == 0) {
+        detachHolderOverride();
         if (gBatonDiag) {
             closeEpisode();
         }

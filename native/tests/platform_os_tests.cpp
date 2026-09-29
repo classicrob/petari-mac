@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "dvd_internal.hpp"
+#include "os_internal.hpp"
 #include "os_sdk_private.h"
 #include "petari/platform/dvd.hpp"
 #include "petari/platform/os_host.hpp"
@@ -729,6 +730,117 @@ void testDispatchBeforeWake() {
     }
 }
 
+// Host QoS inheritance: while a higher-priority OS thread waits on a running
+// holder, the holder has a QoS override; it is detached at the handoff and
+// ended after the interrupt mutex is released. Exact lifecycle counts, no
+// timing assertions.
+namespace OSI = PetariNative::Platform::OS;
+OSI::HolderOverrideStats overrideStats() {
+    BOOL enabled = OSDisableInterrupts();
+    const OSI::HolderOverrideStats st = OSI::holderOverrideStats();
+    OSRestoreInterrupts(enabled);
+    return st;
+}
+OSMessageQueue gQosQueue;
+OSMessage gQosSlot;
+OSThread gQosWaiter;
+alignas(32) u8 gQosStack[0x4000];
+std::atomic<bool> gQosWaiterRan{false};
+void* qosWaiter(void*) {
+    OSReceiveMessage(&gQosQueue, nullptr, OS_MESSAGE_BLOCK);
+    gQosWaiterRan = true;
+    return nullptr;
+}
+__attribute__((noinline)) void spinHostCode(int ms) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    volatile unsigned n = 0;
+    while (std::chrono::steady_clock::now() < end) {
+        n = n + 1;
+    }
+}
+
+// One episode: a priority-2 thread readied by an interrupt while this
+// (priority-16) thread spins in host code holding the baton. Returns the
+// stats seen inside the interrupt, just after the send. The caller then hands
+// over and joins the waiter.
+OSI::HolderOverrideStats qosEpisode() {
+    OSInitMessageQueue(&gQosQueue, &gQosSlot, 1);
+    gQosWaiterRan = false;
+    OSCreateThread(&gQosWaiter, qosWaiter, nullptr, gQosStack + sizeof(gQosStack), sizeof(gQosStack), 2, 0);
+    OSResumeThread(&gQosWaiter);  // runs and blocks on the queue
+    static OSI::HolderOverrideStats during;
+    std::thread interrupt([] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        BOOL enabled = OSDisableInterrupts();
+        OSSendMessage(&gQosQueue, nullptr, OS_MESSAGE_NOBLOCK);
+        during = OSI::holderOverrideStats();  // still under the interrupt lock
+        OSRestoreInterrupts(enabled);
+    });
+    spinHostCode(15);  // holds the baton: no OS call
+    interrupt.join();
+    return during;
+}
+
+void testHolderQosOverride() {
+    OSThread* self = OSGetCurrentThread();
+    const OSI::HolderOverrideStats before = overrideStats();
+    const OSI::HolderOverrideStats during = qosEpisode();
+    check(during.active && during.target == self && during.started == before.started + 1,
+          "a running holder gets a QoS override while a higher-priority thread waits on it");
+    OSYieldThread();  // the handoff (an interrupt-state change)
+    OSJoinThread(&gQosWaiter, nullptr);
+    const OSI::HolderOverrideStats after = overrideStats();
+    check(!after.active && after.detached == after.started, "detached at the handoff");
+    check(after.ended == after.started && after.deferred == 0, "and ended once the interrupt mutex was released");
+
+    // Handing over by petari_os_begin_host_blocking also detaches and ends it.
+    const OSI::HolderOverrideStats duringHost = qosEpisode();
+    check(duringHost.active && duringHost.target == self, "override active before a host-blocking handoff");
+    petari_os_begin_host_blocking();
+    for (int i = 0; i < 2000 && !gQosWaiterRan.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    petari_os_end_host_blocking();
+    OSJoinThread(&gQosWaiter, nullptr);
+    const OSI::HolderOverrideStats afterHost = overrideStats();
+    check(gQosWaiterRan.load() && !afterHost.active && afterHost.detached == afterHost.started && afterHost.ended == afterHost.started &&
+              afterHost.deferred == 0,
+          "host-blocking handoff: detached and ended");
+
+    // The dependency ends without a handoff: the waiter is suspended while the
+    // holder still runs. The override is detached at once (still under the
+    // interrupt lock) and ended when that lock is released.
+    {
+        static OSI::HolderOverrideStats withAWaiter, afterSuspend;
+        OSInitMessageQueue(&gQosQueue, &gQosSlot, 1);
+        gQosWaiterRan = false;
+        OSCreateThread(&gQosWaiter, qosWaiter, nullptr, gQosStack + sizeof(gQosStack), sizeof(gQosStack), 2, 0);
+        OSResumeThread(&gQosWaiter);  // blocks on the queue
+        std::thread interrupt([] {
+            BOOL enabled = OSDisableInterrupts();
+            OSSendMessage(&gQosQueue, nullptr, OS_MESSAGE_NOBLOCK);
+            withAWaiter = OSI::holderOverrideStats();
+            OSSuspendThread(&gQosWaiter);  // no strictly higher thread waits now
+            afterSuspend = OSI::holderOverrideStats();
+            OSRestoreInterrupts(enabled);
+        });
+        interrupt.join();  // this thread keeps the baton: no OS call since
+        check(withAWaiter.active && withAWaiter.target == self, "override while the waiter is ready");
+        check(!afterSuspend.active && afterSuspend.detached == withAWaiter.detached + 1,
+              "suspending the waiter detaches the override without a handoff");
+        const OSI::HolderOverrideStats released = overrideStats();
+        check(released.ended == released.started && released.deferred == 0, "and it is ended once the lock is released");
+        check(!gQosWaiterRan.load(), "the suspended waiter did not run");
+        OSResumeThread(&gQosWaiter);  // higher priority: runs now
+        OSJoinThread(&gQosWaiter, nullptr);
+    }
+
+    // The dispatch-before-wake path hands the baton over without an override.
+    const std::uint64_t startedBefore = overrideStats().started;
+    testDispatchBeforeWake();
+    check(overrideStats().started == startedBefore, "a dispatched thread that has not woken gets no override");
+}
+
 void testHostBlocking() {
     static OSThread spinner;
     alignas(32) static u8 stack[0x4000];
@@ -811,6 +923,7 @@ int main() {
     testCache();
     testHostBlocking();
     testDispatchBeforeWake();
+    testHolderQosOverride();
     OSReport("platform OS tests passed (%d checks)\n", checks);
     return 0;
 }

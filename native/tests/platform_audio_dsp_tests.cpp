@@ -18,6 +18,7 @@
 #include "JSystem/JAudio2/dsptask.hpp"
 #include "JSystem/JAudio2/osdsp_task.hpp"
 #include "petari/platform/aram.hpp"
+#include "petari/platform/audio.hpp"
 #include "petari/platform/dsp.hpp"
 
 extern "C" {
@@ -181,6 +182,12 @@ int main() {
         check(rightOk, "voice 17 (group 1) renders into the right output buffer");
     }
     check(get16(gVoices[0], 0x02) == 0, "voices still playing after two frames");
+    {
+        // Timing diagnostics were off for those frames: nothing recorded.
+        const auto off = PetariNative::Platform::Audio::takeTimingStats();
+        check(off.frameUs == 0 && off.subframeRenderUs == 0 && off.dspDeliverUs == 0, "DSP timing off: nothing recorded");
+    }
+    PetariNative::Platform::Audio::setTimingDiagnostics(true);
 
     // Let voice 0 run out: 4000 samples at one per output sample.
     for (int frame = 2; frame < 8; ++frame) {
@@ -194,6 +201,15 @@ int main() {
         }
     }
     check(get16(gVoices[0], 0x02) == 1 && gOut[0][kFrameSamples - 1] == 0, "a finished voice sets its done flag and falls silent");
+    {
+        // Six frames with timing on: each frame's time spans its subframes'
+        // renders (and the round trips between them).
+        const auto on = PetariNative::Platform::Audio::takeTimingStats();
+        std::printf("DSP timing: frame %lld us, subframe render %lld us, DSP interrupt delivery %lld us\n", static_cast<long long>(on.frameUs),
+                    static_cast<long long>(on.subframeRenderUs), static_cast<long long>(on.dspDeliverUs));
+        check(on.frameUs > 0 && on.frameUs >= on.subframeRenderUs, "DSP frame time recorded, at least the slowest subframe render");
+        PetariNative::Platform::Audio::setTimingDiagnostics(false);
+    }
     check(PDSP::microcodeHash(nullptr, 0) == 0, "hash of nothing is zero");
 
     OSReport("platform audio DSP integration tests passed (%d checks)\n", checks);

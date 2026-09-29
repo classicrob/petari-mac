@@ -15,9 +15,11 @@
 #include <pthread.h>
 #include <pthread/qos.h>
 #include <mach/mach.h>
+#include <os/lock.h>
 #include <mach/mach_time.h>
 #include <mach/thread_policy.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -25,22 +27,27 @@
 #include "os_internal.hpp"
 #include "petari/host_allocation.hpp"
 #include "petari/platform/audio.hpp"
+#include "audio_timing.hpp"
 
 namespace OS = PetariNative::Platform::OS;
 namespace PAudio = PetariNative::Platform::Audio;
+namespace Timing = PetariNative::Platform::Audio::Timing;
 
 namespace {
 
-class SpinLock {
+// Block registration lock. The realtime pull() path takes it, as do game
+// threads (AIInitDMA). Unlike the previous busy spin, os_unfair_lock records
+// its owner, which the system uses to attempt to resolve priority inversions
+// (os/lock.h): a waiting realtime thread need not spin on a preempted owner.
+// No latency guarantee is implied. Critical sections are a few loads and
+// stores; there is no trylock retry loop.
+class RegisterLock {
 public:
-    void lock() {
-        while (mFlag.test_and_set(std::memory_order_acquire)) {
-        }
-    }
-    void unlock() { mFlag.clear(std::memory_order_release); }
+    void lock() { os_unfair_lock_lock(&mLock); }
+    void unlock() { os_unfair_lock_unlock(&mLock); }
 
 private:
-    std::atomic_flag mFlag = ATOMIC_FLAG_INIT;
+    os_unfair_lock mLock = OS_UNFAIR_LOCK_INIT;
 };
 
 struct Block {
@@ -49,7 +56,7 @@ struct Block {
     std::uint64_t generation = 0;           // AIInitDMA count when registered
 };
 
-SpinLock gRegisterLock;
+RegisterLock gRegisterLock;
 Block gRegistered;       // AIInitDMA, latched at the next block start
 Block gPlaying;          // DMA engine state (pull thread only)
 std::uint32_t gPosition; // frames played in gPlaying (pull thread only)
@@ -96,6 +103,20 @@ void* interruptThreadMain(void*) {
                 std::int64_t worst = gWorstLatency.load(std::memory_order_relaxed);
                 while (lag > worst && !gWorstLatency.compare_exchange_weak(worst, lag, std::memory_order_relaxed)) {
                 }
+            }
+            if (Timing::enabled.load(std::memory_order_relaxed)) {
+                // Record this DMA interrupt (its block's start) under the
+                // next generation; AIInitDMA measures against the records.
+                const std::uint32_t n = gDelivered.load(std::memory_order_relaxed);
+                const std::int64_t raised = gRaisedAt[n % kRaiseStamps].load(std::memory_order_relaxed);
+                const std::int64_t delivered = Timing::now();
+                Timing::raiseMax(Timing::worstDmaDeliver, delivered - raised);
+                const std::uint64_t generation = Timing::dmaGeneration.load(std::memory_order_relaxed) + 1;
+                Timing::DmaRecord& record = Timing::dmaRecords[generation % Timing::kDmaRecords];
+                record.raisedAt.store(raised, std::memory_order_relaxed);
+                record.deliveredAt.store(delivered, std::memory_order_relaxed);
+                record.dspAtDelivery.store(Timing::dspDelivered.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                Timing::dmaGeneration.store(generation, std::memory_order_release);
             }
             AIDCallback callback = gCallback.load(std::memory_order_acquire);
             if (callback) {
@@ -172,6 +193,27 @@ std::size_t pull(std::int16_t* out, std::size_t frames) {
 void setSink(const Sink& sink) {
     OS::InterruptGuard guard;
     gSink = sink;
+}
+
+void setTimingDiagnostics(bool enabled) {
+    Timing::enabled.store(enabled, std::memory_order_relaxed);
+}
+
+TimingStats takeTimingStats() {
+    const auto us = [](std::atomic<std::int64_t>& worst) { return Timing::toMicroseconds(worst.exchange(0, std::memory_order_relaxed)); };
+    TimingStats st;
+    st.dmaDeliverUs = us(Timing::worstDmaDeliver);
+    st.latestRaiseToRegisterUs = us(Timing::worstLatestRaiseToRegister);
+    st.latestDeliverToRegisterUs = us(Timing::worstLatestDeliverToRegister);
+    st.oldestRaiseToRegisterUs = us(Timing::worstOldestRaiseToRegister);
+    st.generationsPerRegistration = Timing::worstGenerationsPerRegistration.exchange(0, std::memory_order_relaxed);
+    st.dspInterruptsBeforeRegister = Timing::worstDspBetween.exchange(0, std::memory_order_relaxed);
+    st.dspDeliverUs = us(Timing::worstDspDeliver);
+    st.subframeRenderUs = us(Timing::worstSubframeRender);
+    st.frameUs = us(Timing::worstFrame);
+    st.registrationsMissingBlocks = Timing::registrationsMissingBlocks.exchange(0, std::memory_order_relaxed);
+    st.registrationsTruncated = Timing::registrationsTruncated.exchange(0, std::memory_order_relaxed);
+    return st;
 }
 
 bool setRealtimeAudioThread() {
@@ -285,6 +327,29 @@ void AIInitDMA(uintptr_t start, u32 length) {
     gRegistered.frames = length / 4;
     gRegistered.generation = ++gGeneration;
     gRegisterLock.unlock();
+    if (Timing::enabled.load(std::memory_order_relaxed)) {
+        // See audio_timing.hpp for how a registration maps to interrupts.
+        const std::uint64_t latest = Timing::dmaGeneration.load(std::memory_order_acquire);
+        const std::uint64_t previous = Timing::generationAtRegistration.exchange(latest, std::memory_order_relaxed);
+        if (latest > previous) {  // at least one DMA interrupt since the previous registration
+            const std::uint64_t oldest = std::max(previous + 1, latest > Timing::kDmaRecords - 1 ? latest - (Timing::kDmaRecords - 1) : 1);
+            const Timing::DmaRecord& newest = Timing::dmaRecords[latest % Timing::kDmaRecords];
+            const Timing::DmaRecord& first = Timing::dmaRecords[oldest % Timing::kDmaRecords];
+            const std::int64_t t = Timing::now();
+            Timing::raiseMax(Timing::worstLatestRaiseToRegister, t - newest.raisedAt.load(std::memory_order_relaxed));
+            Timing::raiseMax(Timing::worstLatestDeliverToRegister, t - newest.deliveredAt.load(std::memory_order_relaxed));
+            Timing::raiseMax(Timing::worstOldestRaiseToRegister, t - first.raisedAt.load(std::memory_order_relaxed));
+            Timing::raiseMax(Timing::worstGenerationsPerRegistration, static_cast<std::int64_t>(latest - previous));
+            Timing::raiseMax(Timing::worstDspBetween, static_cast<std::int64_t>(Timing::dspDelivered.load(std::memory_order_relaxed) -
+                                                                                first.dspAtDelivery.load(std::memory_order_relaxed)));
+            if (latest - previous >= 2) {
+                Timing::registrationsMissingBlocks.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (latest - previous > Timing::kDmaRecords - 1) {
+                Timing::registrationsTruncated.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
 }
 
 uintptr_t AIGetDMAStartAddr(void) {
