@@ -30,6 +30,18 @@ struct PetariPipelineSample {
 static absl::flat_hash_map<PipelineRef, PetariPipelineSample> petariPipelineSamples;
 static std::atomic<unsigned> petariPipelineWaiters{0};
 static std::atomic<uint64_t> petariSkippedDraws{0};
+static uint32_t petariFailedPipelines = 0; // guarded by g_pipelineMutex
+
+extern "C" void petari_gx_pipeline_preparation_status(uint32_t* total, uint32_t* pending, uint32_t* failed) {
+  std::lock_guard lock{g_pipelineMutex};
+  *pending = static_cast<uint32_t>(g_pendingPipelines.size());
+  *total = static_cast<uint32_t>(g_pipelines.size()) + *pending;
+  *failed = petariFailedPipelines;
+}
+
+extern "C" bool petari_gx_pipeline_full_preparation() {
+  return PetariPipeline::globalPrecompile();
+}
 
 static void petari_note_variant(PipelineRef runtimeKey, HashType configKey, ShaderType type,
                                 PipelinePriority priority) {

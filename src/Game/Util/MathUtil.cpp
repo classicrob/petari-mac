@@ -1209,7 +1209,12 @@ namespace MR {
             psq_st f0, 0(pA1), 0, 0
             psq_st f2, 8(pA1), 1, 0
         }
-
+#else
+        // pA1 += pA2 * a3 (the declaration is const, but the Wii version stores through pA1).
+        TVec3f* pOut = const_cast< TVec3f* >(pA1);
+        pOut->x += pA2->x * a3;
+        pOut->y += pA2->y * a3;
+        pOut->z += pA2->z * a3;
 #endif
     }
 
@@ -1227,7 +1232,14 @@ namespace MR {
             psq_st    f4, 0(pA3), 0, 0
             psq_st    f3, 8(pA3), 1, 0
         }
-
+#else
+        // pA3 = pA1 * a4 + pA2 * a5. Callers pass pA3 == pA1 (vecBlend in place), so read both inputs first.
+        const f32 x = pA1->x * a4 + pA2->x * a5;
+        const f32 y = pA1->y * a4 + pA2->y * a5;
+        const f32 z = pA1->z * a4 + pA2->z * a5;
+        pA3->x = x;
+        pA3->y = y;
+        pA3->z = z;
 #endif
     }
 

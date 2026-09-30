@@ -259,22 +259,32 @@ and must hold app, sweep-lane and build locks in that order. All heavy CPU work,
 including standalone compilations and sanitizer/stress runs, holds the build lock.
 
 
-## Opt-in global preparation and retained observations
+## Default startup preparation and retained observations
 
-`PETARI_PIPELINE_GLOBAL_PRECOMPILE=1` imports bundled `__global__.db` before the
-normal startup preparation loop. It is **off by default**: the full union can
-require minutes on first use. The union includes all replayed archives, including
+An unset `PETARI_PIPELINE_GLOBAL_PRECOMPILE` (or `1`) imports bundled `__global__.db`
+before startup. The full union can require minutes on first use. The union
+includes all replayed archives, including
 ones absent from static stage maps, plus the observed baseline and explicitly
 attributed additions. Global jobs use the background queue and utility QoS;
-requested draws retain priority. This implementation uses the existing blocking
-startup preparation screen/log; it does not quietly compile all shaders during
-normal gameplay. Never-drawn speculative rows are omitted from normal startup
-when the opt-in flag is absent, even if an earlier opt-in run imported them.
+requested draws retain priority. The native startup loop pumps window events
+and presents an ImGui progress/ETA screen at a target of 60 Hz after two seconds.
+Preparations completing sooner do not flash the screen. Return, keypad Enter,
+or controller A/Start leaves unfinished work in the utility-QoS background queue;
+stage and draw requests still promote their jobs. Startup button presses are
+not forwarded into the game, and the final focus state is handed to native input.
+Resizes use the current window dimensions. The window title provides progress
+when the overlay cannot draw. `[gx startup prep]` records screen visibility,
+completion/skip, pending/failure counts, elapsed time and presentation-loop timing.
+
+`0` disables global preparation and keeps observed startup plus stage lookahead.
+`background` keeps observed startup, then queues the global manifest without
+waiting for it. Never-drawn speculative rows are omitted from observed startup
+in those two modes, even if a previous full-preparation run imported them.
 
 Configs persist in the user's Aurora SQLite DB; Dawn translation blobs persist
 separately. Neither stores ready Metal pipeline objects. A warm launch still
-creates Metal libraries/pipelines, so near-instant global preparation is not
-established. `[gx global prep]` reports progress every five seconds. Shader API
+creates Metal libraries/pipelines; the measured warm comparison below took
+1.56 s. `[gx global prep]` reports progress every five seconds. Shader API
 timing includes Tint-to-MSL and Metal work; tiny `module_ms` does not mean Tint is
 cheap, because the backend can defer translation until pipeline creation.
 
@@ -385,14 +395,13 @@ and 12 >33.3 ms. The worst frame recorded no pipeline wait. Global preparation
 eliminated the measured stage gates but did not establish locked 60 fps.
 The isolated process's reported maximum RSS was approximately 10.0 GB;
 this is whole-process high-water usage, not attributed pipeline-cache storage.
-A warm run is pending; do not infer near-instant relaunch from this result.
+The completed warm comparison is recorded below; this cold result alone did not establish relaunch cost.
 
 ### Experimental background preparation
 
 `PETARI_PIPELINE_GLOBAL_PRECOMPILE=background` submits the global manifest
-before the game thread starts without waiting for completion. No value is
-required for normal launches: global preparation remains **off by default**;
-`1` retains the explicit blocking experiment. The existing pool is sized from
+before the game thread starts without waiting for completion. Unset or `1` now
+selects the skippable full-preparation screen; `0` disables global work. The pool is sized from
 performance cores with four reserved and a cap of four workers. Background
 jobs run at utility QoS; stage requests move ahead of them, and actual draw
 requests move ahead of speculative stage work. Already compiling work cannot
@@ -401,11 +410,11 @@ frame times or audio; a live comparison is still required.
 
 The background manifest is excluded from stage attribution and stage gates.
 Repeated submission is idempotent, and speculative configs persist as never
-drawn so a subsequent normal startup does not synchronously rebuild every
-unused global config. Shutdown reports pending and terminal compile counts.
+drawn so a subsequent explicit `0` or `background` launch does not wait for every
+unused global config at startup. Shutdown reports pending and terminal compile counts.
 The scheduling harness covers these properties, including the missing-manifest
-fallback fix. The harness and full app build passed. Live background testing
-is pending. Shared-observed fallback must exclude never-drawn global
+fallback fix. The harness and full app build passed. Completed background measurements are
+reported below. Shared-observed fallback must exclude never-drawn global
 configs, otherwise an Unknown stage would promote and gate the global queue. The pre-game manifest read/enqueue is synchronous and is timed in
 its stage-prep log; shader compilation itself runs on the pool.
 
@@ -487,8 +496,10 @@ The full app build passed with the generated source. The CPU regression
 first-frame functions against stubs, verifies no creation while holding a
 simulated baton, and rejects the original first-frame path by exit status.
 The test passed (`resume-8c4/imgui-test-2.log`). This validates call ordering,
-not live Metal timing; a running-app check remains pending. The generated
-source and app are frozen in `resume-background/Petari.app` for that check.
+not live Metal timing. The subsequent frozen background control/trial both
+recorded successful eager ImGui preparation and no detected CPU-held waits
+of at least 20 ms before the first Aurora frame. These checks establish the
+monitor's observed threshold, not the absence of every shorter host wait.
 
 
 The next observed extension published 462 additional per-stage configs from
@@ -528,3 +539,63 @@ hashes match the bundle (`build/pipeline-prep-measure/overnight-1/extend-seeds.l
 This closes historical observed gaps, not unseen draw states; draw-owner
 probe results and fresh coverage runs remain separate evidence. Frozen timing
 apps retain their original 8,355-config manifests.
+
+## Completed frozen preparation comparisons
+
+The triple-lock runs below passed their synthetic observatory-to-Good-Egg smoke.
+Application-cold means an empty isolated application cache; the system Metal
+cache was not cleared. Sources and exact binary hashes are in each `run.json`
+under `build/pipeline-prep-measure/`.
+
+| Mode / artifact directory | Full global preparation | Gameplay p99 | Audio underrun frames | Stage-gate expiries |
+| --- | --- | --- | --- | --- |
+| Global app-cold, `resume-8c4/global-cold` | 221.016 s | 21.368 ms | 0 | 0 |
+| Global warm, `resume-8c4/global-warm` | 1.559 s | 18.380 ms | 0 | 0 |
+| Stage-only control, `resume-background/control` | Not requested | 18.509 ms | 0 | 2 |
+| Background trial, `resume-background/background` | Incomplete at exit | 17.863 ms | 0 | 0 |
+
+All four runs had one expected startup audio replay and no unfocused frames.
+The global pair used the same binary and exactly 8,363 runtime pipeline keys,
+including eight clear masks. All completed successfully. Warm per-pipeline
+build p50/p95/p99/max was 0.505/1.566/2.515/7.105 ms; API total was 4.291 s
+across workers. Every warm stage gate was below 0.24 ms. Host load differed:
+global-cold p50/p95 was 22.23/27.71 versus warm 7.60/8.23. The persisted Dawn
+and Metal caches together are effective; this does not isolate Metal's cache
+or guarantee cache survival across OS, driver, device or renderer changes.
+
+The matched background pair showed no gameplay p99 or audio regression while
+the trial compiled through exit. It completed 4,554 pipelines, including 2,412
+keys beyond the control, but had 3,809 pending: only 54.45% of global targets
+were ready. Full background preparation time is unobserved and exceeds about
+110.5 s. Do not extrapolate that into a measured completion time.
+
+Loading improvements in that pair are cache-confounded. For the exact same
+2,142 keys, summed API time fell from 250.619 s in the control to 28.355 s in
+the trial; initial preparation fell from 18.14 s to 2.35 s. The control primed
+the system cache. Its gate waits totalled about 28.8 s, versus about 108 ms in
+the trial, but that difference cannot be attributed solely to scheduling.
+Host load p50/p95 was 8.41/9.95 and 9.18/10.67 respectively.
+
+These frozen binaries predate the triangle fan/strip index-reservation fix in
+7af9123ca. Their approximately 9.5–10 GB whole-process RSS includes the old
+8 GiB allocation, and their roughly 600 ms mission-entry draw-done stalls
+are not pipeline waits. They do not validate the corrected port's memory or
+worst-frame behavior. A cold/warm confirmation on the current corrected build
+is required before adopting a first-launch policy.
+
+For a user accepting a few minutes once, full preparation with progress is
+the best-supported option for avoiding first-visit shader gates: the measured
+warm repeat took 1.56 s. Background preparation is a promising immediate-play
+alternative, but its uncached loading benefit and total completion time still
+need measurement. Based on this evidence, the lead approved default full
+preparation with a skippable native progress screen. Corrected-build live
+validation of that new screen is pending; no completion-marker shortcut is used.
+
+The four draw-owner probes (Good Egg and BattleShip scenarios 1–2) independently
+passed their functional checks: 800 post-preparation first-use records had zero
+coverage gaps. Across both stages, all 367 unique observed configs were seeded
+and captured, with owner stacks covering J3D, JPA, fonts, layouts and procedural
+draws. The two loading-time clear/intermission entries marked uncovered precede
+manifest membership publication and are already seeded. This is sampled entry
+coverage, not complete-mission or whole-game coverage. Consolidated evidence:
+`build/pipeline-prep-measure/overnight-1/owners-all-summary.json`.

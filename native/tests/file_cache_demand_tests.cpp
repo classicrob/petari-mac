@@ -18,6 +18,7 @@
 //
 // Usage: petari_file_cache_demand_tests --assets GAME_FILES_DIR [--csv OUT] [--stages LIST]
 #include "archive.hpp"
+#include "Game/System/GameSystemStationedArchiveLoader.hpp"
 #include "Game/System/HeapMemoryWatcher.hpp"
 #include "Game/Util/SingletonHolder.hpp"
 #include <JSystem/J3DGraphAnimator/J3DModelData.hpp>
@@ -80,6 +81,7 @@ struct ArchiveCost {
     u32 archiveBytes = 0;
     u32 j3dFiles = 0;
     u32 objectBytes = 0;  // native resource objects on the file cache
+    u32 j3dBytes = 0;     // J3D files created: each also gets a same-size host image (the companion, for the file cache)
     bool loaded = true;
 };
 
@@ -165,6 +167,7 @@ ArchiveCost measure(HeapMemoryWatcher* pWatcher, const fs::path& path, const std
             continue;
         }
         cost.j3dFiles++;
+        cost.j3dBytes += rEntry.size;
         if (!sawModel && (hasExtension(rEntry.name, ".bdl") || hasExtension(rEntry.name, ".bmd"))) {
             sawModel = true;
             firstModelMaterials = materials;
@@ -329,6 +332,40 @@ int main(int argc, char** argv) {
             }
         }
         check(projections.size() >= 49, "all stage lists projected", "");
+    }
+
+    // Player heaps (PlayerHeapHolder): trimmed to the loaded player's set plus cAdjustSpare, then
+    // a change of player frees them and loads the other set into the same room. Natively a
+    // stationed J3D file's host image is on the same heap (no companion). The other set must
+    // need at most half the spare more than the loaded one, in both directions.
+    {
+        PetariNative::HostAllocationScope hostAllocations;
+        const char* cSets[2][2][5] = {
+            {{"MarioAnime", "BoneMario", "Mario", "MarioFace", "MarioShadow"}, {"MarioTornado"}},
+            {{"MarioAnime", "BoneLuigi", "Luigi", "LuigiFace", "LuigiShadow"}, {"LuigiTornado"}},
+        };
+        const char* cHeaps[2] = {"NAPA", "GDDR"};
+        for (int heap = 0; heap < 2; heap++) {
+            s64 total[2] = {0, 0};
+            for (int player = 0; player < 2; player++) {
+                for (const char* pName : cSets[player][heap]) {
+                    if (pName == nullptr) {
+                        continue;
+                    }
+                    const auto found = costs.find(std::string("ObjectData/") + pName);
+                    check(found != costs.end(), "player archive measured: ", pName);
+                    if (found != costs.end()) {
+                        total[player] += found->second.archiveBytes + found->second.j3dBytes + found->second.objectBytes;
+                    }
+                }
+            }
+            const s64 difference = total[1] > total[0] ? total[1] - total[0] : total[0] - total[1];
+            std::printf("player heap %s: Mario %lld, Luigi %lld native bytes; difference %lld, spare %u\n", cHeaps[heap],
+                        static_cast< long long >(total[0]), static_cast< long long >(total[1]), static_cast< long long >(difference),
+                        PlayerHeapHolder::cAdjustSpare);
+            check(difference * 2 <= static_cast< s64 >(PlayerHeapHolder::cAdjustSpare), "the other player's set fits the trimmed player heap's spare: ",
+                  cHeaps[heap]);
+        }
     }
 
     if (sFailures != 0) {

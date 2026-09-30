@@ -32,7 +32,7 @@ def distribution(values):
 
 
 def summarize(events, loads):
-    compiles, blocking, stages, essentials = [], [], [], []
+    compiles, blocking, stages, essentials, startup_preparation = [], [], [], [], []
     audio_reports, underrun_frames, replayed_blocks = 0, 0, 0
     pipeline_summary = None
     first_frame = next((index for index, event in enumerate(events)
@@ -54,6 +54,8 @@ def summarize(events, loads):
             stage = fields.get('stage', stage)
         if '[gx pipeline prewarm]' in line:
             essentials.append(dict(fields, elapsed_s=event['elapsed_s']))
+        if '[gx startup prep]' in line:
+            startup_preparation.append(dict(fields, elapsed_s=event['elapsed_s']))
         if '[gx pipeline compile]' in line:
             compiles.append(dict(fields, elapsed_s=event['elapsed_s'], stage=stage))
         if '[gx stage prep]' in line or '[gx stage ready]' in line or '[gx warmup]' in line or '[gx global prep]' in line:
@@ -61,7 +63,8 @@ def summarize(events, loads):
         if '[gx pipeline] blocking resolve' in line:
             match = re.search(r'blocking resolve ([\d.]+) ms', line)
             if match: blocking.append({'stage': stage, 'elapsed_s': event['elapsed_s'], 'ms': float(match[1]), 'line': line})
-    return {'stage_events': stages, 'essential_prewarm': essentials, 'blocking_resolves': blocking,
+    return {'stage_events': stages, 'essential_prewarm': essentials, 'startup_preparation': startup_preparation,
+            'blocking_resolves': blocking,
             'audio': {'reports': audio_reports, 'underrun_frames': underrun_frames,
                       'replayed_blocks': replayed_blocks,
                       'note': 'Sums per-report deltas; missing reports do not establish clean audio.'},
@@ -143,6 +146,8 @@ def run(args):
         'note': 'OS Metal cache is not cleared; app caches are isolated. Compile stage is temporal context, not draw ownership.'}, indent=2))
     started = time.monotonic(); events, loads = [], []; done = threading.Event(); expired = []
     process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace', bufsize=1)
+    (args.output / 'process.json').write_text(json.dumps({'pid': process.pid, 'executable': str(exe.resolve()),
+        'helper_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}, indent=2) + '\n')
     def sample():
         with (args.output / 'host-load.jsonl').open('w') as output:
             while not done.is_set():

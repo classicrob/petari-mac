@@ -205,6 +205,10 @@ struct Observation {
     int playerLife = -1;         // MarioActor health
     bool playerInBind = false;   // MR::isPlayerInBind: held by a launch star, vine, pipe, ...
     bool playerSwinging = false; // MR::isPlayerSwingAction: spinning
+    // Mario::mShadowPos (the ground point his shadow ray found) and the gravity
+    // Mario itself uses this frame (Mario::getGravityVec), for landing traces.
+    float shadowX = 0.0f, shadowY = 0.0f, shadowZ = 0.0f;
+    float marioGravityX = 0.0f, marioGravityY = 0.0f, marioGravityZ = 0.0f;
 };
 
 // Actor flags (petari/actor_observe.hpp).
@@ -261,6 +265,10 @@ const char* resultName(Result result);
 
 class Driver {
 public:
+    // PETARI_SMOKE_PLAYER=luigi (read here): on a file with Luigi unlocked, switch to
+    // Luigi with FileSelect.Bros after the file is chosen, before Start. Unset or
+    // anything else: the file's default player, as before. A missing switch (Luigi
+    // not unlocked) is a FAIL, not a silent Mario run.
     explicit Driver(unsigned long frameLimit, Script script = Script::Title);
 
     // Once per frame, at the seam.
@@ -288,7 +296,7 @@ private:
     enum class Phase {
         Boot, Logo, WaitTitle, TitleReady, Holding, WaitTitleEnd, WaitFileSelect,
         // playable
-        ChooseSlot, WaitMiiSelect, ChooseMario, WaitFileConfirm, ChooseStart, WaitDemo, Prologue, Move,
+        ChooseSlot, WaitMiiSelect, ChooseMario, WaitFileConfirm, ChooseLuigi, ChooseStart, WaitDemo, Prologue, Move,
         // gameplay and reload (after the prologue); keep these last before Done
         Ready, Idle, Jump, Forward, Backward, PauseOpen, Paused, PauseClose, Resume,
         // story route
@@ -350,6 +358,9 @@ private:
     unsigned long mAimFrames = 0;
     unsigned long mAimMissing = 0;
     unsigned long mPointingFrames = 0;
+    bool mChooseLuigi = false;         // PETARI_SMOKE_PLAYER=luigi
+    int mLuigiPresses = 0;             // FileSelect.Bros presses so far
+    unsigned long mLuigiPressFrame = 0;  // mPhaseFrames at the last press
     long mPrologueTapAt = -1;
     unsigned long mSinceProgress = 0;
     unsigned long mMoveFrame = 0;
@@ -419,4 +430,8 @@ namespace PetariNative::App::Smoke {
 // recorded since the previous call. Main thread, at the seam, while it holds
 // the CPU (before the seam releases it).
 Observation observeGame(bool wantPlayer);
+// collision_probe.cpp (SDK side): PETARI_COLLISION_PROBE, a read-only map
+// collision survey for offline route planning; stepped by observeGame.
+bool collisionProbeActive();
+void stepCollisionProbe(const std::string& stage, bool sceneReady);
 }  // namespace PetariNative::App::Smoke

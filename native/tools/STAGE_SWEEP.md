@@ -63,6 +63,7 @@ the sweep.
 | TIMEOUT | the per-run alarm fired |
 | NOT_READY, DIED, LEFT_STAGE, PAUSE_FAIL, ENTRY_FAIL, BOOT_FAIL, PLAYER_VANISHED, FRAME_LIMIT, FAIL | driver FAIL, by reason |
 | MISSING_ASSET | the seam failed a PASS because layout/sound lookups missed; the `[layout]`/`[sound] missing` pairs are listed |
+| NON_GAMEPLAY | a stage with no gameplay by design (EpilogueDemoStage, the ending movie) loaded and ran to the ready limit without a crash; not a pass |
 | BLOCKED | a system prompt appeared |
 | ASSISTED | physical gameplay input during the run |
 

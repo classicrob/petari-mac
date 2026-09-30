@@ -1054,7 +1054,11 @@ void StorySequenceExecutor::overwriteGalaxyNameAfterLoading(GalaxyMoveArgument* 
         const char* pStage = PetariNative::TestFixture::stage.c_str();
         const s32 selected = PetariNative::TestFixture::stageScenario;
         GalaxyStatusAccessor accessor = MR::makeGalaxyStatusAccessor(pStage);
-        const s32 scenarioNum = accessor.getScenarioNum();
+        // getScenarioNum() counts only non-hidden scenarios (hidden stars are
+        // numbered after them); getPowerStarNum() counts scenarios with a star
+        // (hubs such as AstroDome have none). Every scenario row is one or both.
+        const s32 scenarioNum = accessor.getScenarioNum() > accessor.getPowerStarNum() ? accessor.getScenarioNum()
+                                                                                        : accessor.getPowerStarNum();
         if (selected < 1 || selected > scenarioNum) {
             std::fprintf(stderr, "PETARI FIXTURE: %s has %d scenarios; scenario %d does not exist, entry not applied\n",
                          pStage, static_cast< int >(scenarioNum), static_cast< int >(selected));

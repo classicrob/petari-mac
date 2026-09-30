@@ -44,6 +44,21 @@
 #include "Game/Util/StarPointerUtil.hpp"
 #include <JSystem/JKernel/JKRHeap.hpp>
 #include <JSystem/JUtility/JUTVideo.hpp>
+#ifdef PETARI_NATIVE
+#include <cstdio>
+#include <petari/ui_observe.hpp>
+namespace {
+    // Smoke-run diagnostic: a single position change this large is a teleport
+    // (Good Egg Bean B investigation). Observation only.
+    void nativeNoteBigMove(const char* pWhere, const char* pName, const TVec3f& rFrom, const TVec3f& rTo) {
+        const TVec3f delta = rTo - rFrom;
+        if (petari_ui_observing() && delta.squared() > 500.0f * 500.0f) {
+            std::fprintf(stderr, "[mario] %s %s moved %.0f: (%.0f, %.0f, %.0f) -> (%.0f, %.0f, %.0f)\n", pWhere,
+                         pName != nullptr ? pName : "(unnamed)", delta.length(), rFrom.x, rFrom.y, rFrom.z, rTo.x, rTo.y, rTo.z);
+        }
+    }
+}  // namespace
+#endif
 
 void MarioActor_FORCE_MATCH_SDATA2() {
     (void)1.0f;
@@ -832,6 +847,9 @@ void MarioActor::movement() {
                     TVec3f stack_D4;
                     if (MR::vecKillElement(stack_E0 - (mPosition), getGravityVec(), &stack_D4) < -5.0f && pTmp->mParts && !pTmp->mParts->_D4 &&
                         getMovementStates()._3E != 1) {
+#ifdef PETARI_NATIVE
+                        nativeNoteBigMove("MarioActor", "landing ray", mPosition, stack_E0);
+#endif
                         mPosition = stack_E0;
                         mMario->mPosition = mPosition;
                         mMario->stopJump();
@@ -867,6 +885,9 @@ void MarioActor::movement() {
                     }
 
                     if (eject) {
+#ifdef PETARI_NATIVE
+                        nativeNoteBigMove("MarioActor", "eject to shadow", mPosition, mMario->mShadowPos);
+#endif
                         mPosition = mMario->mShadowPos;
                         mMario->mJumpVec.zero();
                         mMario->_148.zero();

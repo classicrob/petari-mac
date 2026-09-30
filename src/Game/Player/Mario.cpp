@@ -45,6 +45,21 @@
 #include "Game/Player/MarioWall.hpp"
 #include "Game/Player/MarioWarp.hpp"
 #include "Game/Util.hpp"
+#ifdef PETARI_NATIVE
+#include <cstdio>
+#include <petari/ui_observe.hpp>
+namespace {
+    // Smoke-run diagnostic: a single position change this large is a teleport
+    // (Good Egg Bean B investigation). Observation only.
+    void nativeNoteBigMove(const char* pWhere, const char* pName, const TVec3f& rFrom, const TVec3f& rTo) {
+        const TVec3f delta = rTo - rFrom;
+        if (petari_ui_observing() && delta.squared() > 500.0f * 500.0f) {
+            std::fprintf(stderr, "[mario] %s %s moved %.0f: (%.0f, %.0f, %.0f) -> (%.0f, %.0f, %.0f)\n", pWhere,
+                         pName != nullptr ? pName : "(unnamed)", delta.length(), rFrom.x, rFrom.y, rFrom.z, rTo.x, rTo.y, rTo.z);
+        }
+    }
+}  // namespace
+#endif
 
 void Mario_FORCE_MATCH_SDATA2() {
     (void)1.0f;
@@ -1293,6 +1308,9 @@ void Mario::draw() const {
 }
 
 void Mario::addTrans(const TVec3f& rShift, const char* pA2) {
+#ifdef PETARI_NATIVE
+    nativeNoteBigMove("Mario::addTrans", pA2, mPosition, mPosition + rShift);
+#endif
     mPosition += rShift;
     TVec3f _148shift(_148);
     _148shift -= rShift;
@@ -1310,6 +1328,9 @@ void Mario::addTrans(const TVec3f& rShift, const char* pA2) {
 }
 
 void Mario::setTrans(const TVec3f& rShift, const char* pA2) {
+#ifdef PETARI_NATIVE
+    nativeNoteBigMove("Mario::setTrans", pA2, mPosition, rShift);
+#endif
     TVec3f reqShift(rShift);
     reqShift -= mPosition;
     mPosition = rShift;
@@ -1564,12 +1585,18 @@ void Mario::writeBackPhyisicalVector() {
             stopWalk();
         }
 
+#ifdef PETARI_NATIVE
+        nativeNoteBigMove("Mario", "stack_104", mPosition, stack_104);
+#endif
         mPosition = stack_104;
     }
 
     if (mMovementStates._37 || _10._15) {
         TVec3f stack_f8(mPosition - _688);
         MR::vecKillElement(stack_f8, _6A0, &stack_f8);
+#ifdef PETARI_NATIVE
+        nativeNoteBigMove("Mario", "_688 + stack_f8", mPosition, _688 + stack_f8);
+#endif
         mPosition = _688 + stack_f8;
         MR::vecKillElement(mVelocity, _6A0, &mVelocity);
         TVec3f stack_ec;

@@ -45,6 +45,7 @@ sys.path.insert(0, str(TOOLS))
 from collect_pipeline_seed_inputs import archive_files, decompress, field_hash, string, u16, u32  # noqa: E402
 
 DOME_NAMES = {1: "Terrace", 2: "Fountain", 3: "Kitchen", 4: "Bedroom", 5: "Engine Room", 6: "Garage"}
+NON_GAMEPLAY_STAGES = {"EpilogueDemoStage"}  # the ending movie stage: no controllable gameplay
 HEAP_WARN_PCT = 10.0  # a heap with less free at any report after the stage entry is a WARN
 LATE_MS = 1000.0 / 60.0 * 1.25  # the frame-stats "late" threshold (1.25 VI fields)
 FIELDS = ["ScenarioNo", "ScenarioName", "PowerStarId", "AppearPowerStarObj", "Comet", "IsHidden", "ZoneName"]
@@ -131,6 +132,8 @@ def enumerate_stages(files):
         scenario_arc = directory / f"{directory.name}Scenario.arc"
         if not directory.is_dir() or not scenario_arc.is_file():
             continue
+        if directory.name == "FileSelect":
+            continue  # the title/file-select stage, not a place the fixture can enter
         scenarios = []
         for name, data in ((n, d) for _, n, d in archive_files(scenario_arc.read_bytes())):
             if name.lower() != "scenariodata.bcsv":
@@ -386,6 +389,7 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
     traced = re.findall(r"^Petari trace: frame \d+.*? at ([\d.]+) s", text, re.M)
     result["app_seconds"] = float(traced[-1]) if traced else None  # game time, excluding app-lock waits
 
+    result["stage"] = stage
     result["outcome"], result["signature"] = classify(result)
     return result
 
@@ -427,6 +431,12 @@ def classify(r):
     body = reason.split(": ", 1)[-1]
     if "FAIL: missing asset references" in reason or (r.get("missing_assets") and result == "FAIL"):
         return "MISSING_ASSET", "; ".join(r.get("missing_assets") or []) or normalize(reason)
+    # Stages with no gameplay (the ending movie stage): gameplay never becomes
+    # ready by design. Loading and running to the ready limit without a crash is
+    # all such a run can show; it is reported separately, never as PASS.
+    if r.get("stage") in NON_GAMEPLAY_STAGES and body.startswith("not ready: gameplay never became ready") \
+            and r.get("load_frames") is not None:
+        return "NON_GAMEPLAY", "loaded and ran without gameplay (expected for this stage)"
     for prefix, outcome in (("died:", "DIED"), ("not ready:", "NOT_READY"), ("left the stage", "LEFT_STAGE"),
                             ("the stage fixture entry", "ENTRY_FAIL"), ("scenario mismatch", "ENTRY_FAIL"),
                             ("pausing", "PAUSE_FAIL"), ("no PauseMenu", "PAUSE_FAIL"), ("Mario moved", "PAUSE_FAIL"),
@@ -448,6 +458,51 @@ def app_command(args, user, stage, scenario):
         # measured gameplay; off until the pipeline worker has evaluated it.
         "PETARI_PIPELINE_GLOBAL_PRECOMPILE": os.environ.get("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "0"),
     }
+
+
+class ConcurrencyWatcher:
+    """While this run's app is alive, samples every 5 s for OTHER Petari apps
+    (any process running a Petari.app executable whose command line does not
+    name this run's --user directory). Frame times from a run that overlapped
+    another app are not performance evidence."""
+
+    def __init__(self, user):
+        import threading
+        self.user = str(user)
+        self.samples = self.own_samples = 0
+        self.max_others = 0
+        self.others = set()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        while not self._stop.wait(5.0):
+            try:
+                listing = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10).stdout
+            except (OSError, subprocess.SubprocessError):
+                continue
+            apps = [line.strip() for line in listing.splitlines() if "Petari.app/Contents/MacOS/Petari" in line
+                    and "locked-" not in line and "perl" not in line.split(None, 2)[1]]
+            own = [a for a in apps if self.user in a]
+            if not own:
+                continue  # waiting for the lock, or already exited: not the measured window
+            self.samples += 1
+            others = [a for a in apps if self.user not in a]
+            self.max_others = max(self.max_others, len(others))
+            for other in others:
+                match = re.search(r"--user (\S+)", other)
+                self.others.add(match.group(1) if match else other.split(None, 1)[0])
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=15)
+
+    def summary(self):
+        return {"seen": self.max_others > 0, "samples_while_running": self.samples,
+                "max_other_apps": self.max_others, "other_user_dirs": sorted(self.others)[:10]}
 
 
 def run_one(args, out, baseline, fixture, stage, scenario):
@@ -500,6 +555,8 @@ def run_one(args, out, baseline, fixture, stage, scenario):
     log_path = run_dir / "app.log"
     with log_path.open("wb") as log:
         process = subprocess.Popen(full, cwd=REPO, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        watcher = ConcurrencyWatcher(user)
+        watcher.start()
         timed_out = False
         try:
             # Generous outer bound: lock waits plus the in-lock alarm.
@@ -512,10 +569,14 @@ def run_one(args, out, baseline, fixture, stage, scenario):
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 status = process.wait()
+    watcher.stop()
     # locked-app.sh exits with the app's status; 128+14 is the in-lock alarm.
     if status == 128 + signal.SIGALRM:
         timed_out = True
     result = analyze(log_path, run_dir / "frames.csv", stage["stage"], status, timed_out, user)
+    result["concurrent_apps"] = watcher.summary()
+    if result["concurrent_apps"]["seen"] and result.get("frame_times"):
+        result["frame_times"]["concurrent"] = True
     if "Died at -e line" in log_path.read_text(errors="replace")[:4096]:
         # The app could not be executed at all: not a result for this stage.
         result["infra"] = "the app could not be executed"
@@ -644,6 +705,9 @@ def summarize(out):
         "claim about progression, unlock conditions or completing the mission. Movement/camera checks are",
         "reported as warnings (stage starts differ), not failures.",
         "",
+        "Frame times are only performance evidence when no other Petari app ran at the same time: runs that",
+        "overlapped another app are marked \"concurrent run\", runs from before that was recorded \"concurrency not recorded\".",
+        "",
         "Outcomes: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())),
         "",
         "| Dome | Stage | Sc | Outcome | Load→ready s | p50/p95/p99/max ms | late | unfocused | first-use (uncovered) | blocking resolves (max ms) | min heap free (per heap) | warnings |",
@@ -659,6 +723,10 @@ def summarize(out):
         warns = ", ".join([c["name"] for c in r.get("checks", []) if c["status"] == "warn"] +
                           ["heap " + w for w in r.get("heap_warnings", [])])
         perf = f"{ft.get('p50_ms')}/{ft.get('p95_ms')}/{ft.get('p99_ms')}/{ft.get('max_ms')}" if ft else ""
+        if ft and (r.get("concurrent_apps") or {}).get("seen"):
+            perf += " (concurrent run — not performance evidence)"
+        elif ft and "concurrent_apps" not in r:
+            perf += " (concurrency not recorded)"
         lines.append(
             f"| {r['dome_name']} | {r['stage']} | {r['scenario']} | {r['outcome']} | {fmt(r.get('load_to_ready_seconds'))} | "
             f"{perf} | {fmt(ft.get('late'))} | {fmt(ft.get('unfocused'))} | {fmt(sh.get('stage_first_use_configs'))} ({fmt(sh.get('stage_first_use_uncovered'))}) | "
@@ -744,8 +812,11 @@ def main():
             new = analyze(path.parent / "app.log", path.parent / "frames.csv", old["stage"], old["exit_status"],
                           old["timed_out"], path.parent / "user")
             keep = {k: old[k] for k in ("run", "stage", "dome", "dome_name", "scenario", "scenario_name", "comet",
-                                        "hidden", "wall_seconds", "log", "repro", "synthetic_entry", "app_sha256")
+                                        "hidden", "wall_seconds", "log", "repro", "synthetic_entry", "app_sha256",
+                                        "extra_env", "reused_from", "concurrent_apps")
                     if k in old}
+            if (keep.get("concurrent_apps") or {}).get("seen") and new.get("frame_times"):
+                new["frame_times"]["concurrent"] = True
             path.write_text(json.dumps({**new, **keep}, indent=2, ensure_ascii=False) + "\n")
         summarize(out)
         return

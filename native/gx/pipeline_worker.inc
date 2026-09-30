@@ -33,6 +33,7 @@ static void pipeline_worker() {
       stored.finished = finished;
       stored.stages = PetariPipeline::stages;
       stored.failed = !result.main;
+      petariFailedPipelines += stored.failed;
       sample = stored;
       g_pipelines.try_emplace(pending.hash, std::move(result));
       g_pendingPipelines.erase(pending.hash);

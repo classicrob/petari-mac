@@ -1,3 +1,7 @@
+#ifdef PETARI_NATIVE
+#include <cstdio>
+#include <petari/ui_observe.hpp>
+#endif
 #include "Game/Enemy/KariKariDirector.hpp"
 #include "Game/LiveActor/HitSensor.hpp"
 #include "Game/LiveActor/LiveActor.hpp"
@@ -1512,6 +1516,13 @@ void Mario::checkWallJumpHit() {
             }
 
             mJumpVec -= getWallNorm() * wallDot;
+#ifdef PETARI_NATIVE
+            if (petari_ui_observing()) {
+                std::fprintf(stderr, "[mario] blown by wall-jump hit: wall normal (%.2f, %.2f, %.2f), jump vec (%.1f, %.1f, %.1f), gravity (%.2f, %.2f, %.2f), pos (%.0f, %.0f, %.0f)\n",
+                             getWallNorm().x, getWallNorm().y, getWallNorm().z, mJumpVec.x, mJumpVec.y, mJumpVec.z, getGravityVec()->x,
+                             getGravityVec()->y, getGravityVec()->z, mPosition.x, mPosition.y, mPosition.z);
+            }
+#endif
 
             blown(mJumpVec * 0.2f);
 

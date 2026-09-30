@@ -2,6 +2,7 @@
 // are included here, so ImGui's types never meet the SDK's GX headers.
 
 #include "petari/home_menu.hpp"
+#include "petari/pipeline_startup.hpp"
 
 #include <imgui.h>
 
@@ -14,6 +15,8 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
+#include <cstdio>
 
 namespace PetariNative::HomeMenu {
 
@@ -193,6 +196,46 @@ void drawImGuiOverlay(float imageX, float imageY, float imageWidth, float imageH
     }
 
     list->PopClipRect();
+}
+
+bool drawPipelinePreparation(const PipelinePreparationView& view, float width, float height) {
+    if (!ImGui::GetCurrentContext() || width <= 0 || height <= 0) return false;
+    ImDrawList* list = ImGui::GetForegroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    const float scale = std::min(width / 1280.0f, height / 720.0f);
+    const float center = width * 0.5f;
+    const float contentWidth = width * 0.82f;
+    const float fraction = view.total ? std::clamp(float(view.completed) / view.total, 0.0f, 1.0f) : 1.0f;
+    list->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(width, height),
+        color(0.025f, 0.045f, 0.11f, 1), color(0.025f, 0.045f, 0.11f, 1),
+        color(0.08f, 0.12f, 0.23f, 1), color(0.08f, 0.12f, 0.23f, 1));
+    centeredText(list, font, 34 * scale, contentWidth, ImVec2(center, height * 0.34f),
+                 color(0.96f, 0.98f, 1, 1), "Preparing shaders for smooth play");
+    centeredText(list, font, 21 * scale, contentWidth, ImVec2(center, height * 0.405f),
+                 color(0.65f, 0.76f, 0.91f, 1), view.global ? "First launch only" : "Preparing saved shaders");
+    char count[96];
+    std::snprintf(count, sizeof(count), "%u / %u  (%u%%)", view.completed, view.total,
+                  static_cast<unsigned>(fraction * 100));
+    centeredText(list, font, 25 * scale, contentWidth, ImVec2(center, height * 0.47f),
+                 color(0.94f, 0.97f, 1, 1), count);
+    const ImVec2 barMin(width * 0.21f, height * 0.515f), barMax(width * 0.79f, height * 0.537f);
+    list->AddRectFilled(barMin, barMax, color(0.16f, 0.22f, 0.34f, 1), 7 * scale);
+    if (fraction > 0)
+        list->AddRectFilled(barMin, ImVec2(barMin.x + (barMax.x - barMin.x) * fraction, barMax.y),
+                            color(0.45f, 0.75f, 1, 1), 7 * scale);
+    char estimate[96] = "Estimating time remaining...";
+    if (std::isfinite(view.remainingSeconds) && view.remainingSeconds >= 0) {
+        const unsigned seconds = static_cast<unsigned>(std::min(59999.0, std::ceil(view.remainingSeconds)));
+        if (seconds < 60) std::snprintf(estimate, sizeof(estimate), "About %u seconds remaining", seconds);
+        else std::snprintf(estimate, sizeof(estimate), "About %u min %02u sec remaining", seconds / 60, seconds % 60);
+    }
+    centeredText(list, font, 20 * scale, contentWidth, ImVec2(center, height * 0.585f),
+                 color(0.65f, 0.76f, 0.91f, 1), estimate);
+    centeredText(list, font, 22 * scale, contentWidth, ImVec2(center, height * 0.70f),
+                 color(0.94f, 0.89f, 0.65f, 1), "Press Return to start now (the rest keeps preparing in the background)");
+    centeredText(list, font, 18 * scale, contentWidth, ImVec2(center, height * 0.75f),
+                 color(0.65f, 0.76f, 0.91f, 1), "Controller A / Start also works");
+    return true;
 }
 
 }  // namespace PetariNative::HomeMenu

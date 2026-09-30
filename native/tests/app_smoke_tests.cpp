@@ -955,6 +955,57 @@ void testReload() {
           "reload with no used slot fails rather than creating one");
 }
 
+// PETARI_SMOKE_PLAYER=luigi: after the file is chosen, FileSelect.Bros (index 0
+// Mario, 1 Luigi) is pressed until it reports Luigi, and only then Start.
+void testReloadLuigi() {
+    auto toConfirm = [](Run& run) {
+        toFileSelect(run);
+        run.frames(target(fileSelect(true), "FileSelect.Slot", 0, 0.3f, 0.5f, kSel | kPoint), 3);
+        run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+    };
+    // The file-confirm screen: Start and the switch, with the switch at index.
+    auto confirm = [](int brosIndex, unsigned brosFlags) {
+        Observation o = target(fileSelect(true), "FileSelect.Start", 0, 0.8f, 0.9f, kSel);
+        return brosIndex < 0 ? o : target(o, "FileSelect.Bros", brosIndex, 0.2f, 0.9f, kSel | brosFlags);
+    };
+
+    setenv("PETARI_SMOKE_PLAYER", "luigi", 1);
+    Run luigi(1000000, Smoke::Script::Reload);
+    toConfirm(luigi);
+    const int before = luigi.count(Button::A, true);
+    luigi.frames(confirm(0, 0), 5);
+    luigi.frames(confirm(0, kPoint), 3);
+    check(luigi.count(Button::A, true) == before + 1 && luigi.pointerU == 0.2f, "Luigi: the switch is pressed once, not Start");
+    luigi.frames(confirm(-1, 0), 40);  // the switch hides while it animates
+    luigi.frames(confirm(1, 0), 2);
+    check(luigi.logged("Luigi selected with FileSelect.Bros after 1 press"), "Luigi: the switch reporting Luigi is logged");
+    check(pointAndPress(luigi, target(fileSelect(true), "FileSelect.Bros", 1, 0.2f, 0.9f, kSel), "FileSelect.Start", 0) == 1,
+          "Luigi: then Start");
+    luigi.frame(with(garden(), "FileSelector.DemoStartWait"));
+    check(luigi.driver.result() == Result::Running, "Luigi: the run continues into the game");
+
+    Run locked(1000000, Smoke::Script::Reload);
+    toConfirm(locked);
+    locked.frames(confirm(-1, 0), 700);
+    check(locked.driver.result() == Result::Fail && locked.driver.reason().find("FileSelect.Bros") != std::string::npos,
+          "Luigi on a file without Luigi (no switch shown) fails rather than playing Mario");
+
+    Run stuck(1000000, Smoke::Script::Reload);
+    toConfirm(stuck);
+    for (int i = 0; i < 4; i++) {
+        stuck.frames(confirm(0, kPoint), 70);  // pressed, but it keeps reporting Mario
+    }
+    check(stuck.driver.result() == Result::Fail && stuck.driver.reason().find("did not switch to Luigi after 3 presses") != std::string::npos,
+          "a switch that never reports Luigi fails after 3 presses");
+    unsetenv("PETARI_SMOKE_PLAYER");
+
+    Run mario(1000000, Smoke::Script::Reload);
+    toConfirm(mario);
+    const int marioBefore = mario.count(Button::A, true);
+    mario.frames(target(target(fileSelect(true), "FileSelect.Start", 0, 0.8f, 0.9f, kSel | kPoint), "FileSelect.Bros", 0, 0.2f, 0.9f, kSel), 3);
+    check(mario.count(Button::A, true) == marioBefore + 1 && mario.pointerU == 0.8f, "unset: Start directly, the switch untouched");
+}
+
 void testReleaseOnFailure() {
     // A result decided while the stick is held releases it in that step.
     Run run(1000000, Smoke::Script::Gameplay);
@@ -2160,6 +2211,7 @@ int main() {
     testGameplayFlow();
     testGameplayFaults();
     testReload();
+    testReloadLuigi();
     testReleaseOnFailure();
     testStickKeys();
     testStoryRoute();

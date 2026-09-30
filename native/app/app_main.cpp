@@ -18,6 +18,7 @@
 #include <fstream>
 #include <petari/test_fixture.hpp>
 #include <petari/unlocked_save.hpp>
+#include <petari/pipeline_startup.hpp>
 
 #include "host.hpp"
 
@@ -169,31 +170,7 @@ bool resolvePaths(int argc, char** argv, App::Paths* paths) {
 }
 
 bool prepareKnownPipelines(SDL_Window* window) {
-    // Aurora queues its persisted configurations during initialization. Finish
-    // those before the game starts, instead of competing with the first draw.
-    const auto pending = [] {
-        return __atomic_load_n(&aurora_get_stats()->queuedPipelines, __ATOMIC_ACQUIRE);
-    };
-    const unsigned initial = pending();
-    if (initial == 0) return true;
-    const Uint64 start = SDL_GetTicks();
-    unsigned displayed = initial + 1;
-    while (const unsigned remaining = pending()) {
-        if (remaining != displayed) {
-            char title[128];
-            std::snprintf(title, sizeof(title), "Super Mario Galaxy — Preparing shaders (%u remaining)", remaining);
-            SDL_SetWindowTitle(window, title);
-            displayed = remaining;
-        }
-        for (const AuroraEvent* event = aurora_update(); event && event->type != AURORA_NONE; ++event) {
-            if (event->type == AURORA_EXIT) return false;
-        }
-        SDL_Delay(10);
-    }
-    SDL_SetWindowTitle(window, "Super Mario Galaxy");
-    std::fprintf(stderr, "[gx warmup] prepared %u queued pipelines before gameplay in %.2f s\n",
-                 initial, (SDL_GetTicks() - start) / 1000.0);
-    return true;
+    return App::preparePipelines(window);
 }
 
 }  // namespace

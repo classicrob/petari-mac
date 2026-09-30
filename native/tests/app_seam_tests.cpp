@@ -14,11 +14,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "../app/host.hpp"
+#include "../app/spike_profiler.hpp"
 #include "../app/smoke.hpp"
 #include "petari/app.hpp"
 #include "petari/frame_telemetry.hpp"
@@ -523,6 +525,38 @@ void testSeamTiming() {
           "frames stay unfocused through the one focus returned in; later ones are not");
 }
 
+// A named busy loop for the spike profiler test.
+__attribute__((noinline)) void spikeProfilerBusyWork(std::chrono::milliseconds duration) {
+    const auto end = std::chrono::steady_clock::now() + duration;
+    volatile std::uint64_t sink = 0;
+    while (std::chrono::steady_clock::now() < end) {
+        sink = sink + 1;
+    }
+}
+
+void testSpikeProfiler() {
+    namespace Profiler = PetariNative::App::SpikeProfiler;
+    namespace Telemetry = PetariNative::FrameTelemetry;
+    const std::string path = "app_seam_spike_profile.txt";
+    setenv("PETARI_SPIKE_PROFILE", path.c_str(), 1);
+    check(Profiler::startFromEnvironment() && Profiler::enabled(), "spike profiler starts from the environment");
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    const std::uint64_t start = Telemetry::nowNs();
+    spikeProfilerBusyWork(std::chrono::milliseconds(60));
+    const std::uint64_t end = Telemetry::nowNs();
+    Profiler::keepSpike(7, 60.0, start, end);
+    Profiler::writeReport();
+    std::ifstream in(path);
+    const std::string report((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::remove(path.c_str());
+    unsetenv("PETARI_SPIKE_PROFILE");
+    check(report.find("=== frame 7: 60.00 ms ===") != std::string::npos, "the kept spike is reported");
+    const auto game = report.find("-- game (main): ");
+    check(game != std::string::npos && std::atoi(report.c_str() + game + 16) >= 20,
+          "the game thread was sampled through the spike");
+    check(report.find("spikeProfilerBusyWork") != std::string::npos, "samples are symbolized to the busy function");
+}
+
 }  // namespace
 
 int main() {
@@ -532,6 +566,7 @@ int main() {
     testSmoke();
     testFrameStats();
     testSeamTiming();
+    testSpikeProfiler();
     std::printf("native app seam tests passed (%d checks)\n", checks);
     return 0;
 }

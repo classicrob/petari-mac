@@ -33,16 +33,16 @@ get_filename_component(PETARI_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSO
 add_library(petari_milestone STATIC milestone.cpp actor_observe.cpp)
 target_include_directories(petari_milestone PUBLIC ${PETARI_REPO_ROOT}/native/include)
 target_compile_features(petari_milestone PUBLIC cxx_std_17)
-add_library(petari_app_smoke STATIC smoke.cpp smoke_stage.cpp smoke_goodegg.cpp smoke_soak.cpp)
+add_library(petari_app_smoke STATIC smoke.cpp smoke_stage.cpp smoke_goodegg.cpp smoke_soak.cpp smoke_domes.cpp smoke_domes_routes.cpp)
 target_compile_features(petari_app_smoke PUBLIC cxx_std_17)
 
 if(NOT _petari_app_standalone)
-    add_library(petari_app_platform STATIC platform_host.cpp smoke_game.cpp frame_phase.cpp soak_telemetry.cpp)
+    add_library(petari_app_platform STATIC platform_host.cpp smoke_game.cpp collision_probe.cpp frame_phase.cpp soak_telemetry.cpp)
     target_link_libraries(petari_app_platform PUBLIC petari_native_config petari_boot
         petari_platform_os petari_platform_vi petari_platform_dvd petari_platform_nand petari_platform_sc
         petari_audio_sdl petari_host_runtime petari_app_smoke petari_milestone)
 
-    add_library(petari_app_host STATIC frame_seam.cpp frame_stats.cpp input_events.cpp)
+    add_library(petari_app_host STATIC frame_seam.cpp frame_stats.cpp spike_profiler.cpp input_events.cpp pipeline_startup.cpp)
     target_include_directories(petari_app_host PUBLIC ${PETARI_REPO_ROOT}/native/include)
     # Deliberately not petari_native_config: no SDK include paths next to Aurora's.
     target_link_libraries(petari_app_host PUBLIC aurora::core petari_input_sdl3 petari_home_menu_imgui
@@ -50,7 +50,14 @@ if(NOT _petari_app_standalone)
 
     add_executable(petari MACOSX_BUNDLE app_main.cpp)
     target_link_libraries(petari PRIVATE petari_app_host petari_app_platform aurora::core aurora::main)
-    set_target_properties(petari PROPERTIES OUTPUT_NAME "Petari")
+    # A real bundle identity: macOS uses it for the Dock/menu name, window state,
+    # permissions and app identification. User data stays at the explicit path in app_main.
+    set_target_properties(petari PROPERTIES OUTPUT_NAME "Petari"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "dev.petari.Petari"
+        MACOSX_BUNDLE_BUNDLE_NAME "Petari"
+        MACOSX_BUNDLE_BUNDLE_VERSION "0.1.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
+        MACOSX_BUNDLE_INFO_STRING "Petari: native Super Mario Galaxy for macOS")
     set(PETARI_PIPELINE_STAGE_SEEDS "${CMAKE_SOURCE_DIR}/build/pipeline-seeds" CACHE PATH
         "Offline-generated per-stage Aurora configuration manifests")
     if(IS_DIRECTORY "${PETARI_PIPELINE_STAGE_SEEDS}")
@@ -88,7 +95,7 @@ if(BUILD_TESTING)
     add_test(NAME native_observatory_fixture COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/test_fixture_tests.py")
     add_test(NAME native_unlocked_save COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/unlocked_save_tests.py")
     # The seam against recording fakes of Aurora, SDL and the app's other units.
-    add_executable(petari_app_seam_tests ${PETARI_REPO_ROOT}/native/tests/app_seam_tests.cpp frame_seam.cpp frame_stats.cpp)
+    add_executable(petari_app_seam_tests ${PETARI_REPO_ROOT}/native/tests/app_seam_tests.cpp frame_seam.cpp frame_stats.cpp spike_profiler.cpp)
     target_link_libraries(petari_app_seam_tests PRIVATE petari_app_smoke)
     target_include_directories(petari_app_seam_tests PRIVATE ${PETARI_REPO_ROOT}/native/include)
     if(_petari_app_standalone)

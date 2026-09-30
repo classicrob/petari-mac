@@ -127,5 +127,24 @@ public:
     s32 mNativeCompletion;
     bool mNativeCompletionPending;
     bool mNativeReadIssued;
+
+public:
+    // PETARI_AUDIO_DIAG: once a second, A/V pacing of the playing movie ([movie-av]).
+    // Video: frames decoded (decode() 0; each is drawn at the next draw). Audio: THP
+    // samples mixed into JAudio2's DAC (mixAudio, the audio thread; the CPU baton
+    // serializes it with the game thread). Drift is video time minus audio time.
+    void nativeNoteDecode(s32 result);
+
+private:
+    void nativeResetAv();
+    void nativeReportAv(bool final);
+    u32 mNativeAvVideoFrames;   // decode() returned 0
+    u32 mNativeAvAudioWaits;    // decode() returned 3: audio buffer slot still full
+    u32 mNativeAvAudioSamples;  // mixed from decoded THP audio
+    u32 mNativeAvSilence;       // mixed as silence while playing (audio not decoded yet)
+    OSTime mNativeAvStart;
+    OSTime mNativeAvLast;
+    u32 mNativeAvLastVideo, mNativeAvLastAudio, mNativeAvLastSilence, mNativeAvLastWaits;
+    bool mNativeAvActive;
 #endif
 };

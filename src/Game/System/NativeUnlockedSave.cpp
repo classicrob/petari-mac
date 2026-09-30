@@ -109,6 +109,10 @@ namespace {
         // Opened after the Grand Star 3 return and one more star.
         pHolder->setGameEventValue("LibraryOpenNewStarCount", 0);
         pHolder->setGameEventValue("LuigiEventState", FindingLuigiEventScheduler::STATE_END);
+        // The observatory's two warp pods that appear through their own scene
+        // (WarpPod Obj_arg3 0; bits in placement order). No other stage uses them.
+        pHolder->setGameEventValueForBit("WarpPodSaveBits", 0, true);
+        pHolder->setGameEventValueForBit("WarpPodSaveBits", 1, true);
 
         // Stored flags: every galaxy opening demo seen and the one-time talks
         // done. First power-up and tutorial explanations stay unseen.
@@ -223,6 +227,8 @@ namespace {
         check(pHolder->isOnGameEventFlag("ViewNormalEnding"), "normal ending for", pPlayer);
         check(pHolder->isOnGameEventFlag("ViewCompleteEnding") == isCompleteEndingSeen(isMario), "120-star ending state for", pPlayer);
         check(pHolder->isOnGameEventFlag("RosettaTalkAfterNormalEnding"), "Rosalina's after-ending talk pending for", pPlayer);
+        check(pHolder->isOnGameEventValueForBit("WarpPodSaveBits", 0) && pHolder->isOnGameEventValueForBit("WarpPodSaveBits", 1),
+              "observatory warp pods not revealed for", pPlayer);
         check(pHolder->getPictureBookChapterAlreadyRead() == pHolder->getPictureBookChapterCanRead(), "storybook chapters for", pPlayer);
 
         for (s32 idx = 0; idx < GameEventFlagTable::calcExclamationGalaxyNum(); idx++) {

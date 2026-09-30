@@ -167,7 +167,10 @@ private:
     unsigned long mAirTrace = 0;
     unsigned long mReleaseTrace = 0;          // frames of per-frame trace left after a bind
     Point3 mLastPos{0.0f, 0.0f, 0.0f};
+    Point3 mLastMove{0.0f, 0.0f, 0.0f};  // Mario's move over the last frame
     bool mReleased = false;  // was bound (launch star, vine): no steering until Mario lands
+    unsigned long mReleasedFrames = 0;
+    int mReleaseExperiment = 0;  // PETARI_GOODEGG_RELEASE: 0 none, 1 spin, 2 away
     int mLastLife = -1;
     bool mPeanutToured = false;
     Point3 mGoalPoint{0.0f, 0.0f, 0.0f};  // goTo's latest target (boulder waits look at it)

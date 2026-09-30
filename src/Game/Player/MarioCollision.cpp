@@ -1,3 +1,7 @@
+#ifdef PETARI_NATIVE
+#include <cstdio>
+#include <petari/ui_observe.hpp>
+#endif
 #include "Game/AreaObj/CubeCamera.hpp"
 #include "Game/LiveActor/Binder.hpp"
 #include "Game/LiveActor/HitSensor.hpp"
@@ -1449,6 +1453,14 @@ void Mario::checkHeadPoint() {
         MR::normalizeOrZero(&normal);
 
         if (calcAngleD(normal) > 45.0f) {
+#ifdef PETARI_NATIVE
+            if (petari_ui_observing()) {
+                std::fprintf(stderr, "[mario] blown by collision reaction (%.1f, %.1f, %.1f), angle %.1f to up; gravity (%.2f, %.2f, %.2f), air gravity (%.2f, %.2f, %.2f), pos (%.0f, %.0f, %.0f), status %d\n",
+                             reaction.x, reaction.y, reaction.z, calcAngleD(normal), getGravityVec()->x, getGravityVec()->y,
+                             getGravityVec()->z, getAirGravityVec().x, getAirGravityVec().y, getAirGravityVec().z, mPosition.x, mPosition.y,
+                             mPosition.z, static_cast< int >(getCurrentStatus()));
+            }
+#endif
             blown(reaction * 0.2f);
             mMovementStates._2B = true;
             _402 = 0;
@@ -2069,6 +2081,13 @@ bool Mario::checkGround() {
         mMovementStates._D = false;
         TVec3f direction = mGroundPos - mPosition;
         f32 distance = MR::vecKillElement(direction, *getGravityVec(), &direction);
+#ifdef PETARI_NATIVE
+        if (petari_ui_observing() && MR::abs(distance) > 500.0f) {
+            std::fprintf(stderr, "[mario] force Trans to ground (%.0f, %.0f, %.0f) from (%.0f, %.0f, %.0f), gravity (%.2f, %.2f, %.2f), %.0f along it; status %d\n",
+                         mGroundPos.x, mGroundPos.y, mGroundPos.z, mPosition.x, mPosition.y, mPosition.z, getGravityVec()->x,
+                         getGravityVec()->y, getGravityVec()->z, distance, static_cast< int >(getCurrentStatus()));
+        }
+#endif
         addTrans(*getGravityVec() * distance, "force Trans");
         return true;
     }

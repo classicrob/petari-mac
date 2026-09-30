@@ -155,6 +155,8 @@ THPSimplePlayerWrapper::THPSimplePlayerWrapper(const char* pName) : NerveExecuto
     mNativeCompletion = 0;
     mNativeCompletionPending = false;
     mNativeReadIssued = false;
+    nativeResetAv();
+    mNativeAvActive = false;
 #endif
     initNerve(GET_NERVE(THPSimplePlayerWrapper, HostTypeWait));
 }
@@ -209,6 +211,9 @@ bool THPSimplePlayerWrapper::close() {
             }
 
             if (!mReadProgress) {
+#ifdef PETARI_NATIVE
+                nativeReportAv(true);
+#endif
                 mOpen = 0;
                 DVDClose(&mFileInfo);
                 return true;
@@ -295,6 +300,9 @@ bool THPSimplePlayerWrapper::preLoad(s32 loop) {
     }
 
     mLoop = loop;
+#ifdef PETARI_NATIVE
+    nativeResetAv();
+#endif
     _314 = 20;
     if (!mLoop) {
         if (mHeader.numFrames < 0x14) {
@@ -988,6 +996,9 @@ void THPSimplePlayerWrapper::mixAudio(s16* pDest, u32 sample) {
                 return;
             }
         } else if (!mAudioBuffer[(mAudioOutputIndex + 1) % 0x14].validSample) {
+#ifdef PETARI_NATIVE
+            mNativeAvSilence += sample;
+#endif
             MR::zeroMemory(pDest, sample * THP_STEREO_SAMPLE_BYTES);
             return;
         }
@@ -1067,6 +1078,9 @@ void THPSimplePlayerWrapper::mixAudio(s16* pDest, u32 sample) {
                     }
                 }
 
+#ifdef PETARI_NATIVE
+                mNativeAvAudioSamples += sampleNum;
+#endif
                 sample -= sampleNum;
                 mAudioBuffer[mAudioOutputIndex].validSample -= sampleNum;
                 mAudioBuffer[mAudioOutputIndex].curPtr = thpsrc;
@@ -1080,6 +1094,9 @@ void THPSimplePlayerWrapper::mixAudio(s16* pDest, u32 sample) {
                 if (sample == 0)
                     break;
             } else {
+#ifdef PETARI_NATIVE
+                mNativeAvSilence += sample;
+#endif
                 MR::zeroMemory(pDest, sample * THP_STEREO_SAMPLE_BYTES);
                 return;
             }
@@ -1226,3 +1243,68 @@ s16* THPSimplePlayerStaticAudio::audioCallback(s32 audio) {
 
 THPSimplePlayerStaticAudio::THPSimplePlayerStaticAudio() {
 }
+
+#ifdef PETARI_NATIVE
+namespace {
+    bool isAudioDiag() {
+        static const bool enabled = [] {
+            const char* pValue = std::getenv("PETARI_AUDIO_DIAG");
+            return pValue != nullptr && pValue[0] != '\0' && pValue[0] != '0';
+        }();
+        return enabled;
+    }
+}  // namespace
+
+void THPSimplePlayerWrapper::nativeResetAv() {
+    mNativeAvVideoFrames = mNativeAvAudioWaits = mNativeAvAudioSamples = mNativeAvSilence = 0;
+    mNativeAvLastVideo = mNativeAvLastAudio = mNativeAvLastSilence = mNativeAvLastWaits = 0;
+    mNativeAvStart = mNativeAvLast = 0;
+    mNativeAvActive = true;
+}
+
+void THPSimplePlayerWrapper::nativeNoteDecode(s32 result) {
+    if (!isAudioDiag() || !mNativeAvActive) {
+        return;
+    }
+    if (result == 0) {
+        mNativeAvVideoFrames++;
+    } else if (result == 3) {
+        mNativeAvAudioWaits++;
+    }
+    const OSTime now = OSGetTime();
+    if (mNativeAvStart == 0) {
+        mNativeAvStart = mNativeAvLast = now;
+    } else if (OSTicksToMilliseconds(now - mNativeAvLast) >= 1000) {
+        nativeReportAv(false);
+    }
+}
+
+void THPSimplePlayerWrapper::nativeReportAv(bool final) {
+    if (!isAudioDiag() || !mNativeAvActive || mNativeAvStart == 0) {
+        return;
+    }
+    const OSTime now = OSGetTime();
+    const f32 frameRate = getFrameRate();
+    const f64 videoSeconds = frameRate > 0.0f ? mNativeAvVideoFrames / static_cast< f64 >(frameRate) : 0.0;
+    const u32 rate = mAudioExist ? mAudioInfo.sndFrequency : 0;
+    const f64 audioSeconds = rate != 0 ? mNativeAvAudioSamples / static_cast< f64 >(rate) : 0.0;
+    s32 queued = 0;
+    for (s32 i = 0; i < 20; i++) {
+        queued += mAudioBuffer[i].validSample != 0;
+    }
+    OSReport("[movie-av] %s %s at %.2f s: video %u frames (+%u) = %.3f s; audio %u samples (+%u) = %.3f s; drift %+.1f ms; "
+             "queued audio %d frames; decode waits for audio +%u; silence +%u samples\n",
+             mNativeName != nullptr ? mNativeName : "?", final ? "end" : "play", OSTicksToMilliseconds(now - mNativeAvStart) / 1000.0,
+             mNativeAvVideoFrames, mNativeAvVideoFrames - mNativeAvLastVideo, videoSeconds, mNativeAvAudioSamples,
+             mNativeAvAudioSamples - mNativeAvLastAudio, audioSeconds, rate != 0 ? (videoSeconds - audioSeconds) * 1000.0 : 0.0, queued,
+             mNativeAvAudioWaits - mNativeAvLastWaits, mNativeAvSilence - mNativeAvLastSilence);
+    mNativeAvLast = now;
+    mNativeAvLastVideo = mNativeAvVideoFrames;
+    mNativeAvLastAudio = mNativeAvAudioSamples;
+    mNativeAvLastSilence = mNativeAvSilence;
+    mNativeAvLastWaits = mNativeAvAudioWaits;
+    if (final) {
+        mNativeAvActive = false;
+    }
+}
+#endif

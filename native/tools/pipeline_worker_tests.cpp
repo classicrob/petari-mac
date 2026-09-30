@@ -70,6 +70,7 @@ void stop(std::vector<std::thread>& workers) {
     g_pipelineThreadEnd = false;
     g_pipelines.clear();
     petariPipelineSamples.clear();
+    petariFailedPipelines = 0;
 }
 void priorityTest() {
     std::vector<int> order;
@@ -109,13 +110,33 @@ void parallelTest() {
     }
     stop(workers);
 }
+void progressTest() {
+    enqueue(31, true, [] { return CompiledPipeline{false}; });
+    uint32_t total, pending, failed;
+    petari_gx_pipeline_preparation_status(&total, &pending, &failed);
+    require(total == 1 && pending == 1 && failed == 0, "queued progress is inconsistent");
+    std::vector<std::thread> workers;
+    workers.emplace_back(pipeline_worker);
+    waitReady(1);
+    petari_gx_pipeline_preparation_status(&total, &pending, &failed);
+    require(total == 1 && pending == 0 && failed == 1, "failed completion was reported as a successful warmup");
+    stop(workers);
+}
 }
 int main(int argc, char** argv) {
     const bool expectAsync = argc == 2 && std::strcmp(argv[1], "async") == 0;
     aurora::gfx::require(PetariPipeline::asynchronous() == expectAsync, "pipeline policy is not opt-in");
     if (!std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE"))
-        aurora::gfx::require(!PetariPipeline::globalPrecompile(), "full global preparation must remain opt-in");
+        aurora::gfx::require(PetariPipeline::globalPrecompile(), "full global preparation must be the default");
+    setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "0", 1);
+    aurora::gfx::require(!PetariPipeline::globalPrecompile() && !PetariPipeline::backgroundGlobalPrecompile(), "off override ignored");
+    setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "background", 1);
+    aurora::gfx::require(!PetariPipeline::globalPrecompile() && PetariPipeline::backgroundGlobalPrecompile(), "background override ignored");
+    setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "1", 1);
+    aurora::gfx::require(PetariPipeline::globalPrecompile(), "explicit full preparation ignored");
+    unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     aurora::gfx::priorityTest();
     aurora::gfx::parallelTest();
+    aurora::gfx::progressTest();
     std::puts("Pipeline worker: requested priority, concurrent progress, isolated timing state and shutdown pass");
 }

@@ -15,8 +15,10 @@ extern "C" uint64_t petari_gx_pipeline_manifest_failure_count();
 extern "C" void petari_gx_pipeline_report();
 
 #include "frame_stats.hpp"
+#include "spike_profiler.hpp"
 #include "host.hpp"
 #include "smoke.hpp"
+#include "smoke_domes.hpp"
 #include "smoke_goodegg.hpp"
 #include "smoke_soak.hpp"
 #include "smoke_stage.hpp"
@@ -67,6 +69,7 @@ struct Timing {
     FrameStats::Phase (*probe)() = nullptr;
     bool report = false;
     const char* csvPath = nullptr;
+    double spikeMs = 1000.0 / 30.0;  // PETARI_SPIKE_PROFILE_MS
     std::uint64_t frames = 0;
     std::uint64_t lastEntry = 0;  // previous seam entry, 0 before the first
     std::uint64_t lastExit = 0;
@@ -173,6 +176,9 @@ void recordFrame(std::uint64_t entry, FrameStats::Phase phase) {
         frame.phase = FrameStats::Phase::Loading;
     }
     t.recorder->add(frame);
+    if (frame.intervalMs > t.spikeMs && SpikeProfiler::enabled()) {
+        SpikeProfiler::keepSpike(frame.index, frame.intervalMs, t.lastEntry, entry);
+    }
 
     t.lastEntry = entry;
     t.retraceDone = t.retraceWake = t.endFrame = 0;
@@ -187,6 +193,12 @@ void startTiming() {
     const char* csv = std::getenv("PETARI_FRAME_CSV");
     gTiming.csvPath = csv != nullptr && csv[0] != '\0' ? csv : nullptr;
     gTiming.report = gTiming.csvPath != nullptr || enabled("PETARI_FRAME_STATS") || enabled("PETARI_TRACE_BOOT");
+    if (SpikeProfiler::startFromEnvironment()) {
+        const unsigned long spikeMs = environmentNumber("PETARI_SPIKE_PROFILE_MS", 0);
+        if (spikeMs > 0) {
+            gTiming.spikeMs = static_cast<double>(spikeMs);
+        }
+    }
     if (gTiming.recorder == nullptr) {
         // 30 minutes at 60 frames/s by default, about 100 bytes per frame.
         const std::size_t csvFrames = gTiming.csvPath != nullptr ? environmentNumber("PETARI_FRAME_CSV_FRAMES", 108000) : 0;
@@ -202,6 +214,8 @@ Smoke::StageDriver* gStage = nullptr;
 Smoke::GoodEggDriver* gGoodEgg = nullptr;
 // Or the long-session soak (smoke_soak.hpp), PETARI_SMOKE=soak.
 Smoke::SoakDriver* gSoak = nullptr;
+// Or the dome tour (smoke_domes.hpp), PETARI_SMOKE=domes.
+Smoke::DomesDriver* gDomes = nullptr;
 
 unsigned long environmentNumber(const char* name, unsigned long fallback) {
     const char* value = std::getenv(name);
@@ -233,6 +247,17 @@ void startSmoke() {
         gSoak = new Smoke::SoakDriver(frames, soak);
         std::fprintf(stderr, "PETARI SMOKE: script soak (%zu stage(s), %.0f minutes), stage frame limit %lu, stall limit %lu s\n",
                      soak.stages.size(), soak.minutes, frames, stall);
+        std::fflush(stderr);
+        Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
+        return;
+    }
+    Smoke::DomesConfig domes;
+    if (Smoke::domesEnabledFromEnvironment(&domes)) {
+        const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 72000);
+        const unsigned long stall = environmentNumber("PETARI_SMOKE_STALL_SECONDS", 60);
+        gDomes = new Smoke::DomesDriver(frames, domes);
+        std::fprintf(stderr, "PETARI SMOKE: script domes (dome %d, %zu extra mission(s)), frame limit %lu, stall limit %lu s\n",
+                     domes.dome, domes.extras.size(), frames, stall);
         std::fflush(stderr);
         Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
         return;
@@ -507,6 +532,7 @@ const FrameStats::Recorder* frameStats() {
 }
 
 void reportFrameStats() {
+    SpikeProfiler::writeReport();
     static std::atomic<bool> reported{false};
     if (gTiming.recorder == nullptr || !gTiming.report || reported.exchange(true)) {
         return;
@@ -556,6 +582,8 @@ extern "C" void petari_host_frame_seam(void) {
         runSmoke(gSoak);
     } else if (gGoodEgg != nullptr) {
         runSmoke(gGoodEgg);
+    } else if (gDomes != nullptr) {
+        runSmoke(gDomes);
     }
     if (Soak::telemetryActive()) {  // PETARI_SOAK_CSV: frame times and, periodically, the JKR heaps
         static unsigned long frames = 0;

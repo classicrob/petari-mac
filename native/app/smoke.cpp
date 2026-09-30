@@ -225,7 +225,10 @@ StickKeys stickKeysFor(float x, float y) {
     return keys;
 }
 
-Driver::Driver(unsigned long frameLimit, Script script) : mFrameLimit(frameLimit), mScript(script) {}
+Driver::Driver(unsigned long frameLimit, Script script) : mFrameLimit(frameLimit), mScript(script) {
+    const char* player = std::getenv("PETARI_SMOKE_PLAYER");
+    mChooseLuigi = player != nullptr && std::strcmp(player, "luigi") == 0;
+}
 
 bool Driver::seen(const std::string& milestone) const {
     for (const std::string& name : mSeen) {
@@ -325,8 +328,38 @@ void Driver::playable(const Observation& observation, Step& step) {
         }
         break;
     case Phase::WaitFileConfirm:
-        waitFor("FileSelector.FileConfirm", kMilestoneLimit, Phase::ChooseStart);
+        waitFor("FileSelector.FileConfirm", kMilestoneLimit, mChooseLuigi ? Phase::ChooseLuigi : Phase::ChooseStart);
         break;
+    case Phase::ChooseLuigi: {
+        // FileSelect.Bros: index 0 while Mario is selected, 1 for Luigi. Press it
+        // until it reports Luigi (at most 3 presses, 60 frames apart: the button
+        // hides while its decide animation plays).
+        const Observation::Target* bros = nullptr;
+        for (const Observation::Target& candidate : observation.targets) {
+            if (candidate.id == "FileSelect.Bros") {
+                bros = &candidate;
+            }
+        }
+        if (bros != nullptr && bros->index == 1) {
+            note("Luigi selected with FileSelect.Bros after " + std::to_string(mLuigiPresses) + " press(es)");
+            mPhase = Phase::ChooseStart;
+            mPhaseFrames = 0;
+            mAimFrames = mPointingFrames = mAimMissing = 0;
+            break;
+        }
+        if (mLuigiPresses >= 3) {
+            finish(Result::Fail, "FileSelect.Bros did not switch to Luigi after 3 presses", step);
+            break;
+        }
+        if (mLuigiPresses > 0 && mPhaseFrames - mLuigiPressFrame < 60) {
+            break;  // the switch animates; wait before judging or pressing again
+        }
+        if (aimAndPress(observation, "FileSelect.Bros", Slot::Any, step)) {  // FAILs if it never appears (Luigi locked)
+            mLuigiPresses++;
+            mLuigiPressFrame = mPhaseFrames;
+        }
+        break;
+    }
     case Phase::ChooseStart:
         if (aimAndPress(observation, "FileSelect.Start", Slot::Any, step)) {
             mPhase = Phase::WaitDemo;
@@ -1133,6 +1166,8 @@ const char* Driver::phase() const {
         return "choosing the Mario icon";
     case Phase::WaitFileConfirm:
         return "confirming the icon";
+    case Phase::ChooseLuigi:
+        return "switching to Luigi";
     case Phase::ChooseStart:
         return "choosing Start";
     case Phase::WaitDemo:

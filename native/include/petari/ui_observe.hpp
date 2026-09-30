@@ -10,7 +10,8 @@
 // pointer into and the game's hit tests use.
 //
 // IDs (static strings): "FileSelect.Slot" (index = file number - 1),
-// "Prompt.Yes" / "Prompt.No", "MiiSelect.Mario", "FileSelect.Start".
+// "Prompt.Yes" / "Prompt.No", "MiiSelect.Mario", "FileSelect.Start",
+// "FileSelect.Bros" (Mario/Luigi switch; index 0 while Mario is selected, 1 Luigi).
 
 #ifdef __cplusplus
 extern "C" {

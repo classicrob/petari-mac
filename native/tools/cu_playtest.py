@@ -142,7 +142,7 @@ def main():
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
                     sample_taken = True
                 if stopped or now - started >= args.seconds:
-                    record['forced_stop'] = 'signal' if stopped else '20-minute deadline'
+                    record['forced_stop'] = 'signal' if stopped else f'{args.seconds}-second deadline'
                     os.killpg(child.pid, signal.SIGTERM)
                     try:
                         child.wait(timeout=5)

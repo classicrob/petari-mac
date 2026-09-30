@@ -307,6 +307,17 @@ if(_petari_build_testing)
     target_link_libraries(petari_kcl_server_tests PRIVATE petari_j3d)
     target_link_options(petari_kcl_server_tests PRIVATE -Wl,-dead_strip)
     add_test(NAME native_kcl_server COMMAND petari_kcl_server_tests)
+    # MR vector helpers that are paired-single asm on the Wii, and a source check that no
+    # function body is only __MWERKS__ asm (an empty function on this build).
+    add_executable(petari_math_util_tests
+        "${CMAKE_SOURCE_DIR}/native/tests/math_util_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Util/MathUtil.cpp")
+    petari_encode_target_sources(petari_math_util_tests)
+    target_link_libraries(petari_math_util_tests PRIVATE petari_j3d)
+    target_link_options(petari_math_util_tests PRIVATE -Wl,-dead_strip)
+    add_test(NAME native_math_util COMMAND petari_math_util_tests)
+    add_test(NAME native_asm_only_bodies COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/native/tests/asm_only_bodies_tests.py")
     if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
         add_test(NAME native_kcl_server_assets COMMAND petari_kcl_server_tests
             --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
@@ -391,6 +402,19 @@ endif()
 
 if(_petari_build_testing)
     # ImGui device objects must be created during Aurora initialization, not on the first frame.
+    add_executable(petari_pipeline_startup_tests
+        "${CMAKE_SOURCE_DIR}/native/tools/pipeline_startup_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/app/pipeline_startup.cpp")
+    target_compile_features(petari_pipeline_startup_tests PRIVATE cxx_std_20)
+    target_include_directories(petari_pipeline_startup_tests PRIVATE "${CMAKE_SOURCE_DIR}/native/include"
+        $<TARGET_PROPERTY:aurora::core,INTERFACE_INCLUDE_DIRECTORIES>)
+    add_test(NAME native_pipeline_startup COMMAND petari_pipeline_startup_tests)
+    set_tests_properties(native_pipeline_startup PROPERTIES TIMEOUT 15)
+    add_executable(petari_pipeline_overlay_tests "${CMAKE_SOURCE_DIR}/native/tools/pipeline_overlay_tests.cpp")
+    target_compile_features(petari_pipeline_overlay_tests PRIVATE cxx_std_20)
+    target_link_libraries(petari_pipeline_overlay_tests PRIVATE petari_home_menu_imgui)
+    add_test(NAME native_pipeline_overlay COMMAND petari_pipeline_overlay_tests)
+    set_tests_properties(native_pipeline_overlay PROPERTIES TIMEOUT 15)
     if(DEFINED imgui_SOURCE_DIR)
         set(_petari_imgui_wgpu "${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp")
     else()

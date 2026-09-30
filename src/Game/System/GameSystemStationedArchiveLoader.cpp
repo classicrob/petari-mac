@@ -75,14 +75,26 @@ PlayerHeapHolder::PlayerHeapHolder() : mCondition(), mNapaHeap(), mGDDRHeap(), m
 }
 
 void PlayerHeapHolder::adjust() {
+#ifdef PETARI_NATIVE
+    // The heaps are trimmed to the loaded player's archives plus this spare, and a change of
+    // player (exeChangeArchivePlayer: selecting a Luigi file after booting as Mario) frees them
+    // and loads the other player's set into the same room. On the Wii Luigi's set is 29,920 bytes
+    // larger in the NAPA heap, within the 64 KiB spare. Natively each J3D file also gets a
+    // same-size host image and larger objects, which doubles the difference (measured on the disc:
+    // NAPA +59,872 bytes, GDDR +11,392; native_file_cache_demand), leaving under 6 KiB of the
+    // Wii spare. Keep 256 KiB.
+    const u32 spare = cAdjustSpare;
+#else
+    const u32 spare = 0x10000;
+#endif
     JKRExpHeap* napa = mNapaHeap;
     if (!napa->isEmpty()) {
-        napa->alloc(0x10000, 0);
+        napa->alloc(spare, 0);
     }
 
     JKRExpHeap* gddr = mGDDRHeap;
     if (!gddr->isEmpty()) {
-        gddr->alloc(0x10000, 0);
+        gddr->alloc(spare, 0);
     }
 
     MR::adjustHeapSize(mNapaHeap, nullptr);

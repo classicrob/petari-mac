@@ -203,6 +203,9 @@ void MoviePlayerSimple::exePlaying() {
 
     if (!mMovie->_19) {
         s32 result = mPlayerWrapper->decode(0);
+#ifdef PETARI_NATIVE
+        mPlayerWrapper->nativeNoteDecode(result);
+#endif
 
         switch (result) {
         case 0:

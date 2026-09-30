@@ -678,6 +678,15 @@ void ScenarioSelectLayout::exeWaitScenarioSelect() {
                 PETARI_UI_SELECTABLE | (mSelectedScenarioNo == 1 ? PETARI_UI_POINTING : 0));
         }
     }
+    // Every shown mission star, indexed by its scenario number (comet and
+    // hidden stars included once the file owns them).
+    for (s32 i = 0; i < 7; ++i) {
+        if (!mStar[i]->_30) {
+            const s32 scenarioNo = mStar[i]->mScenarioNo;
+            MR::Native::publishUiPaneTarget(this, ::cStarPaneName[i], "Scenario.Star", scenarioNo,
+                PETARI_UI_SELECTABLE | (mSelectedScenarioNo == scenarioNo ? PETARI_UI_POINTING : 0));
+        }
+    }
 #endif
     updateScenarioText();
     MR::startSystemLevelSE("SE_DM_LV_SENARIO_SEL_FLY");

@@ -57,7 +57,7 @@ inline unsigned workerCount() {
 }
 inline bool globalPrecompile() {
     const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
-    return value && std::strcmp(value, "1") == 0;
+    return !value || !*value || std::strcmp(value, "1") == 0;
 }
 inline bool backgroundGlobalPrecompile() {
     const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");

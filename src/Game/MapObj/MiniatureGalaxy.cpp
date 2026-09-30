@@ -26,6 +26,7 @@
 #include "Game/Util/StringUtil.hpp"
 
 #ifdef PETARI_NATIVE
+#include <petari/host_allocation.hpp>
 #include <set>
 #include <string>
 #endif
@@ -278,7 +279,10 @@ void MiniatureGalaxy::control() {
         (mState == MiniatureGalaxyState_Open || mState == MiniatureGalaxyState_New)) {
         TVec2f screen;
         if (MR::calcScreenPosition(&screen, mPosition)) {
-            // Intern IDs for the observer's static-storage contract.
+            // Intern IDs for the observer's static-storage contract. Host memory:
+            // a game-heap node would be freed with the scene (the next dome's map
+            // then crashed in the insert).
+            PetariNative::HostAllocationScope host;
             static std::set<std::string> targetIds;
             const std::string id = std::string(mState == MiniatureGalaxyState_New ? "Galaxy.Unlock" : "Galaxy.") + mGalaxyName;
             const char* targetId = targetIds.insert(id).first->c_str();

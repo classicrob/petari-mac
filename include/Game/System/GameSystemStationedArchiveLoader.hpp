@@ -83,6 +83,12 @@ public:
 
     static JKRExpHeap* createHeap(u32, JKRHeap*);
 
+#ifdef PETARI_NATIVE
+    // Room adjust() keeps after trimming, for the other player's archives on a change of player
+    // (see adjust()). Wii: 0x10000.
+    static const u32 cAdjustSpare = 0x10000 + 0x30000;
+#endif
+
     /* 0x0 */ ConditionUsePlayerHeap* mCondition;
     /* 0x4 */ JKRExpHeap* mNapaHeap;
     /* 0x8 */ JKRExpHeap* mGDDRHeap;

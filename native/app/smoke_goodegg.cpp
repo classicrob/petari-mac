@@ -25,7 +25,8 @@ constexpr unsigned long kStuckFrames = 150;
 constexpr float kProgressStep = 40.0f;
 constexpr int kMaxRecoveries = 8;
 constexpr unsigned long kSidestepFrames = 40;
-constexpr unsigned long kAirSteerFrames = 60;   // steer in the air this long (own jumps), not in long flights
+constexpr unsigned long kAirSteerFrames = 60;
+constexpr unsigned long kStuckInAirFrames = 1800;  // airborne and unbound this long after a release: stuck   // steer in the air this long (own jumps), not in long flights
 // SuperSpinDriver sensors: a swing within 300 of a waiting star shoots; within
 // 240 it pulls Mario in (Capture) and waits for a swing. Distances here are
 // from Mario's feet; his sensor is higher, so a held Mario can read farther.
@@ -326,6 +327,8 @@ bool GoodEggDriver::followRoute(const Observation& o, const std::vector<Point3>&
     const Vec pos = position(o);
     const Point3& current = route[std::min(mWaypoint, route.size() - 1)];
     if (!mWaypointChosen || length(vec(current) - pos) > 900.0f) {
+        const bool first = !mWaypointChosen;
+        const size_t previous = mWaypoint;
         mWaypointChosen = true;
         float best = 1e30f;
         for (size_t i = 0; i < route.size(); ++i) {
@@ -335,8 +338,10 @@ bool GoodEggDriver::followRoute(const Observation& o, const std::vector<Point3>&
                 mWaypoint = i;
             }
         }
-        note(std::string(name) + ": from point " + std::to_string(mWaypoint) + " of " + std::to_string(route.size()) +
-             ", " + number(best) + " away");
+        if (first || mWaypoint != previous) {
+            note(std::string(name) + ": from point " + std::to_string(mWaypoint) + " of " + std::to_string(route.size()) +
+                 ", " + number(best) + " away");
+        }
     }
     // Skip ahead when the next point is already nearer.
     while (mWaypoint + 1 < route.size() &&
@@ -391,7 +396,12 @@ bool goodEggEnabledFromEnvironment(GoodEggConfig* config) {
 }
 
 GoodEggDriver::GoodEggDriver(unsigned long frameLimit, const GoodEggConfig& config)
-    : mBoot(frameLimit + 1, config.synthetic ? Script::Reload : Script::Galaxy), mConfig(config), mFrameLimit(frameLimit) {}
+    : mBoot(frameLimit + 1, config.synthetic ? Script::Reload : Script::Galaxy), mConfig(config), mFrameLimit(frameLimit) {
+    const char* experiment = std::getenv("PETARI_GOODEGG_RELEASE");
+    if (experiment != nullptr) {
+        mReleaseExperiment = std::strcmp(experiment, "spin") == 0 ? 1 : std::strcmp(experiment, "away") == 0 ? 2 : 0;
+    }
+}
 
 const char* GoodEggDriver::phase() const {
     switch (mPhase) {
@@ -710,12 +720,14 @@ void GoodEggDriver::mission(const Observation& o, Step& step) {
         --mReleaseTrace;
         const Vec moved = pos - vec(mLastPos);
         note("after release: " + text(pos) + " (moved " + number(length(moved)) + "), up " + text(up(o)) +
-             (o.playerOnGround ? ", ground" : ", air") + ", demo " + std::to_string(o.demoActive) + ", life " +
-             std::to_string(o.playerLife));
+             (o.playerOnGround ? ", ground" : ", air") + ", shadow " + text(Vec{o.shadowX, o.shadowY, o.shadowZ}) +
+             ", Mario's gravity " + text(Vec{o.marioGravityX * 100.0f, o.marioGravityY * 100.0f, o.marioGravityZ * 100.0f}) +
+             "%, demo " + std::to_string(o.demoActive) + ", life " + std::to_string(o.playerLife));
     }
     if (o.playerInBind) {
         mReleaseTrace = 150;
     }
+    mLastMove = {pos.x - mLastPos.x, pos.y - mLastPos.y, pos.z - mLastPos.z};
     mLastPos = {pos.x, pos.y, pos.z};
     if (o.playerLife != mLastLife) {
         if (mLastLife >= 0) {
@@ -790,14 +802,37 @@ void GoodEggDriver::mission(const Observation& o, Step& step) {
     if (o.playerInBind) {
         // A launch star, a vine, a pipe: hands off until Mario lands again.
         mReleased = true;
+        mReleasedFrames = 0;
         steer({}, step);
         return;
     }
     if (mReleased) {
         if (!o.playerOnGround) {
+            // Investigation knob (PETARI_GOODEGG_RELEASE, off by default): input
+            // right after a release, to test whether a landing can avoid the
+            // Bean B bonk. Runs using it are experiments, not the route.
+            ++mReleasedFrames;
+            if (mReleaseExperiment == 1 && mReleasedFrames == 3) {
+                note("release experiment: spin 3 frames after the release");
+                tap(Button::Spin, kTapFrames, step);
+            } else if (mReleaseExperiment == 2 && mReleasedFrames <= 40) {
+                // Hold the stick against the flight (away from where the rail ended).
+                steer(stickKeysForWorld(o, {-mLastMove.x, -mLastMove.y, -mLastMove.z}), step);
+                if (mReleasedFrames == 1) {
+                    note("release experiment: holding against the flight for 40 frames");
+                }
+                return;
+            }
+            if (mReleasedFrames > kStuckInAirFrames) {
+                finish(Result::Fail, "Mario has been in the air for " + std::to_string(kStuckInAirFrames) +
+                                         " frames since a release, at " + text(pos),
+                       step);
+                return;
+            }
             steer({}, step);
             return;
         }
+        mReleasedFrames = 0;
         mReleased = false;
         note("landed at " + text(pos) + ", up " + text(up(o)));
     }

@@ -194,8 +194,6 @@ if(BUILD_TESTING)
     target_include_directories(petari_platform_audio_tests PRIVATE audio)
     target_link_libraries(petari_platform_audio_tests PRIVATE petari_platform)
     add_test(NAME native_platform_audio COMMAND petari_platform_audio_tests)
-    # Real-time elastic-DMA checks; parallel test load makes them fail spuriously.
-    set_tests_properties(native_platform_audio PROPERTIES RUN_SERIAL TRUE)
 
     # PETARI_BATON_DIAG preemption-latency diagnostic.
     add_executable(petari_platform_baton_diag_tests ${PETARI_REPO_ROOT}/native/tests/platform_baton_diag_tests.cpp)

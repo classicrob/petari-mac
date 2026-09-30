@@ -58,6 +58,11 @@ void BrosButton::exeAppear() {
 }
 
 void BrosButton::exeSelect() {
+#ifdef PETARI_NATIVE
+    // The Mario/Luigi switch on a file with Luigi unlocked; the index tells which one is
+    // selected (0 Mario, 1 Luigi), for automated file selection (petari/ui_observe.hpp).
+    mPaneCtrl->publishUiTarget("FileSelect.Bros", mIsSelectedMario ? 0 : 1);
+#endif
     mPaneCtrl->trySelect();
 
     if (!mPaneCtrl->mIsSelected) {

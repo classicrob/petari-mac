@@ -15,6 +15,61 @@ AURORA = ROOT.parent / 'aurora-reference'
 
 
 class PipelineSeedTests(unittest.TestCase):
+    def test_global_import_does_not_invent_draws(self):
+        spec = importlib.util.spec_from_file_location('patch_pipeline', ROOT / 'native/gx/patch_aurora_pipeline.py')
+        patcher = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(patcher)
+        patched = patcher.patch((AURORA / 'lib/gfx/pipeline_cache.cpp').read_text())
+        start = patched.index('static void seed_pipeline_cache_path(')
+        end = patched.index('\nstatic ', start + 1)
+        function = patched[start:end]
+        self.assertIn('seed_pipeline_cache_path(path.string(), true);', patched)
+        harness = r'''
+#include <sqlite3.h>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <type_traits>
+#include <string>
+#include <vector>
+#include <cstdio>
+using PipelineRef = uint64_t;
+enum class ShaderType : uint8_t { Clear, GX };
+struct ByteBuffer : std::vector<uint8_t> { using std::vector<uint8_t>::vector; };
+struct PipelineCacheWrite { ShaderType type; PipelineRef hash; uint32_t configVersion; ByteBuffer config; uint32_t firstFrameUsed; };
+struct Logger {
+ template<class... T> void warn(const char*, T&&...) {}
+ template<class... T> void error(const char*, T&&...) {}
+ template<class... T> void info(const char*, T&&...) {}
+} Log;
+bool g_pipelineCacheBroken = false;
+sqlite3* g_pipelineCacheDb = reinterpret_cast<sqlite3*>(1);
+sqlite3_stmt* g_pipelineCacheUpsertStmt = reinterpret_cast<sqlite3_stmt*>(1);
+namespace sqlite { struct Transaction { Transaction(sqlite3*, Logger&, bool) {} operator bool() { return true; } void commit() {} }; }
+void pipeline_cache_abort() { g_pipelineCacheBroken = true; }
+std::vector<uint32_t> firstUses;
+bool write_pipeline_cache_record(const PipelineCacheWrite& write) { firstUses.push_back(write.firstFrameUsed); return true; }
+sqlite3* open_pipeline_cache_seed_db(const std::string&) {
+ sqlite3* db = nullptr; sqlite3_open(":memory:", &db);
+ sqlite3_exec(db, "CREATE TABLE pipeline_cache(type,hash,config_version,config_size,config,first_frame_used);"
+                 "INSERT INTO pipeline_cache VALUES(1,42,13,1,x'00',7);", nullptr, nullptr, nullptr);
+ return db;
+}
+''' + function + r'''
+int main() {
+ seed_pipeline_cache_path("fixture", true);
+ if (g_pipelineCacheBroken || firstUses != std::vector<uint32_t>{UINT32_MAX}) return 1;
+ firstUses.clear(); seed_pipeline_cache_path("fixture");
+ if (g_pipelineCacheBroken || firstUses != std::vector<uint32_t>{7}) return 2;
+}
+'''
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'test.cpp'
+            executable = Path(temporary) / 'test'
+            source.write_text(harness)
+            subprocess.run(['c++', '-std=c++20', str(source), '-lsqlite3', '-o', str(executable)], check=True)
+            subprocess.run([str(executable)], check=True, timeout=10)
+
     def test_shared_and_attributed_exports(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

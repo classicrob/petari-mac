@@ -81,6 +81,8 @@ The save is made by the game's own code, not by editing bytes directly:
    - the final story event reached
    - the library open and the storybook read
    - Luigi's hiding events finished
+   - the observatory's two scene-revealed warp pods already revealed
+     (`WarpPodSaveBits` 0 and 1; no other stage uses these bits)
    - every galaxy-opening scene and one-time conversation counted as seen
 
    All other unlocks come from these through the game's own rules. The ending

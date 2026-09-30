@@ -109,6 +109,13 @@ Observation observeGame(bool wantPlayer) {
                 observation.gravityX = gravity.x;
                 observation.gravityY = gravity.y;
                 observation.gravityZ = gravity.z;
+                observation.shadowX = pCore->mShadowPos.x;
+                observation.shadowY = pCore->mShadowPos.y;
+                observation.shadowZ = pCore->mShadowPos.z;
+                const TVec3f* pMarioGravity = pCore->getGravityVec();
+                observation.marioGravityX = pMarioGravity->x;
+                observation.marioGravityY = pMarioGravity->y;
+                observation.marioGravityZ = pMarioGravity->z;
             }
             observation.demoActive = MR::isDemoActive();
             observation.padA = MR::testCorePadButtonA(WPAD_CHAN0);
@@ -147,6 +154,7 @@ Observation observeGame(bool wantPlayer) {
             }
         }
     }
+    stepCollisionProbe(observation.stage, observation.sceneReady && observation.scene == "Game");
     return observation;
 }
 

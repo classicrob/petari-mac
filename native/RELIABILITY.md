@@ -34,6 +34,28 @@ behavior, corpus/component checks and remaining integration work.
 - Generated collision regression covers the two-triangle runtime layout and
   22,293 sampled queries over 150 disc files. HeavensDoorGalaxy placement now exercises that path in the app (story run 6).
 
+## Good Egg Bean B landing, 2026-09-30
+
+- Root cause: `MR::PSvecBlend` and `MR::vecScaleAdd` (src/Game/Util/MathUtil.cpp)
+  were Wii paired-single asm inside `#ifdef __MWERKS__` with no native branch,
+  so they were empty functions. `MR::vecBlend` silently kept its old value (45
+  call sites, including Mario, XanimeCore animation blending, DinoPackun,
+  SwingRope, Fluff, Tamakoro and BezierSurface). After the Peanut launch star,
+  Mario's binder offset (`MarioActor::_2C4`) kept the Peanut's up vector. The
+  binder sphere sat 51 units below his feet, so he hovered 80-110 over Bean B.
+  Then a blown landing snapped him 2176 units to a stale ground point.
+  Bean B's collision itself was correct: placement, scale and native sphere
+  queries were checked offline against the logged positions.
+- Fixed with native branches. `native_math_util` fails all 5 checks against the
+  old MathUtil.cpp (compiled from a private copy). `native_asm_only_bodies` scans
+  src/, libs/ and include/ for function bodies that are only `__MWERKS__` asm;
+  these two were the only ones.
+- Live (build/collision-1.log before, build/collision-2.log after, stage fixture):
+  before, the offset stayed (-62.6,-16,-26.9) for 98 frames. After, Mario
+  lands on Bean B 9 frames after release, reaches the Piranha Plant and vine,
+  and gets to the Fruit Peel. That run then lost its last lives to Fruit Peel
+  hazards; this is a separate issue, not investigated here. Full ctest 89/89.
+
 ## Broader integration coverage
 
 - Story run 6 traversed Peach's Castle Garden, played both full prologue movies,

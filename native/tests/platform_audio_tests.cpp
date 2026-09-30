@@ -373,7 +373,11 @@ void testElasticDma() {
     }
     const auto reg = [&](int b) { AIInitDMA(reinterpret_cast<uintptr_t>(blocks[b]), sizeof(blocks[b])); };
     std::vector<std::int16_t> out(kFrames * 2 * 2);
-    PAudio::setRegistrationWaitLimit(20000);
+    // Waits are checked with a limit no scheduling delay reaches (a loaded host can deschedule
+    // this thread for tens of ms between pulls); the timeout itself with a short limit and a
+    // longer sleep (a lower bound, which load only lengthens).
+    constexpr std::uint32_t kLongLimitUs = 60000000, kShortLimitUs = 20000;
+    PAudio::setRegistrationWaitLimit(kLongLimitUs);
     PAudio::takeDmaStats();
 
     // Start-up: the block registered before DMA started is not an answer
@@ -407,8 +411,9 @@ void testElasticDma() {
 
     // Never answered: after the limit the block replays, as on the hardware,
     // and the replay itself is not waited for again.
+    PAudio::setRegistrationWaitLimit(kShortLimitUs);
     check(PAudio::pull(out.data(), kFrames) == kFrames - 64, "block 2 plays out, then waits");
-    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    std::this_thread::sleep_for(std::chrono::microseconds(kShortLimitUs + 5000));
     check(PAudio::pull(out.data(), kFrames) == kFrames && out[0] == 3 && PAudio::replayedBlocks() == 2,
           "past the limit the block is replayed");
     check(PAudio::pull(out.data(), 100) == 100 && PAudio::replayedBlocks() == 3, "a replayed block is not waited for: the next replay is immediate");
@@ -557,13 +562,18 @@ void testTimingDiagnostics() {
           "timing off: nothing recorded");
 
     PAudio::setTimingDiagnostics(true);
-    // Prompt: one interrupt, answered at once.
+    // Prompt: one interrupt, answered at once. The measured delay can be no longer than the time
+    // this test spent between raising and registering (measured here, so host load does not
+    // matter), plus a little for the clock reads.
+    const auto promptStart = std::chrono::steady_clock::now();
     interrupt();
     AIInitDMA(reinterpret_cast<uintptr_t>(blockA), sizeof(blockA));
+    const std::int64_t promptUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - promptStart).count();
     const PAudio::TimingStats quick = PAudio::takeTimingStats();
     check(quick.generationsPerRegistration == 1 && quick.registrationsMissingBlocks == 0, "a prompt registration answers one interrupt");
-    check(quick.latestRaiseToRegisterUs < 2000 && quick.oldestRaiseToRegisterUs == quick.latestRaiseToRegisterUs,
-          "prompt: latest and oldest are the same interrupt");
+    check(quick.latestRaiseToRegisterUs <= promptUs + 1000 && quick.oldestRaiseToRegisterUs == quick.latestRaiseToRegisterUs,
+          "prompt: latest and oldest are the same interrupt, measured within the time taken");
 
     // Late across blocks: two interrupts go by (the first block was
     // replayed), then the registration comes 20 ms after the second.

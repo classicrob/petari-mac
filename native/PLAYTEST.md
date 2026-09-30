@@ -327,18 +327,39 @@ Repeatable scenario script (observe between steps; do not run blind coordinates)
    observatory through normal UI; this fixture supplies post-tutorial progression.
 2. Exercise WASD, Space, F, Q/E and C. Compare pointer placement before/after window
    resize; test fullscreen followed by at least 20 seconds of gameplay, focus loss
-   and focus regain. Test a single Escape/Minus tap to pause and another to resume. Check that inputs release.
+   and focus regain. Save `build/list-app-windows <own-petari-pid>` output before
+   fullscreen, during fullscreen, after restoring windowed mode, and immediately
+   after any failed click, using distinct timestamped files beside the screenshots.
+   This helper is read-only. Compare window bounds/order with the screenshot before
+   attributing a click failure to SDL or CUA. Record whether a game controller is
+   attached and the evidence used; silence in device logs does not prove absence.
+   Test a single Escape/Minus tap to pause and another to resume. Check that inputs release.
 3. Follow visible paths to the Terrace. Interact with its Pull Star, select Good
    Egg, wait for any first-time reveal, and select mission 1.
 4. Try movement/jump/spin, pointer/Star Bit collection and shooting, NPC dialogue,
    launch stars and pause/resume. Attempt the mission and return-to-observatory UI.
-5. Quit using F1 → Quit or the normal window close/power path. Check a zero exit
-   and save writes. Relaunch as the next numbered session and verify the same file
-   and any earned progress; do not infer save persistence merely from fixture state.
-6. Quit the final session. Run `python3 native/tools/cu_playtest.py --summarize`
+5. Return to the observatory through the pause menu, then select Quit and confirm
+   “Save your progress and quit?” Capture the save result before closing the app
+   with Cmd+Q or F1 → Quit. Allow at least two minutes before the session deadline
+   for these steps. Check a zero exit and save writes. Relaunch as the next numbered
+   session and verify the same file and any earned progress; do not infer save
+   persistence merely from fixture state or a changed save-file hash.
+6. Quit the final session. Run `build/locked-build.sh cu-playtest python3 native/tools/cu_playtest.py --summarize`
    to refresh `build/cu-playtest/analysis.json` without launching anything.
    Write a prioritized issue/coverage report at
    `build/cu-playtest/REPORT.md`, linking screenshots and timestamped log context.
+
+Good Egg mission 1 landmark route, verified with real held input in session 12:
+walk off the first disk's rim to its underside, then go toward the green pipe.
+Approach the central stem on the pipe-facing side, approximately a quarter turn
+around from the question block. The question-block face is a wall. Enter the
+narrow curved brick ramp with sidewalls and keep walking up the stem to its end
+cap. Talk to the Luma there to create a Sling Star. Center under it and spin;
+spin again when caught by the Launch Star to fly to Peanut. Short repeated F taps
+completed this sequence in the playtest; a long screenshot gap between the two
+spins can miss the activation window. The stone bridge with the Star Bit crystal
+is a dead end and is not required for this route. Observe after every movement
+batch rather than replaying fixed coordinates through rotating gravity/camera.
 
 Report observed facts separately from likely causes and untested scenarios. A
 screenshot is not continuous video, and device/audio counters are not a listening

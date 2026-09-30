@@ -22,7 +22,10 @@ def patch(text):
     return nullptr;
   }
   bool schemaMatch = false;''')
-    replace('static void seed_pipeline_cache() {', 'static void seed_pipeline_cache_path(const std::string& seedPath) {')
+    replace('static void seed_pipeline_cache() {',
+            'static void seed_pipeline_cache_path(const std::string& seedPath, bool speculative = false) {')
+    replace('          .firstFrameUsed = static_cast<uint32_t>(firstFrameUsedValue),',
+            '          .firstFrameUsed = speculative ? UINT32_MAX : static_cast<uint32_t>(firstFrameUsedValue),')
     replace('  const auto seedPath = pipeline_cache_seed_path();\n', '')
     replace('  seed_pipeline_cache();', '  seed_pipeline_cache_path(pipeline_cache_seed_path());\n  petari_seed_global();')
     replace('static void start_pipeline_cache_writer() {',
@@ -87,6 +90,8 @@ def patch(text):
     replace('  stop_pipeline_cache_writer();',
             '  petari_pipeline_summary();\n  petariPipelineSamples.clear();\n'
             '  petariSkippedDraws.store(0, std::memory_order_relaxed);\n  stop_pipeline_cache_writer();')
+    replace('  petariSkippedDraws.store(0, std::memory_order_relaxed);',
+            '  petariSkippedDraws.store(0, std::memory_order_relaxed);\n  petariFailedPipelines = 0;')
 
     replace('  g_pipelineLayoutKey = scene.key;', '''  g_pipelineLayoutKey = scene.key;
   // Clear masks form a finite family. Queue all of them before route-derived

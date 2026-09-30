@@ -6,9 +6,9 @@
 
 run: freezes a private copy of the app bundle (build/soak/<name>/app), makes a
 fresh stage fixture (build/soak/<name>/user, NAND copied from --source), and
-runs PETARI_SMOKE=soak (native/app/smoke_soak.hpp) on the sweep app lane
-(build/locked-sweep-lane.sh, owner "soak") with a lock timeout of at most
-7500 s. Each cycle: stage (rotating through --stages), pause "Back to the
+runs PETARI_SMOKE=soak (native/app/smoke_soak.hpp) on the soak lane
+(build/locked-soak-lane.sh, owner "soak"; --lane to change) with a lock
+timeout of at most 7500 s. Each cycle: stage (rotating through --stages), pause "Back to the
 Comet Observatory", observatory, pause "End Game" with a save, title, reload.
 Telemetry (native/app/soak_telemetry.hpp): soak.csv every --interval seconds,
 soak.csv.heaps.csv (every JKR heap), frames.csv (every frame, written at
@@ -87,7 +87,7 @@ def run(args):
         "PETARI_PIPELINE_GLOBAL_PRECOMPILE": "0",
         "PETARI_LOCK_TIMEOUT": str(min(7500, int(args.minutes * 60) + 900)),
     })
-    command = [str(BUILD / "locked-sweep-lane.sh"), "soak", str(app / "Contents/MacOS/Petari"), "--disc",
+    command = [str(BUILD / args.lane), "soak", str(app / "Contents/MacOS/Petari"), "--disc",
                str(BUILD / "game-data/RMGE01"), "--user", str(user), "--test-fixture", "stage"]
     (out / "command.json").write_text(json.dumps({"command": command, "env": {k: env[k] for k in env if k.startswith("PETARI_")},
                                                   "started": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2))
@@ -405,6 +405,8 @@ def main():
     r.add_argument("--source", type=Path, default=BUILD / "observatory-user-2", help="user directory whose NAND is copied")
     r.add_argument("--app", type=Path, default=DEFAULT_APP)
     r.add_argument("--force", action="store_true")
+    r.add_argument("--lane", default="locked-soak-lane.sh",
+                   help="lock script under build/ (the soak lane runs beside the stage sweep)")
     a = sub.add_parser("analyze")
     a.add_argument("--name", required=True)
     a.add_argument("--warmup", type=float, default=10)
