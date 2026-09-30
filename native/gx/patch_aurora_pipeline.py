@@ -69,9 +69,15 @@ def patch(text):
   petari_note_variant(runtimeKey, runtimeKey, type, priority);
   return find_pipeline_impl(runtimeKey,
       [config] { return CompiledPipeline{.main = rmlui::create_pipeline(config)}; }, priority);''')
-    replace('return resolve_pipeline(ShaderType::GX, config, layout, PipelinePriority::Normal);',
-            'return resolve_pipeline(ShaderType::GX, config, layout, PetariPipeline::asynchronous()\n'
+    replace('  return resolve_pipeline(ShaderType::GX, config, layout, PipelinePriority::Normal);',
+            '  const PetariPipeline::BoundedDrawScope petariBoundedDraw{!PetariPipeline::unboundedBlocking()};\n'
+            '  return resolve_pipeline(ShaderType::GX, config, layout, PetariPipeline::asynchronous()\n'
             '      ? PipelinePriority::Normal : PipelinePriority::Blocking);')
+    # Bounded GX draws wait only within the frame budget; clear/UI pipelines still block.
+    replace('''    g_pipelineReadyCv.wait(lock, [=] { return g_pipelines.contains(runtimeKey) || g_pipelineThreadEnd; });''',
+            '''    const auto petariReady = [=] { return g_pipelines.contains(runtimeKey) || g_pipelineThreadEnd; };
+    if (PetariPipeline::boundedDraw) petari_bounded_draw_wait(lock, petariReady);
+    else g_pipelineReadyCv.wait(lock, petariReady);''')
     replace('return resolve_pipeline(ShaderType::Clear, config, layout, PipelinePriority::Normal);',
             'return resolve_pipeline(ShaderType::Clear, config, layout, PipelinePriority::Blocking);')
 
@@ -92,7 +98,8 @@ def patch(text):
             '  petari_pipeline_summary();\n  petariPipelineSamples.clear();\n'
             '  petariSkippedDraws.store(0, std::memory_order_relaxed);\n  stop_pipeline_cache_writer();')
     replace('  petariSkippedDraws.store(0, std::memory_order_relaxed);',
-            '  petariSkippedDraws.store(0, std::memory_order_relaxed);\n  petariFailedPipelines = 0;')
+            '  petariSkippedDraws.store(0, std::memory_order_relaxed);\n  petariFailedPipelines = 0;\n'
+            '  petariDeferredDraws = 0;')
 
     replace('  g_pipelineLayoutKey = scene.key;', '''  g_pipelineLayoutKey = scene.key;
   // Clear masks form a finite family. Queue all of them before route-derived
@@ -126,7 +133,8 @@ def patch(text):
             '  petari_note_stage_config(xxh3_hash(config, static_cast<HashType>(ShaderType::GX)),\n'
             '      xxh3_hash(layout.key, xxh3_hash(config, static_cast<HashType>(ShaderType::GX))));\n'
             '  remember_pipeline_config(ShaderType::GX, config, current_frame(), true);')
-    replace('void begin_pipeline_frame() {', 'void begin_pipeline_frame() {\n  petari_stage_flush_logs();')
+    replace('void begin_pipeline_frame() {',
+            'void begin_pipeline_frame() {\n  petari_stage_flush_logs();\n  petari_pipeline_frame_budget();')
     replace('  petari_pipeline_summary();', '  petari_stage_flush_logs();\n  petari_stage_reset();\n  petari_pipeline_summary();')
     text += '\n' + (here / 'pipeline_stage.inc').read_text()
     text += '''

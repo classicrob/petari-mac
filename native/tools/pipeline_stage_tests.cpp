@@ -146,8 +146,12 @@ int main() {
     unsetenv("PETARI_PIPELINE_SEED_DIR");
     g_knownPipelines.emplace(1, KnownPipeline{ShaderType::GX, gx::PipelineConfig{13, 1}, 0});
     unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
+    require(PetariPipeline::backgroundGlobalPrecompile() && !PetariPipeline::globalPrecompile(),
+            "background global preparation must be the default, without the blocking screen");
+    setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "0", 1);
     petari_gx_pipeline_background_begin();
-    require(petariStages.empty(), "background global preparation must be opt-in");
+    require(petariStages.empty(), "explicit 0 must disable background global preparation");
+    unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     petari_gx_pipeline_stage_begin("AstroGalaxy", nullptr);
     const auto originalCount = g_pipelineQueue.size();
     require(originalCount == 18, "expected eight clear masks and one GX in two layouts");
@@ -209,8 +213,21 @@ int main() {
             "missing stage seed promoted global background work");
     unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     petari_stage_reset();
+    // A cold stage must not freeze scene start: the gate gives up after its short budget.
+    g_pipelineQueue.clear(); g_backgroundPipelineQueue.clear(); g_pipelines.clear();
+    petari_gx_pipeline_stage_begin("ColdStage", nullptr);
+    require(!g_pipelineQueue.empty(), "cold stage queued nothing");
+    const auto gateStart = PetariPipeline::Clock::now();
+    petari_gx_pipeline_stage_wait();
+    const auto gateWaited = PetariPipeline::Clock::now() - gateStart;
+    require(gateWaited >= PetariPipeline::stageGateBudget() - std::chrono::milliseconds(5) &&
+            gateWaited < PetariPipeline::stageGateBudget() + std::chrono::milliseconds(500) &&
+            PetariPipeline::stageGateBudget() <= std::chrono::milliseconds(2000),
+            "stage gate did not proceed after its short default budget");
+    petari_stage_reset();
+    g_pipelineQueue.clear();
     manifestFailureTest();
     petari_gx_pipeline_report();
     require(summaryCalls == 1, "explicit pipeline report did not reach summary");
-    std::puts("Stage preparation: manifest failure counter, idempotence, additive overlays, first-use tags, ready gate and priority demotion pass");
+    std::puts("Stage preparation: manifest failure counter, idempotence, additive overlays, first-use tags, ready gate, short cold gate and priority demotion pass");
 }

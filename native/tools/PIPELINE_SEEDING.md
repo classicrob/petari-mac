@@ -1,9 +1,47 @@
 # Pipeline preparation and diagnostics
 
-Blocking GX rendering remains the default. `PETARI_PIPELINE_POLICY=async` opts
-into Aurora's existing skip-draw path while a pipeline is pending. This can
-hide geometry or effects for an unbounded number of frames under load; it is
-an experiment requiring visual review, not a correctness-preserving default.
+## Default startup (2026-09-30): no preparation screen
+
+The game starts at once. Nothing waits for the shader backlog:
+
+- **Background global preparation is the default.** Unset (or `background`)
+  `PETARI_PIPELINE_GLOBAL_PRECOMPILE` queues the bundled global seed at background
+  priority before the game thread starts. `1` restores the blocking, skippable
+  full-preparation screen (six startup workers); `0` disables global work.
+- **Scene first.** A stage/overlay begin moves that scene's manifest ahead of the
+  global backlog; a draw that needs a pending pipeline jumps to the front of all
+  queued work. While the game runs, at most `max(1, workers / 2)` global-backlog
+  compiles run at once (utility QoS); stage and draw requests may use every worker
+  (user-initiated QoS). Game threads are user-interactive, VI/audio real-time.
+- **Bounded draws.** A GX draw whose pipeline is still compiling waits only within a
+  per-frame budget (`PETARI_PIPELINE_DRAW_BUDGET_MS`, default 6, reset each frame),
+  then the draw is skipped until the compile lands (pop-in instead of a freeze).
+  Clear and UI pipelines always block. `PETARI_PIPELINE_POLICY=blocking` restores
+  unbounded GX waits; `async` skips without waiting. Shutdown reports
+  `skipped_draws` (encoded draws dropped) and `deferred_draws` (draw requests whose
+  budget ran out) in `[gx pipeline summary]`, plus per-config `[gx pipeline miss]`.
+- **Short stage gate.** Scene start waits for the stage manifest at most
+  `PETARI_STAGE_GATE_MS` (default 1500, max 10000); nothing needs the gate for
+  correctness, it only trims pop-in when compiles are nearly done.
+- **Per-machine cache.** A normal launch keeps `pipeline_cache.db` and `dawn_cache.db`
+  in `~/Library/Caches/Petari`, not the `--user` directory, so copying or switching
+  saves stays warm (Metal's own cache was already per machine). The first launch
+  adopts an existing `<user>` cache once. A second concurrent normal launch, and every
+  test run (fixtures, `PETARI_SMOKE`, unlocked-save, marked user dirs), keeps the old
+  `<user>` location; background smoke runs keep `<user>/cache`. `PETARI_CACHE_DIR`
+  overrides all of these. The chosen directory is logged as `[gx pipeline cache]`.
+
+Tools that pin `PETARI_PIPELINE_GLOBAL_PRECOMPILE=0` (stage_sweep, soak, cu_playtest)
+still get bounded draws and the short gate; set `PETARI_PIPELINE_POLICY=blocking`
+where a run must reproduce the old stall-instead-of-skip behavior.
+
+The rest of this document records the earlier blocking-default history; statements
+there about the default policy, the ten-second gate and the preparation screen
+describe the builds they measured.
+
+`PETARI_PIPELINE_POLICY=async` opts into Aurora's existing skip-draw path while a
+pipeline is pending, with no wait at all. This can hide geometry or effects for an
+unbounded number of frames under load.
 `PETARI_PIPELINE_THREADS=1..4` sets the compile pool. The automatic size is performance cores minus four,
 clamped to 1–4 workers (four on the measurement M4 Max). Full startup preparation
 uses `clamp(performance_cores / 2, 4, 6)` workers: six on the 12-performance-core
@@ -51,7 +89,8 @@ contain raw versioned config structs, not Metal binaries. Re-export when the
 Aurora config ABI changes. Use trusted locally generated caches.
 
 `petari_gx_pipeline_stage_wait()` waits for the current stage plus overlay targets
-for at most ten seconds, prints residual wait/pending/failed counts, and proceeds.
+for at most `PETARI_STAGE_GATE_MS` (default 1.5 s; ten seconds before 2026-09-30),
+prints residual wait/pending/failed counts, and proceeds.
 The caller must release the emulated CPU baton around this host wait. After a
 stage-gate timeout, later Blocking draws can still wait for pending compiles.
 The timeout therefore prevents an infinite stage gate, not every gameplay stall.

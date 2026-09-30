@@ -247,7 +247,9 @@ extern "C" void petari_gx_pipeline_stage_wait() {
       return g_pipelineThreadEnd || petariActiveStage != name ||
           std::all_of(targets.begin(), targets.end(), [](auto key) { return g_pipelines.contains(key); });
     };
-    complete = g_pipelineReadyCv.wait_until(lock, start + std::chrono::seconds(10), ready);
+    // Short by default (PETARI_STAGE_GATE_MS): unready draws wait within the
+    // per-frame budget and are then skipped, so the gate only trims pop-in.
+    complete = g_pipelineReadyCv.wait_until(lock, start + PetariPipeline::stageGateBudget(), ready);
     for (const auto key : targets) {
       const auto found = g_pipelines.find(key);
       if (found == g_pipelines.end()) ++pending;

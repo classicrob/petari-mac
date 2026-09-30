@@ -24,7 +24,8 @@ static void pipeline_worker(unsigned workerIndex = 0) {
       if (g_hasPipelineThread) {
         g_pipelineQueueCv.wait(lock, [workerIndex] {
           return workerIndex >= petariActiveWorkers || !g_pipelineQueue.empty() ||
-                 !g_backgroundPipelineQueue.empty() || g_pipelineThreadEnd;
+                 (!g_backgroundPipelineQueue.empty() && petariBackgroundInFlight < petariBackgroundCap) ||
+                 g_pipelineThreadEnd;
         });
       } else if (g_pipelineQueue.empty() && g_backgroundPipelineQueue.empty()) {
         return;
@@ -34,6 +35,7 @@ static void pipeline_worker(unsigned workerIndex = 0) {
       auto& source = background ? g_backgroundPipelineQueue : g_pipelineQueue;
       pending = std::move(source.front());
       source.pop_front();
+      petariBackgroundInFlight += background;
       petariPipelineSamples[pending.hash].started = PetariPipeline::Clock::now();
     }
     if (g_hasPipelineThread) PetariPipeline::compilationQoS(background);
@@ -55,7 +57,10 @@ static void pipeline_worker(unsigned workerIndex = 0) {
       sample = stored;
       g_pipelines.try_emplace(pending.hash, std::move(result));
       g_pendingPipelines.erase(pending.hash);
+      petariBackgroundInFlight -= background;
     }
+    // A backlog slot opened; a worker parked by the cap may take the next job.
+    if (background) g_pipelineQueueCv.notify_one();
     if (!g_hasPipelineThread) g_pipelinesPerFrame += std::max(1u, pipelineCount);
     notify_pipeline_ready(true, pipelineCount);
     petari_global_progress();

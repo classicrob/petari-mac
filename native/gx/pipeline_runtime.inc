@@ -32,6 +32,15 @@ static std::atomic<unsigned> petariPipelineWaiters{0};
 static std::atomic<uint64_t> petariSkippedDraws{0};
 static uint32_t petariFailedPipelines = 0; // guarded by g_pipelineMutex
 static unsigned petariActiveWorkers = PetariPipeline::workerCount(); // guarded by g_pipelineMutex
+// Global-backlog jobs compiling now, and how many may run at once (guarded by
+// g_pipelineMutex). The blocking full-preparation screen lifts the cap until it ends.
+static unsigned petariBackgroundInFlight = 0;
+// Bounded GX draw waits: remaining wait this frame, and draws whose pipeline was
+// still compiling when the budget ran out (encoded as skips until it lands).
+static PetariPipeline::Clock::duration petariDrawBudgetLeft = PetariPipeline::drawWaitBudget();
+static uint64_t petariDeferredDraws = 0;
+static unsigned petariBackgroundCap =
+    PetariPipeline::globalPrecompile() ? ~0u : PetariPipeline::backgroundWorkerCap();
 
 extern "C" void petari_gx_pipeline_startup_finished() {
   unsigned previous, current;
@@ -39,10 +48,12 @@ extern "C" void petari_gx_pipeline_startup_finished() {
     std::lock_guard lock{g_pipelineMutex};
     previous = petariActiveWorkers;
     current = petariActiveWorkers = PetariPipeline::workerCount();
+    petariBackgroundCap = PetariPipeline::backgroundWorkerCap();
   }
   g_pipelineQueueCv.notify_all();
-  std::fprintf(stderr, "[gx pipeline pool] startup_finished=1 previous_workers=%u background_workers=%u extra_inflight=drain\n",
-               previous, current);
+  std::fprintf(stderr, "[gx pipeline pool] startup_finished=1 previous_workers=%u background_workers=%u "
+               "global_backlog_concurrency=%u extra_inflight=drain\n",
+               previous, current, PetariPipeline::backgroundWorkerCap());
 }
 
 
@@ -95,6 +106,21 @@ struct PetariPipelineWait {
   }
 };
 
+template <typename Ready>
+static void petari_bounded_draw_wait(std::unique_lock<std::mutex>& lock, Ready ready) {
+  if (petariDrawBudgetLeft > PetariPipeline::Clock::duration::zero()) {
+    const auto start = PetariPipeline::Clock::now();
+    g_pipelineReadyCv.wait_until(lock, start + petariDrawBudgetLeft, ready);
+    petariDrawBudgetLeft -= std::min(petariDrawBudgetLeft, PetariPipeline::Clock::now() - start);
+  }
+  if (!ready()) ++petariDeferredDraws;
+}
+
+static void petari_pipeline_frame_budget() {
+  std::lock_guard lock{g_pipelineMutex};
+  petariDrawBudgetLeft = PetariPipeline::drawWaitBudget();
+}
+
 static void petari_pipeline_summary() {
   uint64_t missedConfigs = 0, skipped = 0, unfinished = 0, failed = 0;
   double maxPendingMs = 0;
@@ -117,9 +143,10 @@ static void petari_pipeline_summary() {
         pending ? "pending" : sample.failed ? "failed" : "ready");
   }
   std::fprintf(stderr,
-      "[gx pipeline summary] policy=%s skipped_draws=%llu missed_configs=%llu unfinished=%llu "
+      "[gx pipeline summary] policy=%s skipped_draws=%llu deferred_draws=%llu missed_configs=%llu unfinished=%llu "
       "failed_compiles=%llu pending_compiles=%zu terminal_compiles=%zu max_first_skip_to_terminal_or_exit_ms=%.3f\n",
-      PetariPipeline::asynchronous() ? "async" : "blocking", static_cast<unsigned long long>(skipped),
+      PetariPipeline::asynchronous() ? "async" : PetariPipeline::unboundedBlocking() ? "blocking" : "bounded",
+      static_cast<unsigned long long>(skipped), static_cast<unsigned long long>(petariDeferredDraws),
       static_cast<unsigned long long>(missedConfigs), static_cast<unsigned long long>(unfinished),
       static_cast<unsigned long long>(failed), g_pendingPipelines.size(), g_pipelines.size(), maxPendingMs);
 }

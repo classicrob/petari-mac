@@ -131,6 +131,65 @@ void retirementTest() {
     waitReady(2);
     stop(workers);
 }
+void backgroundCapTest() {
+    petariActiveWorkers = 2;
+    petariBackgroundCap = 1;
+    std::promise<void> startedA, release;
+    std::atomic<bool> startedB{false}, startedC{false};
+    auto gate = release.get_future().share();
+    enqueue(51, true, [&] { startedA.set_value(); gate.wait(); return CompiledPipeline{true}; });
+    enqueue(52, true, [&] { startedB = true; return CompiledPipeline{true}; });
+    std::vector<std::thread> workers;
+    workers.emplace_back(pipeline_worker, 0u);
+    workers.emplace_back(pipeline_worker, 1u);
+    require(startedA.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready, "backlog job did not start");
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    require(!startedB, "second backlog job exceeded the gameplay concurrency cap");
+    enqueue(53, false, [&] { startedC = true; return CompiledPipeline{true}; });
+    {
+        std::unique_lock lock(g_pipelineMutex);
+        require(g_pipelineReadyCv.wait_for(lock, std::chrono::seconds(5), [] { return g_pipelines.count(53) != 0; }),
+                "requested job waited behind the backlog cap");
+    }
+    require(!startedB, "cap released early");
+    release.set_value();
+    waitReady(3);
+    require(startedB && petariBackgroundInFlight == 0, "backlog did not resume after its slot opened");
+    stop(workers);
+    petariBackgroundCap = PetariPipeline::backgroundWorkerCap();
+}
+void boundedDrawTest() {
+    // Nothing compiles: the first wait spends the frame budget, the next one skips at once.
+    const auto ready = [] { return g_pipelines.count(61) != 0; };
+    const auto before = petariDeferredDraws;
+    petari_pipeline_frame_budget();
+    std::unique_lock lock(g_pipelineMutex);
+    auto start = PetariPipeline::Clock::now();
+    petari_bounded_draw_wait(lock, ready);
+    const auto first = PetariPipeline::Clock::now() - start;
+    start = PetariPipeline::Clock::now();
+    petari_bounded_draw_wait(lock, ready);
+    const auto second = PetariPipeline::Clock::now() - start;
+    lock.unlock();
+    require(first >= PetariPipeline::drawWaitBudget() - std::chrono::microseconds(200) &&
+            first < PetariPipeline::drawWaitBudget() + std::chrono::milliseconds(50), "first draw wait ignored the budget");
+    require(second < std::chrono::milliseconds(2), "exhausted frame budget still waited");
+    require(petariDeferredDraws == before + 2, "deferred draws not counted");
+    // A new frame restores the budget; a compile landing inside it is not deferred.
+    petari_pipeline_frame_budget();
+    std::thread finisher([] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::lock_guard guard(g_pipelineMutex);
+        g_pipelines[61] = CompiledPipeline{true};
+        g_pipelineReadyCv.notify_all();
+    });
+    lock.lock();
+    petari_bounded_draw_wait(lock, ready);
+    lock.unlock();
+    finisher.join();
+    require(petariDeferredDraws == before + 2, "ready pipeline counted as deferred");
+    g_pipelines.clear();
+}
 void progressTest() {
     enqueue(31, true, [] { return CompiledPipeline{false}; });
     uint32_t total, pending, failed;
@@ -148,14 +207,15 @@ int main(int argc, char** argv) {
     const bool expectAsync = argc == 2 && std::strcmp(argv[1], "async") == 0;
     aurora::gfx::require(PetariPipeline::asynchronous() == expectAsync, "pipeline policy is not opt-in");
     if (!std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE"))
-        aurora::gfx::require(PetariPipeline::globalPrecompile(), "full global preparation must be the default");
+        aurora::gfx::require(!PetariPipeline::globalPrecompile() && PetariPipeline::backgroundGlobalPrecompile(),
+                             "background preparation (no blocking screen) must be the default");
     setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "0", 1);
     aurora::gfx::require(!PetariPipeline::globalPrecompile() && !PetariPipeline::backgroundGlobalPrecompile(), "off override ignored");
     setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "background", 1);
     aurora::gfx::require(!PetariPipeline::globalPrecompile() && PetariPipeline::backgroundGlobalPrecompile(), "background override ignored");
     setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "1", 1);
-    aurora::gfx::require(PetariPipeline::globalPrecompile(), "explicit full preparation ignored");
-    unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
+    aurora::gfx::require(PetariPipeline::globalPrecompile() && !PetariPipeline::backgroundGlobalPrecompile(),
+                         "explicit full preparation ignored");
     for (const auto cores : {0u, 1u, 2u, 4u, 6u, 8u, 9u})
         aurora::gfx::require(PetariPipeline::defaultStartupWorkerCount(cores) == 4,
                              "small-core startup default must remain four");
@@ -178,11 +238,15 @@ int main(int argc, char** argv) {
     aurora::gfx::require(PetariPipeline::startupWorkerCount() == 10, "startup tuning override ignored");
     setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "background", 1);
     aurora::gfx::require(PetariPipeline::startupWorkerCount() == PetariPipeline::workerCount(), "background used startup pool");
+    unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
+    aurora::gfx::require(PetariPipeline::startupWorkerCount() == PetariPipeline::workerCount(), "default used startup pool");
     unsetenv("PETARI_PIPELINE_STARTUP_THREADS");
     unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     aurora::gfx::priorityTest();
     aurora::gfx::parallelTest();
     aurora::gfx::progressTest();
     aurora::gfx::retirementTest();
-    std::puts("Pipeline worker: requested priority, concurrent progress, isolated timing state and shutdown pass");
+    aurora::gfx::backgroundCapTest();
+    aurora::gfx::boundedDrawTest();
+    std::puts("Pipeline worker: requested priority, concurrent progress, isolated timing state, backlog cap, bounded draw waits and shutdown pass");
 }

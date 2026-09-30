@@ -27,6 +27,7 @@
 #include "host.hpp"
 #include "smoke_background.hpp"
 #include "smoke_storage.hpp"
+#include "pipeline_cache_dir.hpp"
 #include <petari/host_allocation.hpp>
 
 extern "C" void petari_gx_pipeline_background_begin();
@@ -177,6 +178,10 @@ bool resolvePaths(int argc, char** argv, App::Paths* paths) {
 }
 
 bool prepareKnownPipelines(SDL_Window* window) {
+    // The blocking preparation screen is opt-in (PETARI_PIPELINE_GLOBAL_PRECOMPILE=1).
+    // By default the game starts at once; the scene being loaded compiles first and
+    // everything else compiles in the background while playing.
+    if (!petari_gx_pipeline_full_preparation()) return true;
     return App::preparePipelines(window);
 }
 
@@ -257,7 +262,17 @@ int main(int argc, char** argv) {
     AuroraConfig config{};
     config.appName = "Super Mario Galaxy";
     config.userPath = userPath.c_str();
-    const std::string cachePath = App::SmokeBackground::enabled ? smokeStorage.cache.string() : userPath;
+    App::PipelineCacheDir pipelineCache;
+    if (!App::SmokeBackground::enabled) {
+        const char* smoke = std::getenv("PETARI_SMOKE");
+        std::error_code markerError;
+        const bool testRun = PetariNative::TestFixture::observatory || (smoke && smoke[0] && smoke[0] != '0') ||
+            !PetariNative::UnlockedSave::variant.empty() ||
+            std::filesystem::exists(paths.user / ".petari-test-fixture", markerError);
+        pipelineCache.prepare(paths.user, testRun, std::getenv("PETARI_CACHE_DIR"));
+    }
+    const std::string cachePath = App::SmokeBackground::enabled ? smokeStorage.cache.string()
+                                                                : pipelineCache.path.string();
     config.cachePath = cachePath.c_str();
     config.desiredBackend = BACKEND_METAL;
     // The game paces itself on VI retraces; a blocking present would add a
@@ -298,8 +313,8 @@ int main(int argc, char** argv) {
         aurora_shutdown();
         return 0;
     }
-    // Opt-in (PETARI_PIPELINE_GLOBAL_PRECOMPILE=background): queue every known pipeline at
-    // background priority so it compiles while the game plays. A no-op otherwise.
+    // Default (unset or PETARI_PIPELINE_GLOBAL_PRECOMPILE=background): queue the global seed
+    // at background priority so it compiles while the game plays. A no-op for 0 or 1.
     petari_gx_pipeline_background_begin();
     // Audio opens on a game thread when the game starts AI DMA; initialize
     // SDL's audio subsystem here, on the main thread, first. The sink's own

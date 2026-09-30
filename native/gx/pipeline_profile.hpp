@@ -36,6 +36,42 @@ inline bool asynchronous() {
     }();
     return enabled;
 }
+// PETARI_PIPELINE_POLICY=blocking restores unbounded GX draw waits. The default
+// waits for a pending GX pipeline only within a small per-frame budget and then
+// skips that draw until its compile lands (clear pipelines always block).
+inline bool unboundedBlocking() {
+    static const bool enabled = [] {
+        const char* policy = std::getenv("PETARI_PIPELINE_POLICY");
+        return policy && std::strcmp(policy, "blocking") == 0;
+    }();
+    return enabled;
+}
+inline unsigned millisecondsSetting(const char* name, unsigned fallback, unsigned maximum) {
+    const char* value = std::getenv(name);
+    if (!value || !*value) return fallback;
+    char* end = nullptr;
+    const auto parsed = std::strtoul(value, &end, 10);
+    return end && *end == '\0' && parsed <= maximum ? static_cast<unsigned>(parsed) : fallback;
+}
+// Total time the GX recording thread may wait for pending pipelines per frame.
+inline Clock::duration drawWaitBudget() {
+    static const unsigned ms = millisecondsSetting("PETARI_PIPELINE_DRAW_BUDGET_MS", 6, 100);
+    return std::chrono::milliseconds(ms);
+}
+// Stage gate: how long scene start may wait for the stage manifest. Draws do not
+// need it for correctness; it only reduces pop-in when compiles are nearly done.
+inline Clock::duration stageGateBudget() {
+    static const unsigned ms = millisecondsSetting("PETARI_STAGE_GATE_MS", 1500, 10000);
+    return std::chrono::milliseconds(ms);
+}
+// Set on the GX recording thread while resolving a GX draw pipeline.
+inline thread_local bool boundedDraw = false;
+struct BoundedDrawScope {
+    explicit BoundedDrawScope(bool enabled) { boundedDraw = enabled; }
+    ~BoundedDrawScope() { boundedDraw = false; }
+    BoundedDrawScope(const BoundedDrawScope&) = delete;
+    BoundedDrawScope& operator=(const BoundedDrawScope&) = delete;
+};
 inline unsigned performanceCores() {
 #if defined(__APPLE__)
     unsigned cores = 0;
@@ -55,9 +91,10 @@ inline unsigned workerCount() {
     const auto count = std::strtoul(value, &end, 10);
     return end && *end == '\0' && count >= 1 && count <= 4 ? static_cast<unsigned>(count) : automatic;
 }
+// Blocking full preparation screen: opt-in only (PETARI_PIPELINE_GLOBAL_PRECOMPILE=1).
 inline bool globalPrecompile() {
     const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
-    return !value || !*value || std::strcmp(value, "1") == 0;
+    return value && std::strcmp(value, "1") == 0;
 }
 inline unsigned defaultStartupWorkerCount(unsigned performanceCoreCount) {
     return std::clamp(performanceCoreCount / 2, 4u, 6u);
@@ -72,10 +109,18 @@ inline unsigned startupWorkerCount() {
     const auto count = std::strtoul(value, &end, 10);
     return end && *end == '\0' && count >= normal && count <= 32 ? static_cast<unsigned>(count) : automatic;
 }
+// Default: start the game at once and compile the global union in the background.
 inline bool backgroundGlobalPrecompile() {
     const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
-    return value && std::strcmp(value, "background") == 0;
+    return !value || !*value || std::strcmp(value, "background") == 0;
 }
+// Concurrent global-backlog compiles while the game runs. Stage and draw
+// requests may use every worker; the speculative backlog leaves cores free.
+inline unsigned backgroundWorkerCap() {
+    return std::max(1u, workerCount() / 2);
+}
+// Game, render and audio threads run at user-interactive or real-time priority,
+// above both compile classes: stage/draw requests use user-initiated, the global backlog utility.
 inline void compilationQoS(bool background) {
 #if defined(__APPLE__)
     pthread_set_qos_class_self_np(background ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INITIATED, 0);
