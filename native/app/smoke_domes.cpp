@@ -34,7 +34,17 @@ constexpr float kWarpJump = 800.0f;
 constexpr unsigned long kEnterLimit = 900;
 constexpr unsigned long kJumpHold = 12;
 constexpr unsigned long kJumpSpinDelay = 16;
-constexpr float kKickReach = 200.0f;          // wall contact within this of the recorded one
+constexpr float kKickReach = 200.0f;          // wall contact within this (across gravity) of the recorded one
+constexpr float kKickReachHeight = 400.0f;    // and within this along gravity
+// A held through a wall-kick chain's hop and kicks, as in the recorded route
+// (27-33 frames): the jump and each kick rise higher while A is held.
+constexpr unsigned long kKickHold = 30;
+constexpr unsigned long kKickRepress = 2;  // frames between releasing a held A and the kick press
+// Before a kick chain's hop, walk into the first wall this long: a wall kick
+// leaves opposite to Mario's heading, so he must face the wall, whatever his approach.
+constexpr unsigned long kKickSettle = 10;
+constexpr float kKickLandingHeight = 60.0f;  // grounded this near the chain's landing level: it is done
+constexpr size_t kKickResumeWindow = 15;     // route points after the chain considered for resuming
 constexpr float kClingStill = 0.5f;           // per-frame movement of Mario clinging to a wall
 constexpr unsigned long kKickGroundLimit = 20;  // grounded this long: the kick chain fell short
 constexpr unsigned long kMapSettle = 30;
@@ -309,6 +319,10 @@ Step DomesDriver::step(const Observation& o) {
         }
     }
     if (mResult != Result::Running) return step;
+    if (mKickAt != 0 && mFrame >= mKickAt) {
+        tap(Button::A, kKickHold, step);
+        mKickAt = 0;
+    }
     if (mSpinAt != 0 && mFrame >= mSpinAt) {
         tap(Button::Spin, kTapFrames, step);
         mSpinAt = 0;
@@ -559,6 +573,33 @@ void DomesDriver::route(const Observation& o, Step& step) {
     }
     const Vec last{mLastX, mLastY, mLastZ};
     mLastX = pos.x; mLastY = pos.y; mLastZ = pos.z;
+    const auto steerAlong = [&](Vec leg) {
+        leg = across(leg, u);
+        if (length(leg) < 1e-3f || length(right) < 1e-3f || length(forward) < 1e-3f) {
+            steer({}, step);
+            return;
+        }
+        steer(stickKeysFor(dot(leg, scale(right, 1.0f / length(right))) * mSignRight,
+                           dot(leg, scale(forward, 1.0f / length(forward))) * mSignForward),
+              step);
+    };
+    if (mKickSettle > 0) {
+        // Walking into the first wall before the chain's hop (target is the Hop).
+        const DomeWaypoint& wall = points[mWaypoint + 1];
+        if (++mKickSettle <= kKickSettle) {
+            steerAlong(Vec{wall.x - target.x, wall.y - target.y, wall.z - target.z});
+            return;
+        }
+        mKickSettle = 0;
+        note("jump and spin at waypoint " + std::to_string(mWaypoint) + " from " + text(pos) + " (facing the wall)");
+        mAwaitJumpLanding = true;
+        tap(Button::A, kKickHold, step);
+        ++mWaypoint;
+        mBestDistance = 1e30f;
+        mStuckFrames = 0;
+        mPhaseFrames = 0;
+        return;
+    }
     if (target.action == DomeWaypoint::Kick) {
         // Steer along the recorded leg (into the wall), not at the contact
         // point: Mario rises past it, so the direction to it is unstable.
@@ -566,9 +607,19 @@ void DomesDriver::route(const Observation& o, Step& step) {
         const Vec leg = across(Vec{target.x - from.x, target.y - from.y, target.z - from.z}, u);
         const Vec contact = sub(Vec{target.x, target.y, target.z}, pos);
         const bool clinging = !o.playerOnGround && !o.playerInBind && length(sub(pos, last)) < kClingStill;
-        if (clinging && length(contact) < kKickReach) {
+        if (mPhaseFrames % 3 == 0) note("wall kick leg " + std::to_string(mWaypoint) + " at " + text(pos) + (o.playerOnGround ? " grounded" : ""));
+        if (clinging && length(across(contact, u)) < kKickReach && std::fabs(dot(contact, u)) < kKickReachHeight) {
             note("wall kick at waypoint " + std::to_string(mWaypoint) + " from " + text(pos));
-            tap(Button::A, kJumpHold, step);
+            // A may still be held from the hop or last kick: release it now and
+            // press again shortly (the recording re-pressed after 6 clinging frames).
+            const auto held = std::find_if(mReleases.begin(), mReleases.end(), [](const Release& r) { return r.button == Button::A; });
+            if (held != mReleases.end()) {
+                step.presses.push_back({Button::A, false});
+                mReleases.erase(held);
+                mKickAt = mFrame + kKickRepress;
+            } else {
+                tap(Button::A, kKickHold, step);
+            }
             ++mWaypoint;
             mKickGrounded = 0;
             mBestDistance = 1e30f;
@@ -577,6 +628,32 @@ void DomesDriver::route(const Observation& o, Step& step) {
             return;
         }
         mKickGrounded = o.playerOnGround ? mKickGrounded + 1 : 0;
+        size_t landing = mWaypoint;
+        while (landing < points.size() && points[landing].action == DomeWaypoint::Kick) ++landing;
+        if (mKickGrounded >= 2 && landing < points.size() &&
+            std::fabs(dot(Vec{points[landing].x - pos.x, points[landing].y - pos.y, points[landing].z - pos.z}, u)) < kKickLandingHeight) {
+            // Kicked onto the landing level early (a kick can end in a ledge grab on
+            // either side of the chimney): continue from the nearest of the next
+            // route points on that level, not necessarily the first.
+            size_t resume = landing;
+            float best = 1e30f;
+            for (size_t i = landing; i < points.size() && i < landing + kKickResumeWindow; ++i) {
+                const Vec d{points[i].x - pos.x, points[i].y - pos.y, points[i].z - pos.z};
+                if (points[i].action != DomeWaypoint::Walk || std::fabs(dot(d, u)) >= kKickLandingHeight) continue;
+                if (length(across(d, u)) < best) {
+                    best = length(across(d, u));
+                    resume = i;
+                }
+            }
+            note("wall-kick chain reached its landing level at " + text(pos) + "; continuing to waypoint " + std::to_string(resume));
+            mWaypoint = resume;
+            mKickGrounded = 0;
+            mAwaitJumpLanding = false;
+            mBestDistance = 1e30f;
+            mStuckFrames = 0;
+            mPhaseFrames = 0;
+            return;
+        }
         if (mKickGrounded >= kKickGroundLimit) {
             // Fell back without a kick: walk back to the chain's Hop and retry.
             size_t hop = mWaypoint;
@@ -601,13 +678,7 @@ void DomesDriver::route(const Observation& o, Step& step) {
                    step);
             return;
         }
-        if (length(leg) < 1e-3f || length(right) < 1e-3f || length(forward) < 1e-3f) {
-            steer({}, step);
-            return;
-        }
-        steer(stickKeysFor(dot(leg, scale(right, 1.0f / length(right))) * mSignRight,
-                           dot(leg, scale(forward, 1.0f / length(forward))) * mSignForward),
-              step);
+        steerAlong(leg);
         return;
     }
     if (distance < (target.action == DomeWaypoint::Warp ? kArriveWarp : kArrive) && height < kArriveHeight) {
@@ -619,6 +690,12 @@ void DomesDriver::route(const Observation& o, Step& step) {
         if (target.action != DomeWaypoint::Spin) mAwaitJumpLanding = false;
         if (target.action == DomeWaypoint::Spin) tap(Button::Spin, kTapFrames, step);
         if (target.action == DomeWaypoint::Jump || target.action == DomeWaypoint::Hop) {
+            const bool kickNext = mWaypoint + 1 < points.size() && points[mWaypoint + 1].action == DomeWaypoint::Kick;
+            if (kickNext && target.action == DomeWaypoint::Hop) {
+                mKickSettle = 1;
+                steerAlong(Vec{points[mWaypoint + 1].x - target.x, points[mWaypoint + 1].y - target.y, points[mWaypoint + 1].z - target.z});
+                return;
+            }
             mAwaitJumpLanding = true;
             // A held for full height, then a spin near the apex for the extra lift
             // the observatory's terrace steps (up to about 310 units) need.

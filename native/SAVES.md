@@ -223,5 +223,34 @@ near the doorway; it is now in the source route table.
 536 s) each record exit 0 and **5/5 visits PASS** on the frozen resume-18 app:
 full maps, every expected mission ID (Good Egg and Honeyhive 1–6, Battle Rock
 1–7, Space Junk 1–6, others 1), zero menu errors, missing references, crash or
-hang reports. Its Kitchen run was interrupted by a worker restart (no result). The remaining
-domes, Grand Finale and `complete-luigi` are being run in `resume-20/`.
+hang reports. Its Kitchen run was interrupted by a worker restart (no result).
+
+**Both variants, every dome, as Mario:** `build/unlocked-save/resume-20/`
+(frozen app sha256 `5838626048fe…`, source route table) records exit 0 and PASS
+for `grand-finale` Kitchen 5/5, Bedroom 5/5, Garden 4/4 and Engine Room 5/5,
+and `complete-luigi` Terrace, Fountain, Kitchen, Bedroom and Engine Room 5/5
+each plus Garden 4/4. Every map was complete and every mission menu matched the
+expected IDs (for example Dusty Dune 1–7, Buoy Base 1–2), with zero missing
+references and no crash or hang reports. So `grand-finale` passes 29 visits
+across all six domes (Terrace and Fountain above), and `complete-luigi`
+passes all six domes as Mario.
+
+The Engine Room wall-kick climb needed bounded retries in those runs (one or two
+failed attempts before success). Traces showed why: a kick leaves opposite to
+Mario's heading, and a good first kick ends in a ledge grab on the next wall's
+top, which is already the landing level. The driver now walks into the wall for
+10 frames before the hop, treats reaching the landing level as done, and
+resumes at the nearest later route point on that level; the route gained three
+points along the probed floor strip (x ≈ −2985) to skip a gap at x −3075,
+z −1725. With the source route table, `build/unlocked-save/resume-24/engine1..3`
+(frozen app sha256 `691c41b6…`) all record exit 0 and **5/5 PASS**, the kick
+chain succeeding first time in each, exact menus, no crash or hang. All three
+ended with the same east-wall ledge grab; the other observed outcome (a kick to
+the west ledge, which failed in `resume-23`) is handled by the nearest-point
+rule but only unit-tested, not yet seen live.
+
+**Still failing or unchecked:** the Grand Finale galaxy route
+(`resume-20/grand-finale-mario-dome7`, `resume-22/finale`): the Launch Star
+works, but the hand-planned walk on the small planet never reaches the Grand
+Finale Luma. A route recorded by a person is requested. Luigi as the player
+(`PETARI_SMOKE_PLAYER=luigi`) is not yet checked on either variant.

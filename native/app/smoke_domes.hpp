@@ -147,6 +147,8 @@ private:
     float mLastX = 0, mLastY = 0, mLastZ = 0;  // Mario's position on the previous route frame
     unsigned long mKickGrounded = 0;           // frames grounded while a wall kick is due
     int mKickRetries = 0;                      // wall-kick chain retries since the last walked point
+    unsigned long mKickAt = 0;                 // frame of a pending wall-kick press
+    unsigned long mKickSettle = 0;             // frames walked into the wall before a kick chain's hop
     // dome
     std::vector<Visit> mVisits;
     bool mMapRecorded = false;
