@@ -382,6 +382,7 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
     compile_status = re.findall(r"^\[gx pipeline compile\] .*status=(\w+)", text, re.M)
     queue_ms = [float(v) for v in re.findall(r"^\[gx pipeline compile\] .*? queue_ms=([\d.]+)", text, re.M)]
     build_ms = [float(v) for v in re.findall(r"^\[gx pipeline compile\] .*? build_ms=([\d.]+)", text, re.M)]
+    policy = re.findall(r"^\[gx pipeline\] policy=(\w+)", text, re.M)
     seed_line = re.findall(r"^PETARI SMOKE SHADER SEED: (.*)$", text, re.M)
     resolves = [float(v) for v in re.findall(r"^\[gx pipeline\] blocking resolve ([\d.]+) ms", text, re.M)]
     ready = re.findall(r"^\[gx stage ready\] stage=" + re.escape(stage) + r" residual_wait_ms=([\d.]+) pending=(\d+) failed=(\d+) result=(\w+)", text, re.M)
@@ -398,6 +399,7 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
         "compile_build_ms_total": round(sum(build_ms), 1),
         "compile_cache_hits": sum(1 for v in build_ms if v < 20.0),
         "shader_seed": seed_line[-1] if seed_line else None,
+        "pipeline_policy": policy[-1] if policy else None,
         "blocking_resolves": len(resolves),
         "blocking_resolve_max_ms": max(resolves) if resolves else 0.0,
         "stage_gate": [{"residual_wait_ms": float(a), "pending": int(b), "failed": int(c), "result": d} for a, b, c, d in ready],
@@ -549,6 +551,12 @@ def app_command(args, user, stage, scenario):
         # can block startup for ~20 min on a cold cache and competes with the
         # measured gameplay; off until the pipeline worker has evaluated it.
         "PETARI_PIPELINE_GLOBAL_PRECOMPILE": os.environ.get("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "0"),
+        # Renderer-coverage evidence (EFB captures, first-use/uncovered counts, blocking
+        # resolves) needs blocking draws: the default policy skips draws whose pipeline is
+        # still compiling after ~6 ms, which can hide renderer failures. "default" leaves
+        # the app's own default (functional pass/fail only). Recorded per run.
+        **({} if getattr(args, "pipeline_policy", "blocking") == "default"
+           else {"PETARI_PIPELINE_POLICY": args.pipeline_policy}),
     }
 
 
@@ -1015,6 +1023,9 @@ def main():
     run.add_argument("--shader-seed-dir", type=Path, default=REPO / "build/shader-seed",
                      help="canonical Metal shader seeds, one directory per app sha (read-only for runs; "
                           "stale or missing seeds fall back to the shared cache)")
+    run.add_argument("--pipeline-policy", choices=("blocking", "default"), default="blocking",
+                     help="PETARI_PIPELINE_POLICY for every run (default blocking: skipped draws cannot hide "
+                          "renderer failures; 'default' = the app's own policy, functional verdicts only)")
     run.add_argument("--publish-shader-seed", action="store_true",
                      help="publish the first clean PASS run's private Metal cache as this build's canonical seed")
     run.add_argument("--keep-user", action="store_true", help="also keep each run's Dawn blob cache")

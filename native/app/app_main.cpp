@@ -240,7 +240,10 @@ int main(int argc, char** argv) {
         // background QoS, which slows the game (~7% simulation rate, 5x game_work).
         // Declare the work user-initiated and latency critical, and raise this
         // thread (threads created later inherit it). Background mode only.
-        {
+        // PETARI_SMOKE_QOS=0 disables this for A/B measurement.
+        if (const char* qosEnv = std::getenv("PETARI_SMOKE_QOS"); qosEnv && qosEnv[0] == '0') {
+            std::fputs("PETARI SMOKE QOS: disabled by PETARI_SMOKE_QOS=0\n", stderr);
+        } else {
             const auto sendClass = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
             const auto makeString = reinterpret_cast<id (*)(id, SEL, const char*)>(objc_msgSend);
             const auto beginActivity = reinterpret_cast<id (*)(id, SEL, unsigned long long, id)>(objc_msgSend);

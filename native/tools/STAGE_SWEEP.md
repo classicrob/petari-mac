@@ -181,3 +181,23 @@ NAND, settings and crash/hang reports already use the explicit fixture directory
 Each scenario has its own log and frame CSV. Inherited soak/spike diagnostic
 paths are redirected to that scenario. Explicit additional diagnostic outputs
 must likewise be unique. Tracy is disabled in the current native build.
+
+## Pipeline policy, shader seed, contention
+
+- `--pipeline-policy blocking|default` (default `blocking`) sets `PETARI_PIPELINE_POLICY`.
+  The app's own default skips draws whose pipeline is uncompiled after ~6 ms and gates
+  stages for 1.5 s; skipped draws can hide renderer failures, so coverage evidence
+  (EFB captures, first-use/uncovered counts, blocking resolves) uses blocking.
+  `default` is for functional pass/fail only. The policy the app reported is stored in
+  `results.json` as `shaders.pipeline_policy`.
+- Canonical shader seed: `build/shader-seed/<app sha[:16]>/{seed.json,metal/dev.petari.Petari}`.
+  `run --publish-shader-seed` publishes the first clean PASS run's private Metal cache;
+  later runs on the same build get `PETARI_SHADER_SEED_DIR` and each instance APFS-clones it
+  (read-only source, private writes). The app re-checks `seed.json.exe_sha256` against its own
+  executable; a missing/stale seed logs `PETARI SMOKE SHADER SEED: canonical unusable` and
+  falls back to cloning the shared Darwin cache. `shaders.compile_*` fields record compile queue
+  and build time and cache-hit count (builds under 20 ms).
+- Background mode declares NSProcessInfo user-initiated + latency-critical activity and
+  user-interactive thread QoS (`PETARI SMOKE QOS:` line); `PETARI_SMOKE_QOS=0` disables it for A/B.
+- A runner timeout while `--jobs>1` or another Petari app was running is `INFRA_TIMEOUT`
+  (shared-machine contention, not a game failure; rerun quiet). A single quiet timeout stays `TIMEOUT`.
