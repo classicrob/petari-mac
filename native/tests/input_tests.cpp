@@ -226,31 +226,36 @@ void testControlsSummary() {
     const struct {
         const char* action;
         const char* inputs;
+        const char* pad;
     } expected[] = {
-        {"Move", "W A S D / left stick"},
-        {"Jump / confirm", "Space / Right mouse / Pad bottom"},
-        {"Start (title: A and B)", "Return / Keypad Enter / Pad top"},
-        {"Spin", "F / Pad left / Pad RB"},
-        {"Crouch / ground pound", "Shift / Pad LT"},
-        {"Star Pointer", "Mouse / right stick (R3: center)"},
-        {"Shoot Star Bits / back", "Left mouse / Backspace / Pad right / Pad RT"},
-        {"Grab (Pull Stars)", "Hold Space / Right mouse / Pad bottom on the target"},
-        {"Rotate camera", "Q / E"},
-        {"Recenter camera", "C / Pad LB"},
-        {"First-person view", "Up arrow / Pad D-pad up (leave: Down arrow / Pad D-pad down)"},
-        {"Walk slowly", "Hold Left Alt"},
-        {"Pause", "Escape / Pad Start / - / Pad Back"},
-        {"Star Ball / Ray", "W A S D tilt while riding"},
-        {"Tilt the remote by hand", "Hold Tab + W A S D"},
-        {"This menu", "F1 / Pad Guide"},
+        {"", "Keyboard and mouse", "Controller"},
+        {"Move", "W A S D", "left stick"},
+        {"Jump / confirm", "Space / Right mouse", "bottom"},
+        {"Start (title: A and B)", "Return / Keypad Enter", "top"},
+        {"Spin", "F", "left / RB"},
+        {"Crouch / ground pound", "Shift", "LT"},
+        {"Star Pointer", "Mouse", "right stick (R3: center)"},
+        {"Shoot Star Bits / back", "Left mouse / Backspace", "right / RT"},
+        {"Grab (Pull Stars)", "Hold Space / Right mouse on the target", "hold bottom"},
+        {"Rotate camera", "Q / E", "D-pad left / D-pad right"},
+        {"Recenter camera", "C", "LB"},
+        {"First-person view", "Up arrow (leave: Down arrow)", "D-pad up (leave: D-pad down)"},
+        {"Walk slowly", "Hold Left Alt", "push the stick part way"},
+        {"Pause", "Escape / -", "Start / Back"},
+        {"Star Ball / Ray", "W A S D tilt while riding", "left stick tilts while riding"},
+        {"Tilt the remote by hand", "Hold Tab + W A S D", ""},
+        {"This menu", "F1", "Guide"},
     };
-    for (const auto& e : expected) {
-        check(summaryOf(d, e.action) == e.inputs,
-              std::string("summary: ") + e.action + " = \"" + summaryOf(d, e.action) + "\"");
+    for (size_t i = 0; i < sizeof(expected) / sizeof(expected[0]) && i < d.size(); ++i) {
+        const auto& e = expected[i];
+        check(d[i].action == e.action && d[i].inputs == e.inputs && d[i].pad == e.pad,
+              std::string("summary line ") + std::to_string(i) + ": \"" + d[i].action + "\" = \"" + d[i].inputs +
+                  "\" | \"" + d[i].pad + "\"");
     }
     check(d.size() == sizeof(expected) / sizeof(expected[0]) && d.size() <= 20, "summary fits the Controls page");
     for (const In::ControlsLine& line : d) {
-        check(line.action.size() < 40 && line.inputs.size() < 64, "summary line fits the page's text fields: " + line.action);
+        check(line.action.size() < 40 && line.inputs.size() < 64 && line.pad.size() < 40,
+              "summary line fits the page's text fields: " + line.action);
     }
 
     // Remaps from controls.txt show, and unbound actions say so.
@@ -261,9 +266,19 @@ void testControlsSummary() {
                          &error),
           "remap parses: " + error);
     const std::vector<In::ControlsLine> r = In::controlsSummary(remapped);
-    check(summaryOf(r, "Move") == "I J K L / left stick", "remapped movement");
+    check(summaryOf(r, "Move") == "I J K L", "remapped movement");
     check(summaryOf(r, "Spin") == "Middle mouse", "remapped spin to a mouse button");
     check(summaryOf(r, "Crouch / ground pound") == "Left Shift", "only the left Shift left");
+    In::Bindings padOnly = In::Bindings::defaults();
+    check(padOnly.parse("Home=Pad:Back\nDpadLeft=Pad:LeftStick\n", &error), "pad-only remaps parse");
+    for (const In::ControlsLine& line : In::controlsSummary(padOnly)) {
+        if (line.action == "This menu") {
+            check(line.inputs == "(not bound)" && line.pad == "Back", "a controller-only action: keyboard column says so");
+        }
+        if (line.action == "Rotate camera") {
+            check(line.inputs == "- / E" && line.pad == "L3 / D-pad right", "rotate: no key on the left, the pad's L3");
+        }
+    }
     check(summaryOf(r, "Start (title: A and B)") == "(not bound)", "unbound Start");
     check(summaryOf(r, "Walk slowly") == "(not bound)", "unbound hold reads as not bound");
     check(summaryOf(r, "Pause") == "P", "remapped pause");
@@ -461,6 +476,30 @@ void testButtons() {
     rig.frame();
     check(button.testTriggerB(), "left mouse: B");
     In::mouseButtonEvent(In::MouseButton::Left, false);
+    rig.frames_(2);
+
+    // Command shortcuts do not reach the game; releases still do.
+    press(In::Key::LeftGui);
+    press(In::Key::Q);  // Cmd+Q
+    press(In::Key::F);
+    rig.frames_(2);
+    check(!button.testButtonLeft() && rig.hold() == 0, "Cmd+Q and Cmd+F do not turn the camera or spin");
+    lift(In::Key::Q);
+    lift(In::Key::F);
+    lift(In::Key::LeftGui);
+    press(In::Key::Space);
+    rig.frame();
+    press(In::Key::RightGui);
+    lift(In::Key::Space);  // released while Command is held
+    rig.frames_(2);
+    check(!button.testButtonA(), "a key released while Command is held is released");
+    lift(In::Key::RightGui);
+    press(In::Key::LeftCtrl);
+    press(In::Key::Q);  // Ctrl alone is not a macOS shortcut here
+    rig.frame();
+    check(button.testTriggerLeft(), "Ctrl+Q still turns the camera");
+    lift(In::Key::Q);
+    lift(In::Key::LeftCtrl);
     rig.frames_(2);
 
     // Remapping takes effect at once.
@@ -1863,6 +1902,37 @@ void testSdl3() {
     check(rig.hold() == 0, "SDL focus loss releases everything");
     focus.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
     In::SDL3::handleEvent(focus);
+    // Game controller events.
+    SDL_Event padDown{};
+    padDown.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    padDown.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH;
+    padDown.gbutton.down = true;
+    check(In::SDL3::handleEvent(padDown), "gamepad button consumed");
+    SDL_Event axis{};
+    axis.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+    axis.gaxis.axis = SDL_GAMEPAD_AXIS_LEFTY;
+    axis.gaxis.value = -32768;  // forward
+    check(In::SDL3::handleEvent(axis), "gamepad axis consumed");
+    rig.frames_(3);
+    check(rig.pad->mButton->testButtonA() && rig.pad->mStick->mStick.y > 0.97f, "SDL gamepad: south is A, left stick forward");
+    SDL_Event trigger{};
+    trigger.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+    trigger.gaxis.axis = SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+    trigger.gaxis.value = 32767;
+    In::SDL3::handleEvent(trigger);
+    rig.frames_(2);
+    check(rig.pad->mButton->testButtonB(), "SDL gamepad: right trigger is B");
+    SDL_Event paddle{};
+    paddle.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    paddle.gbutton.button = SDL_GAMEPAD_BUTTON_MISC1;
+    paddle.gbutton.down = true;
+    check(!In::SDL3::handleEvent(paddle), "buttons with no binding name are not consumed");
+    SDL_Event removed{};
+    removed.type = SDL_EVENT_GAMEPAD_REMOVED;
+    check(In::SDL3::handleEvent(removed), "removal consumed");
+    rig.frames_(3);
+    check(rig.hold() == 0 && rig.pad->mStick->mStick.y == 0.0f, "SDL gamepad removed: everything released");
+
     SDL_Event other{};
     other.type = SDL_EVENT_QUIT;
     check(!In::SDL3::handleEvent(other), "unrelated events are not consumed");

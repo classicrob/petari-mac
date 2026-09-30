@@ -86,6 +86,7 @@ endif()
 if(BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME native_observatory_fixture COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/test_fixture_tests.py")
+    add_test(NAME native_unlocked_save COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/unlocked_save_tests.py")
     # The seam against recording fakes of Aurora, SDL and the app's other units.
     add_executable(petari_app_seam_tests ${PETARI_REPO_ROOT}/native/tests/app_seam_tests.cpp frame_seam.cpp frame_stats.cpp)
     target_link_libraries(petari_app_seam_tests PRIVATE petari_app_smoke)

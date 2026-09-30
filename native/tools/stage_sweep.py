@@ -368,9 +368,12 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
     missing_seed = re.compile(r"^\[gx stage prep\] stage=\S+ manifest read failed: unable to open database file$")
     sources = re.findall(r"^\[gx stage prep\] stage=" + re.escape(stage) + r" source=(\S+)", text, re.M)
     result["shaders"]["seed_source"] = sources[-1] if sources else None
+    # Zero-valued counters (failed=0, failed_compiles=0, errors=0.000) are
+    # summaries, not errors: drop them before looking for error words.
+    zero_counter = re.compile(r"\b\w+=0(?:\.0+)?(?=\s|$|[,;)])")
     errors = [l for l in lines if re.match(r"^\[(aurora|gx[^\]]*|dawn|webgpu)\]", l, re.I)
-              and re.search(r"(?i)\b(error|invalid|validation|lost)\b|failed(?!=0)", l)
-              and "failed=0" not in l and not missing_seed.match(l)]
+              and re.search(r"(?i)\b(error|invalid|validation|lost)\b|fail", zero_counter.sub("", l))
+              and not missing_seed.match(l)]
     result["renderer_errors"] = errors[:20]
     result["renderer_error_count"] = len(errors)
     # Asset guards (native/tools/LAYOUT_REFERENCE_GUARDS.md): each missing

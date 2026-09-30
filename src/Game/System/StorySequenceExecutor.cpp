@@ -1034,11 +1034,15 @@ void StorySequenceExecutor::overwriteGalaxyNameAfterLoading(GalaxyMoveArgument* 
     if (PetariNative::TestFixture::observatory) {
         // Match a post-tutorial reload on both snapshots, so "just acquired"
         // checks do not trigger first-Grand-Star return demos during loading.
+        // Only raises progress: a file already past this point (e.g. an
+        // unlocked save, native/SAVES.md) keeps its own story progress.
         GameDataHolder* holders[] = {GameDataFunction::getCurrentGameDataHolder(),
                                     GameDataFunction::getSceneStartGameDataHolder()};
         for (GameDataHolder* holder : holders) {
             holder->setPowerStar("HeavensDoorGalaxy", 1, true);
-            holder->followStoryEventByName("バトラー情報Ａ");
+            if (!holder->isPassedStoryEvent("バトラー情報Ａ")) {
+                holder->followStoryEventByName("バトラー情報Ａ");
+            }
             holder->onGalaxyScenarioFlagAlreadyVisited("HeavensDoorGalaxy", 1);
         }
         std::fprintf(stderr, "PETARI FIXTURE: tutorial Grand Star and observatory introduction set; Good Egg progress unchanged\n");

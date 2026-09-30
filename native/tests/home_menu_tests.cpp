@@ -468,12 +468,15 @@ void testFocusAndRepeat() {
     check(menu.view().items[0].rect.x1 < narrow, "items narrow too");
 }
 
-// Sixteen lines like the input layer's summary, the longest it writes.
-std::vector<HM::ControlsEntry> sampleControls(int count = 16) {
+// Seventeen lines like the input layer's summary (a header, then the
+// longest texts it writes in each column).
+std::vector<HM::ControlsEntry> sampleControls(int count = 17) {
     std::vector<HM::ControlsEntry> entries(count);
     for (int i = 0; i < count; i++) {
-        std::snprintf(entries[i].action, sizeof(entries[i].action), "Tilt the remote by hand %d", i);
-        std::snprintf(entries[i].inputs, sizeof(entries[i].inputs), "Hold Tab + W A S D / Right mouse / Keypad %d", i);
+        std::snprintf(entries[i].action, sizeof(entries[i].action), i == 0 ? "" : "Tilt the remote by hand");
+        std::snprintf(entries[i].inputs, sizeof(entries[i].inputs),
+                      i == 0 ? "Keyboard and mouse" : "Hold Space / Right mouse on the target");
+        std::snprintf(entries[i].pad, sizeof(entries[i].pad), i == 0 ? "Controller" : "D-pad up (leave: D-pad down)");
     }
     return entries;
 }
@@ -491,8 +494,9 @@ void testControlsPage() {
     check(std::strcmp(view.title, "Controls") == 0 && view.itemCount == 1 && std::strcmp(view.items[0].label, "Back") == 0 &&
               view.items[0].focused,
           "the page has a title and a focused Back");
-    check(view.lineCount == 16 && std::strcmp(view.lines[3].action, entries[3].action) == 0 &&
-              std::strcmp(view.lines[15].inputs, entries[15].inputs) == 0,
+    check(view.lineCount == 17 && std::strcmp(view.lines[3].action, entries[3].action) == 0 &&
+              std::strcmp(view.lines[15].inputs, entries[15].inputs) == 0 &&
+              std::strcmp(view.lines[16].pad, entries[16].pad) == 0,
           "the page shows the lines it was given, in order");
     check(view.panel.y0 < view.titleY && view.titleY < view.messageY && view.messageY < view.linesArea.y0 &&
               view.linesArea.y1 < view.items[0].rect.y0 && view.items[0].rect.y1 < view.panel.y1,
@@ -529,7 +533,7 @@ void testControlsPage() {
     openToList(menu);
     menu.update(press(Down));
     menu.update(press(A));
-    check(menu.view().lineCount == 16, "lines kept across opens");
+    check(menu.view().lineCount == 17, "lines kept across opens");
     menu.startBlackOut();
     check(menu.phase() == HM::Phase::BlackOut && framesUntilSelection(menu) == 30 &&
               menu.selection() == HM::Selection::Restart,
@@ -539,6 +543,7 @@ void testControlsPage() {
     std::vector<HM::ControlsEntry> many = sampleControls(HM::kMaxControls + 5);
     std::memset(many[0].action, 'x', sizeof(many[0].action));
     std::memset(many[0].inputs, 'y', sizeof(many[0].inputs));
+    std::memset(many[0].pad, 'z', sizeof(many[0].pad));
     HM::Menu full = newMenu();
     full.setControls(many.data(), static_cast<int>(many.size()));
     openToList(full);
@@ -547,7 +552,8 @@ void testControlsPage() {
     const HM::View fullView = full.view();
     check(fullView.lineCount == HM::kMaxControls, "lines capped at kMaxControls");
     check(std::strlen(fullView.lines[0].action) == sizeof(fullView.lines[0].action) - 1 &&
-              std::strlen(fullView.lines[0].inputs) == sizeof(fullView.lines[0].inputs) - 1,
+              std::strlen(fullView.lines[0].inputs) == sizeof(fullView.lines[0].inputs) - 1 &&
+              std::strlen(fullView.lines[0].pad) == sizeof(fullView.lines[0].pad) - 1,
           "unterminated text is cut, not overrun");
     full.setControls(nullptr, 0);
     check(full.view().lineCount == 0, "lines can be cleared");
@@ -827,8 +833,10 @@ void testImGuiOverlay() {
         for (int i = 0; i < data->CmdListsCount; i++) {
             for (const ImDrawVert& v : data->CmdLists[i]->VtxBuffer) {
                 const ImVec4 c = ImGui::ColorConvertU32ToFloat4(v.col);
-                if (!(c.x > 0.99f && std::fabs(c.y - 0.92f) < 0.01f && std::fabs(c.z - 0.55f) < 0.01f)) {
-                    continue;  // not the inputs text
+                const bool keys = c.x > 0.99f && std::fabs(c.y - 0.92f) < 0.01f && std::fabs(c.z - 0.55f) < 0.01f;
+                const bool pads = std::fabs(c.x - 0.62f) < 0.01f && std::fabs(c.y - 0.86f) < 0.01f && c.z > 0.99f;
+                if (!keys && !pads) {
+                    continue;  // not the inputs text (keyboard and controller columns)
                 }
                 inside = inside && v.pos.x >= px0 && v.pos.x <= px1;
                 const int row = static_cast<int>((v.pos.y - top) / rowHeight);
@@ -839,7 +847,7 @@ void testImGuiOverlay() {
             }
         }
         float smallest = 1e9f;
-        for (int row = 0; row < view.lineCount; row++) {
+        for (int row = 1; row < view.lineCount; row++) {  // row 0: the header, in another colour
             smallest = std::fmin(smallest, rowMax[row] - rowMin[row]);
         }
         check(inside, "controls text stays inside the panel");

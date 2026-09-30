@@ -51,6 +51,13 @@ std::atomic<std::uint64_t> pulledFrames{0};
 std::atomic<std::int64_t> worstCallbackGapUs{0}; // SDL callback: time between calls
 std::atomic<std::uint64_t> callbacks{0};
 std::atomic<std::uint64_t> requestedFrames{0};
+// The device callback's thread: SDL's CoreAudio AudioQueue thread, which SDL only raises with
+// pthread_setschedparam. Under heavy host load (load ~230, CU session 5) it went 250-815 ms
+// without running while the real-time producer ticked every 1 ms, and CoreAudio's queued
+// buffers ran dry. It gets the same Mach time-constraint policy as the producer, once, from
+// its first callback (0 = not yet, 1 = real-time, 2 = refused).
+std::atomic<int> deviceThreadRealtime{0};
+
 std::int64_t lastCallbackUs = 0;                 // SDL callback thread only
 std::mutex reporterLock;
 std::condition_variable reporterWake;
@@ -85,6 +92,7 @@ double processSeconds() {
 void report() {
     PetariNative::HostAllocationScope host;
     std::uint64_t reportedReplays = PetariNative::Platform::Audio::replayedBlocks();
+    int reportedDeviceThread = 0;
     auto previous = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> lock(reporterLock);
     while (!reporterWake.wait_for(lock, std::chrono::seconds(1), [] { return reporterStop; })) {
@@ -105,6 +113,10 @@ void report() {
         // The DMA engine: elastic waits for a late game (inaudible while the
         // ring covers them), the shortest block (the game's deadline), and
         // JAudio2's DSP holds (late DSP frames, audible, not replays).
+        if (const int state = deviceThreadRealtime.load(std::memory_order_relaxed); state != reportedDeviceThread) {
+            reportedDeviceThread = state;
+            std::fprintf(stderr, "[audio] device callback thread: %s\n", state == 1 ? "real-time (Mach time constraint)" : "real-time refused, SDL's priority kept");
+        }
         const auto dma = PetariNative::Platform::Audio::takeDmaStats();
         std::fprintf(stderr, "[audio-dma] waited for %llu late registrations (worst %lld us), %llu waits timed out; shortest block %lld us; "
                      "DSP holds %llu\n",
@@ -175,6 +187,11 @@ void produce(std::uint32_t rate) {
 
 void SDLCALL fill(void*, SDL_AudioStream* stream, int additionalBytes, int) {
     PetariNative::HostAllocationScope host;
+    static thread_local bool promoted = false;
+    if (!promoted) {
+        promoted = true;
+        deviceThreadRealtime.store(PetariNative::Platform::Audio::setRealtimeAudioThread() ? 1 : 2, std::memory_order_relaxed);
+    }
     alignas(16) std::int16_t buffer[1024 * 2];
     int frames = additionalBytes > 0 ? (additionalBytes + 3) / 4 : 0;
     if (diagnostics) {
@@ -201,6 +218,7 @@ void SDLCALL fill(void*, SDL_AudioStream* stream, int additionalBytes, int) {
 void stop(void*) {
     PetariNative::HostAllocationScope host;
     running.store(false);
+    deviceThreadRealtime.store(0, std::memory_order_relaxed);
     stopProducer.store(true, std::memory_order_release);
     if (producer.joinable()) producer.join();
     if (reporter != nullptr) {

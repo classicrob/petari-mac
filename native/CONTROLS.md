@@ -40,6 +40,35 @@ have input-component tests but have not been approved through gameplay:
 | T | Toggle upright remote posture by hand |
 | Hold Left Alt | Walk (half-strength stick) |
 
+## Game controllers
+
+A connected game controller works alongside the keyboard and mouse, as
+reported by SDL3's standard layout (Xbox, PlayStation, Switch Pro and similar).
+Buttons are named by position. Component tests cover it; it has not been
+played with a physical controller yet.
+
+| Controller | Action |
+| --- | --- |
+| Left stick | Move (analog; also tilts on the Star Ball and the Ray) |
+| Right stick | Move the Star Pointer; click it (R3) to center it. Moving the mouse takes the pointer back |
+| Bottom button | Jump / confirm (A) |
+| Right button | Back (B) |
+| RT | Shoot Star Bits (B) |
+| Left button, RB | Spin |
+| Top button | Start (A and B on the title screen) |
+| LT | Crouch / ground pound (Z) |
+| LB | Recenter camera (C) |
+| D-pad | Rotate camera (left/right); first-person view (up, down to leave) |
+| Start | Pause |
+| Back | Minus |
+| Guide | Home menu |
+
+Controller buttons remap in `controls.txt` like keys: for example
+`Shake=Pad:West,Pad:RightShoulder,Key:F`. The names are:
+South, East, West, North, Back, Guide, Start, LeftStick, RightStick,
+LeftShoulder, RightShoulder, DpadUp, DpadDown, DpadLeft, DpadRight,
+LeftTrigger and RightTrigger.
+
 ## Wii Remote moves on a keyboard
 
 Every action the game asks for can be done with a single key or a natural
@@ -98,6 +127,9 @@ from the screen to zoom (`CameraDPD`).
   - W A S D look around (the game reads the stick, not the pointer). Holding
     Left Alt looks more slowly.
   - Down arrow or Space returns to the normal camera. Backspace does not.
+- **Collecting Star Bits.** Point at them with the mouse; no click is needed
+  (a left click shoots one instead). A newly scattered Star Bit becomes
+  collectable after a moment, then flies to Mario before the counter goes up.
 - **Right mouse button.** It is the remote's A button, so pressing it while
   the pointer is not on a Pull Star or another target makes Mario jump.
   A Pull Star keeps pulling while the button is held and lets go shortly
@@ -122,5 +154,6 @@ from the screen to zoom (`CameraDPD`).
   tilt. T toggles the upright posture; the Star Pointer is hidden while it is
   upright.
 
-Focus loss releases all held controls and hides the pointer. Key repeats come
+Keys pressed while Command is held go to macOS, not the game, so Cmd+Q and
+Ctrl+Cmd+F (fullscreen) do not turn the camera or spin. Focus loss releases all held controls and hides the pointer. Key repeats come
 from the game's KPAD logic, not from the operating system.

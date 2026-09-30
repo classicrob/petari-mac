@@ -270,6 +270,17 @@ Export a live cache with SQLite's backup API, not a raw copy of its database
 file while WAL writes may be active. Do not substitute the device-specific Dawn
 cache. No seed is required by default.
 
+### Unlocked saves
+
+`build/saves/all-missions` (Mario, 120 stars) opens every dome, galaxy and
+mission through the normal observatory UI. `complete-luigi` and `grand-finale`
+add Luigi and the Grand Finale Galaxy. Launch with `--user build/saves/VARIANT`,
+or use a copy of it. It needs no fixture flag. The game's own code makes and
+checks these saves. See [SAVES.md](SAVES.md) for what each save contains, how
+it is made and verified, and how to copy one into your normal save directory.
+The observatory fixture's bootstrap now only raises story progress. With
+`--test-fixture stage`, a copy of an unlocked save keeps its full progression.
+
 ### Human-style macOS window playtest
 
 Use the normal keyboard/mouse route, with no `PETARI_SMOKE` driver. Prepare a new

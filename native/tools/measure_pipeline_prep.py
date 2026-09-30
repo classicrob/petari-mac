@@ -33,6 +33,8 @@ def distribution(values):
 
 def summarize(events, loads):
     compiles, blocking, stages, essentials = [], [], [], []
+    audio_reports, underrun_frames, replayed_blocks = 0, 0, 0
+    pipeline_summary = None
     first_frame = next((index for index, event in enumerate(events)
                         if 'first Aurora frame open; starting the game' in event['line']), None)
     startup_waits = [event for event in events[:first_frame]
@@ -41,6 +43,13 @@ def summarize(events, loads):
     for event in events:
         line = event['line']
         fields = dict(re.findall(r'(\w+)=([^\s]+)', line))
+        audio = re.search(r'\[audio\].*underrun (\d+) frames, AI replayed (\d+) blocks', line)
+        if audio:
+            audio_reports += 1
+            underrun_frames += int(audio[1])
+            replayed_blocks += int(audio[2])
+        if '[gx pipeline summary]' in line:
+            pipeline_summary = dict(fields, elapsed_s=event['elapsed_s'])
         if '[gx stage prep]' in line and fields.get('stage') not in ('ScenarioSelect', 'GalaxyMap', '__global__'):
             stage = fields.get('stage', stage)
         if '[gx pipeline prewarm]' in line:
@@ -53,6 +62,10 @@ def summarize(events, loads):
             match = re.search(r'blocking resolve ([\d.]+) ms', line)
             if match: blocking.append({'stage': stage, 'elapsed_s': event['elapsed_s'], 'ms': float(match[1]), 'line': line})
     return {'stage_events': stages, 'essential_prewarm': essentials, 'blocking_resolves': blocking,
+            'audio': {'reports': audio_reports, 'underrun_frames': underrun_frames,
+                      'replayed_blocks': replayed_blocks,
+                      'note': 'Sums per-report deltas; missing reports do not establish clean audio.'},
+            'pipeline_summary': pipeline_summary,
             'startup_baton': {'first_frame_marker_seen': first_frame is not None,
                               'cpu_held_waits_before_first_frame': startup_waits if first_frame is not None else None,
                               'note': 'Detected/logged waits only; monitor threshold is recorded in run.json.'},

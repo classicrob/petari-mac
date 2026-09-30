@@ -516,3 +516,15 @@ completed preparation time. Compile log timestamps are receipt times. The
 frame CSV lacks an absolute timestamp/pending-compile field, so any overlap
 window reconstructed from cumulative frame intervals must be labeled as an
 estimate, alongside the unambiguous whole-gameplay frame statistics.
+
+
+Overnight extension 1 adds 68 TriLegLv1Galaxy, 55 SurfingLv1Galaxy and
+13 TamakoroExLv1Galaxy stage-observed configs from completed PASS sweep runs.
+Seventy-seven are globally new, bringing the bundled union to 8,713 GX configs.
+All 385 output variants of the new configs generated successfully. Every
+logged post-prep hash in those three runs is present in the updated respective
+stage manifest. The full app build passed and all eight changed DB/metadata
+hashes match the bundle (`build/pipeline-prep-measure/overnight-1/extend-seeds.log`).
+This closes historical observed gaps, not unseen draw states; draw-owner
+probe results and fresh coverage runs remain separate evidence. Frozen timing
+apps retain their original 8,355-config manifests.

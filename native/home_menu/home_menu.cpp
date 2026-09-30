@@ -180,6 +180,7 @@ void Menu::setControls(const ControlsEntry* entries, int count) {
         // Always terminated, even if the caller filled every byte.
         mControls[i].action[sizeof(mControls[i].action) - 1] = '\0';
         mControls[i].inputs[sizeof(mControls[i].inputs) - 1] = '\0';
+        mControls[i].pad[sizeof(mControls[i].pad) - 1] = '\0';
     }
 }
 

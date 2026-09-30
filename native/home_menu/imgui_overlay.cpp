@@ -145,18 +145,30 @@ void drawImGuiOverlay(float imageX, float imageY, float imageWidth, float imageH
             const float areaWidth = areaMax.x - areaMin.x;
             const float textSize = std::min(rowHeight * 0.72f, imageHeight * 0.034f);
             const float pad = areaWidth * 0.02f;
-            const float split = areaMin.x + areaWidth * 0.42f;
+            bool padColumn = false;
+            for (int i = 0; i < view.lineCount; i++) {
+                padColumn = padColumn || view.lines[i].pad[0] != '\0';
+            }
+            // Action | keyboard and mouse [| controller].
+            const float split = areaMin.x + areaWidth * (padColumn ? 0.3f : 0.42f);
+            const float split2 = padColumn ? areaMin.x + areaWidth * 0.69f : areaMax.x;
             for (int i = 0; i < view.lineCount; i++) {
                 const float top = areaMin.y + rowHeight * static_cast<float>(i);
                 const float middle = top + rowHeight * 0.5f;
-                if (i % 2 == 0) {
+                const bool header = view.lines[i].action[0] == '\0';
+                if (i % 2 == 0 || header) {
                     list->AddRectFilled(ImVec2(areaMin.x, top), ImVec2(areaMax.x, top + rowHeight),
-                                        color(1.0f, 1.0f, 1.0f, 0.06f * alpha));
+                                        color(1.0f, 1.0f, 1.0f, (header ? 0.12f : 0.06f) * alpha));
                 }
+                const ImU32 headerColor = color(0.78f, 0.82f, 0.92f, alpha);
                 leftText(list, font, textSize, split - areaMin.x - 2.0f * pad, ImVec2(areaMin.x + pad, middle),
                          color(0.78f, 0.82f, 0.92f, alpha), view.lines[i].action);
-                leftText(list, font, textSize, areaMax.x - split - 2.0f * pad, ImVec2(split + pad, middle),
-                         color(1.0f, 0.92f, 0.55f, alpha), view.lines[i].inputs);
+                leftText(list, font, textSize, split2 - split - 2.0f * pad, ImVec2(split + pad, middle),
+                         header ? headerColor : color(1.0f, 0.92f, 0.55f, alpha), view.lines[i].inputs);
+                if (padColumn) {
+                    leftText(list, font, textSize, areaMax.x - split2 - 2.0f * pad, ImVec2(split2 + pad, middle),
+                             header ? headerColor : color(0.62f, 0.86f, 1.0f, alpha), view.lines[i].pad);
+                }
             }
         }
 

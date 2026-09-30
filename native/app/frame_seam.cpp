@@ -389,6 +389,16 @@ void handleEvents(const AuroraEvent* event) {
                 gTiming.unfocused = gTiming.unfocusedInFrame = true;
             } else if (event->sdl.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
                 gTiming.unfocused = false;
+            } else if (event->sdl.type == SDL_EVENT_AUDIO_DEVICE_ADDED ||
+                       event->sdl.type == SDL_EVENT_AUDIO_DEVICE_REMOVED ||
+                       event->sdl.type == SDL_EVENT_AUDIO_DEVICE_FORMAT_CHANGED) {
+                // Device switches migrate the stream and leave an audible gap; log them.
+                std::fprintf(stderr, "[audio] SDL device event %s: device %u%s\n",
+                             event->sdl.type == SDL_EVENT_AUDIO_DEVICE_ADDED     ? "added"
+                             : event->sdl.type == SDL_EVENT_AUDIO_DEVICE_REMOVED ? "removed"
+                                                                                  : "format changed",
+                             static_cast<unsigned>(event->sdl.adevice.which),
+                             event->sdl.adevice.recording ? " (recording)" : "");
             }
             Events::input(event->sdl);
             break;

@@ -82,6 +82,30 @@ output:
   `SphereAccelSensorController` angles follow tilt: Tab+D rolls right and Tab+W
   rolls forward.
 
+## Game controllers
+
+`padButtonEvent`, `padAxisEvent` and `padDisconnected`, fed by the SDL3
+adapter from `SDL_EVENT_GAMEPAD_*`. Aurora opens connected controllers. All
+controllers act as one.
+
+- **Buttons.** `Binding::Device::Pad`, named by position (`Pad:South` and so
+  on), so they remap in the text form.
+- **Triggers.** Buttons at 55% travel, released at 45%.
+- **Left stick.** The Nunchuk stick, analog.
+  - A radial dead zone (`Settings::padStickDeadZone`, 0.2) is rescaled to full
+    travel.
+  - Stick keys, when held, take precedence.
+  - Walk and the ride steering (tilt) apply to it too.
+- **Right stick.** A Star Pointer of its own in KPAD space.
+  - It moves at up to `Settings::padPointerWidthsPerSecond` (0.9) with a
+    squared response, starting from where the mouse last pointed.
+  - R3 centers it, and any mouse motion hands the pointer back to the mouse.
+- **Release.** Focus loss and disconnection release everything.
+- **Activity.** Button events count as activity for the screen saver, and
+  so do stick movements past 25%.
+- **Physical-input count.** The app counts bound buttons and sticks past half
+  travel as physical gameplay input; the right stick counts as pointer motion.
+
 ## Default bindings
 
 | Input | Wii input | Status |

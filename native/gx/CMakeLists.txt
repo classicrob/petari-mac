@@ -190,6 +190,9 @@ if(_petari_build_testing)
         INCLUDE_DIRECTORIES "${aurora_SOURCE_DIR}/lib/gx;${aurora_SOURCE_DIR}/lib;${aurora_SOURCE_DIR}/include;${CMAKE_CURRENT_SOURCE_DIR};$<TARGET_PROPERTY:Tracy::TracyClient,INTERFACE_INCLUDE_DIRECTORIES>")
     target_link_libraries(petari_gx_fifo_processor_tests PRIVATE petari_platform petari_host_runtime fmt::fmt)
     add_test(NAME native_gx_fifo_processor COMMAND petari_gx_fifo_processor_tests)
+    # patch_aurora_sync.py against the pinned Aurora sources (index-buffer reservations).
+    add_test(NAME native_aurora_sync_patch COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tests/aurora_sync_patch_tests.py" "${aurora_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 file(GLOB PETARI_J3D_SOURCES CONFIGURE_DEPENDS

@@ -123,6 +123,7 @@ void refreshControls() {
     for (int i = 0; i < count; i++) {
         std::strncpy(entries[i].action, summary[i].action.c_str(), sizeof(entries[i].action) - 1);
         std::strncpy(entries[i].inputs, summary[i].inputs.c_str(), sizeof(entries[i].inputs) - 1);
+        std::strncpy(entries[i].pad, summary[i].pad.c_str(), sizeof(entries[i].pad) - 1);
     }
     instance().setControls(entries, count);
 }

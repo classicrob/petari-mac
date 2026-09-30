@@ -141,7 +141,8 @@ const char* actionName(Action action);
 // a HostAllocationScope.
 struct ControlsLine {
     std::string action;
-    std::string inputs;
+    std::string inputs;  // keyboard and mouse
+    std::string pad;     // game controller ("" if it has none)
 };
 std::vector<ControlsLine> controlsSummary(const Bindings& bindings);
 // One line for the title screen, which asks for A and B together:

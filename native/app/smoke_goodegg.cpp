@@ -703,6 +703,20 @@ void GoodEggDriver::mission(const Observation& o, Step& step) {
         return;
     }
     const Vec pos = position(o);
+    // After a bind ends (a launch star's release, a vine's throw): every frame
+    // for 150 frames, with the step from the previous frame, so a jump in
+    // position (a teleport, a push-out) shows where it happened.
+    if (mReleaseTrace > 0 && !o.playerInBind) {
+        --mReleaseTrace;
+        const Vec moved = pos - vec(mLastPos);
+        note("after release: " + text(pos) + " (moved " + number(length(moved)) + "), up " + text(up(o)) +
+             (o.playerOnGround ? ", ground" : ", air") + ", demo " + std::to_string(o.demoActive) + ", life " +
+             std::to_string(o.playerLife));
+    }
+    if (o.playerInBind) {
+        mReleaseTrace = 150;
+    }
+    mLastPos = {pos.x, pos.y, pos.z};
     if (o.playerLife != mLastLife) {
         if (mLastLife >= 0) {
             note("life " + std::to_string(mLastLife) + " -> " + std::to_string(o.playerLife) + " at " + text(pos) + " on " +
@@ -766,9 +780,26 @@ void GoodEggDriver::mission(const Observation& o, Step& step) {
         }
         return;
     }
+    // Airborne trace (every 20 frames past the first 20): where flights and
+    // throws go, and in which gravity.
+    if (!o.playerOnGround && (mAirTrace++ % 20) == 19) {
+        note("in the air at " + text(pos) + ", up " + text(up(o)) + (o.playerInBind ? ", bound" : ""));
+    } else if (o.playerOnGround) {
+        mAirTrace = 0;
+    }
     if (o.playerInBind) {
+        // A launch star, a vine, a pipe: hands off until Mario lands again.
+        mReleased = true;
         steer({}, step);
         return;
+    }
+    if (mReleased) {
+        if (!o.playerOnGround) {
+            steer({}, step);
+            return;
+        }
+        mReleased = false;
+        note("landed at " + text(pos) + ", up " + text(up(o)));
     }
     const Planet planet = planetAt({pos.x, pos.y, pos.z});
     if (planet != mPlanet && planet != Planet::None) {

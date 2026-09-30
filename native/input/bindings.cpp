@@ -124,10 +124,25 @@ const char* const kMouseDisplayNames[static_cast<int>(MouseButton::Count)] = {
     "Left mouse", "Middle mouse", "Right mouse", "Mouse button 4", "Mouse button 5"};
 
 // The inputs bound to any of the actions, in order, without repeats.
-std::vector<Binding> inputsOf(const Bindings& bindings, std::initializer_list<Action> actions) {
+// Controller buttons in the Controls page's own column: no "Pad " prefix.
+const char* const kPadShortNames[static_cast<int>(PadButton::Count)] = {
+    "bottom", "right", "left", "top", "Back", "Guide", "Start", "L3", "R3", "LB", "RB",
+    "D-pad up", "D-pad down", "D-pad left", "D-pad right", "LT", "RT"};
+
+enum class Devices { KeyboardMouse, Pad };
+
+bool isPad(const Binding& input) {
+    return input.device == Binding::Device::Pad;
+}
+
+std::vector<Binding> inputsOf(const Bindings& bindings, std::initializer_list<Action> actions,
+                              Devices devices = Devices::KeyboardMouse) {
     std::vector<Binding> result;
     for (const Action action : actions) {
         for (const Binding& input : bindings.inputs(action)) {
+            if (isPad(input) != (devices == Devices::Pad)) {
+                continue;
+            }
             if (std::find(result.begin(), result.end(), input) == result.end()) {
                 result.push_back(input);
             }
@@ -157,12 +172,21 @@ std::string joined(const std::vector<Binding>& inputs, const char* separator) {
                 continue;
             }
         }
-        text += displayName(input);
+        text += isPad(input) && input.code < static_cast<int>(PadButton::Count) ? kPadShortNames[input.code]
+                                                                                   : displayName(input);
     }
     return text;
 }
 
-// The first input of each action, e.g. "W A S D". Unbound actions show "-".
+// Controller buttons of the actions, or "" when none are bound.
+std::string padText(const Bindings& b, std::initializer_list<Action> actions, const std::string& prefix = "",
+                    const std::string& suffix = "") {
+    const std::vector<Binding> inputs = inputsOf(b, actions, Devices::Pad);
+    return inputs.empty() ? std::string() : prefix + joined(inputs, " / ") + suffix;
+}
+
+// The first keyboard or mouse input of each action, e.g. "W A S D". Actions
+// without one show "-".
 std::string firstOfEach(const Bindings& bindings, std::initializer_list<Action> actions, const char* separator) {
     std::string text;
     bool any = false;
@@ -170,7 +194,7 @@ std::string firstOfEach(const Bindings& bindings, std::initializer_list<Action> 
         if (!text.empty()) {
             text += separator;
         }
-        const auto& inputs = bindings.inputs(action);
+        const std::vector<Binding> inputs = inputsOf(bindings, {action});
         text += inputs.empty() ? "-" : displayName(inputs.front());
         any = any || !inputs.empty();
     }
@@ -205,24 +229,29 @@ std::vector<ControlsLine> controlsSummary(const Bindings& b) {
         const std::vector<Binding> inputs = inputsOf(b, actions);
         return inputs.empty() ? std::string("(not bound)") : "Hold " + joined(inputs, " / ") + suffix;
     };
+    const std::string padLeave = padText(b, {Action::DpadDown});
+    const std::string padRotate = padText(b, {Action::DpadLeft}) + (padText(b, {Action::DpadRight}).empty() ? "" : " / ") +
+                                  padText(b, {Action::DpadRight});
     return {
-        {"Move", move + " / left stick"},
-        {"Jump / confirm", joined(inputsOf(b, {Action::A}), " / ")},
-        {"Start (title: A and B)", joined(inputsOf(b, {Action::Start}), " / ")},
-        {"Spin", joined(inputsOf(b, {Action::Shake}), " / ")},
-        {"Crouch / ground pound", joined(inputsOf(b, {Action::NunchukZ}), " / ")},
-        {"Star Pointer", "Mouse / right stick (R3: center)"},
-        {"Shoot Star Bits / back", joined(inputsOf(b, {Action::B}), " / ")},
-        {"Grab (Pull Stars)", hold({Action::A}, " on the target")},
-        {"Rotate camera", firstOfEach(b, {Action::DpadLeft, Action::DpadRight}, " / ")},
-        {"Recenter camera", joined(inputsOf(b, {Action::NunchukC}), " / ")},
-        {"First-person view", joined(inputsOf(b, {Action::DpadUp}), " / ") + " (leave: " +
-                                  joined(inputsOf(b, {Action::DpadDown}), " / ") + ")"},
-        {"Walk slowly", hold({Action::Walk}, "")},
-        {"Pause", joined(inputsOf(b, {Action::Plus, Action::Minus}), " / ")},
-        {"Star Ball / Ray", move + " tilt while riding"},
-        {"Tilt the remote by hand", hold({Action::TiltHold}, " + " + move)},
-        {"This menu", joined(inputsOf(b, {Action::Home}), " / ")},
+        {"", "Keyboard and mouse", "Controller"},
+        {"Move", move, "left stick"},
+        {"Jump / confirm", joined(inputsOf(b, {Action::A}), " / "), padText(b, {Action::A})},
+        {"Start (title: A and B)", joined(inputsOf(b, {Action::Start}), " / "), padText(b, {Action::Start})},
+        {"Spin", joined(inputsOf(b, {Action::Shake}), " / "), padText(b, {Action::Shake})},
+        {"Crouch / ground pound", joined(inputsOf(b, {Action::NunchukZ}), " / "), padText(b, {Action::NunchukZ})},
+        {"Star Pointer", "Mouse", "right stick (R3: center)"},
+        {"Shoot Star Bits / back", joined(inputsOf(b, {Action::B}), " / "), padText(b, {Action::B})},
+        {"Grab (Pull Stars)", hold({Action::A}, " on the target"), padText(b, {Action::A}, "hold ")},
+        {"Rotate camera", firstOfEach(b, {Action::DpadLeft, Action::DpadRight}, " / "), padRotate},
+        {"Recenter camera", joined(inputsOf(b, {Action::NunchukC}), " / "), padText(b, {Action::NunchukC})},
+        {"First-person view",
+         joined(inputsOf(b, {Action::DpadUp}), " / ") + " (leave: " + joined(inputsOf(b, {Action::DpadDown}), " / ") + ")",
+         padText(b, {Action::DpadUp}, "", padLeave.empty() ? "" : " (leave: " + padLeave + ")")},
+        {"Walk slowly", hold({Action::Walk}, ""), "push the stick part way"},
+        {"Pause", joined(inputsOf(b, {Action::Plus, Action::Minus}), " / "), padText(b, {Action::Plus, Action::Minus})},
+        {"Star Ball / Ray", move + " tilt while riding", "left stick tilts while riding"},
+        {"Tilt the remote by hand", hold({Action::TiltHold}, " + " + move), ""},
+        {"This menu", joined(inputsOf(b, {Action::Home}), " / "), padText(b, {Action::Home})},
     };
 }
 

@@ -220,6 +220,14 @@ void RemoteModel::keyEvent(KeyCode code, bool down, bool repeat) {
     if (code >= Key::Max || repeat || mKeys[code] == down || (down && !mFocused)) {
         return;
     }
+    // Command shortcuts belong to macOS (Cmd+Q, Ctrl+Cmd+F fullscreen,
+    // Cmd+Tab): a key pressed while Command is held does not reach the game,
+    // so quitting does not turn the camera and fullscreen does not spin.
+    // Releases always pass, so nothing stays held.
+    const bool modifier = code >= Key::LeftCtrl && code <= Key::RightGui;
+    if (down && !modifier && (mKeys[Key::LeftGui] || mKeys[Key::RightGui])) {
+        return;
+    }
     inputChanged(Binding::key(code), down);
 }
 

@@ -117,10 +117,13 @@ struct Rect {
 constexpr int kMaxItems = 4;
 constexpr int kMaxControls = 20;
 
-// One line of the Controls page: what the player does, and the inputs.
+// One line of the Controls page: what the player does, the keyboard and
+// mouse inputs, and the game controller's (empty: none). An empty action
+// marks a column header.
 struct ControlsEntry {
     char action[40] = {};
     char inputs[64] = {};
+    char pad[40] = {};
 };
 
 struct ViewItem {
@@ -143,7 +146,8 @@ struct View {
     float messageY = 0.0f;
     int itemCount = 0;
     ViewItem items[kMaxItems];
-    // The Controls page: lines drawn as two columns in linesArea, one row each.
+    // The Controls page: lines drawn as columns in linesArea, one row each
+    // (three when any line has controller text).
     int lineCount = 0;
     ControlsEntry lines[kMaxControls];
     Rect linesArea;

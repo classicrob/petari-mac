@@ -164,6 +164,10 @@ private:
     bool mLumaAsked = false;           // A pressed next to the Disk Garden Luma
     bool mTalked = false;              // the Disk Garden Luma's talk ended
     unsigned long mAirFrames = 0;
+    unsigned long mAirTrace = 0;
+    unsigned long mReleaseTrace = 0;          // frames of per-frame trace left after a bind
+    Point3 mLastPos{0.0f, 0.0f, 0.0f};
+    bool mReleased = false;  // was bound (launch star, vine): no steering until Mario lands
     int mLastLife = -1;
     bool mPeanutToured = false;
     Point3 mGoalPoint{0.0f, 0.0f, 0.0f};  // goTo's latest target (boulder waits look at it)

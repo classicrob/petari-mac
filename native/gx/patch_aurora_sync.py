@@ -19,7 +19,9 @@ include path.
   that still find the lock busy wait with the OS CPU released. Exports the
   petari_aurora_fifo_* functions.
 - command_processor.cpp: process() also returns after PE token BPs (0x47,
-  0x48) and records which synchronisation BP ended the call.
+  0x48) and records which synchronisation BP ended the call; index-buffer
+  reservations for triangle fans and strips of fewer than 3 vertices no
+  longer wrap to about 8 GiB.
 - GXManage.cpp: GXDrawDone, GXSetDrawDone, GXSetDrawDoneCallback removed
   (sync_bridge.cpp defines them).
 - GXFifo.cpp: GXGetGPStatus, GXGetFifoPtrs removed; GXGetCPUFifo/GXGetGPFifo
@@ -359,6 +361,18 @@ def patch_command_processor(text):
         petariSyncBp = value;
         return {static_cast<u32>(reader.offset()), reg == GX_BP_REG_DRAWDONE};
       }''')
+    # Petari: a triangle fan or strip with fewer than 3 vertices (legal GX; it
+    # draws nothing) made the unsigned reservation (vtxCount - 3) * 3 + 3 wrap
+    # to about 8 GiB, which ByteBuffer::reserve_extra reallocated and zeroed
+    # once and kept for the life of the process (the static index buffers).
+    # Measured in the soak: host malloc 84 MB -> 8.3 GB at the first stage.
+    text = replace_once(text, '''\
+    buf.reserve_extra(((u32(vtxCount) - 3) * 3 + 3) * sizeof(u16));''', '''\
+    buf.reserve_extra((vtxCount >= 3 ? (u32(vtxCount) - 3) * 3 + 3 : u32(vtxCount)) * sizeof(u16));''')
+    text = replace_once(text, '''\
+    buf.reserve_extra(((static_cast<u32>(vtxCount) - 3) * 3 + 3) * sizeof(u16));''', '''\
+    buf.reserve_extra((vtxCount >= 3 ? (static_cast<u32>(vtxCount) - 3) * 3 + 3 : static_cast<u32>(vtxCount)) *
+                      sizeof(u16));''')
     return text
 
 

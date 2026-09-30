@@ -17,6 +17,7 @@
 #include <string>
 #include <fstream>
 #include <petari/test_fixture.hpp>
+#include <petari/unlocked_save.hpp>
 
 #include "host.hpp"
 
@@ -41,7 +42,10 @@ void usage() {
                "              default: ~/Library/Application Support/Petari\n"
                "  --test-fixture observatory  post-tutorial test progression; requires a marked isolated --user\n"
                "  --test-fixture stage  synthetic entry to $PETARI_STAGE scenario $PETARI_SCENARIO after the file\n"
-               "              loads (observatory progression otherwise); requires --user marked \"stage\"\n",
+               "              loads (observatory progression otherwise); requires --user marked \"stage\"\n"
+               "  --make-unlocked-save all-missions|complete-luigi|grand-finale  unlock file 1 of an isolated\n"
+               "              --user holding .petari-make-unlocked-save, save, reload and verify it, then exit\n"
+               "              (native/SAVES.md; use native/tools/make_unlocked_save.py)\n",
                stderr);
 }
 
@@ -74,6 +78,7 @@ bool stageFixtureFromEnvironment() {
 bool resolvePaths(int argc, char** argv, App::Paths* paths) {
     bool fixture = false;
     bool stageFixture = false;
+    std::string unlockedSave;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
             paths->disc = argv[++i];
@@ -87,9 +92,29 @@ bool resolvePaths(int argc, char** argv, App::Paths* paths) {
                    std::strcmp(argv[i + 1], "stage") == 0) {
             ++i;
             fixture = stageFixture = true;
+        } else if (std::strcmp(argv[i], "--make-unlocked-save") == 0 && i + 1 < argc &&
+                   (std::strcmp(argv[i + 1], "all-missions") == 0 || std::strcmp(argv[i + 1], "complete-luigi") == 0 ||
+                    std::strcmp(argv[i + 1], "grand-finale") == 0)) {
+            unlockedSave = argv[++i];
         } else {
             return false;
         }
+    }
+    if (!unlockedSave.empty()) {
+        // Rewrites a saved file: only an explicit, marked, isolated directory.
+        const char* home = std::getenv("HOME");
+        const bool normalUser = home && !paths->user.empty() &&
+            std::filesystem::weakly_canonical(paths->user) ==
+            std::filesystem::weakly_canonical(std::filesystem::path(home) / "Library/Application Support/Petari");
+        if (paths->user.empty() || normalUser || fixture ||
+            !std::filesystem::is_regular_file(paths->user / ".petari-make-unlocked-save")) {
+            std::fputs("petari: --make-unlocked-save requires an explicit isolated --user holding "
+                       ".petari-make-unlocked-save, and no --test-fixture\n", stderr);
+            return false;
+        }
+        PetariNative::UnlockedSave::variant = unlockedSave;
+        std::fprintf(stderr, "PETARI UNLOCKED SAVE: requested %s for file %d in %s\n", unlockedSave.c_str(),
+                     PetariNative::UnlockedSave::slot, paths->user.string().c_str());
     }
     if (fixture) {
         std::ifstream marker(paths->user / ".petari-test-fixture");
