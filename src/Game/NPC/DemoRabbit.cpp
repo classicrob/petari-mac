@@ -2,6 +2,12 @@
 #include "Game/LiveActor/Nerve.hpp"
 #include "Game/NameObj/NameObjArchiveListCollector.hpp"
 #include "Game/Util.hpp"
+#ifdef PETARI_NATIVE
+#include <petari/host_allocation.hpp>
+#include <cstdio>
+#include <cstdlib>
+#include <dlfcn.h>
+#endif
 
 namespace {
     static const f32 sUpVecBlendRate = 0.1f;
@@ -148,7 +154,26 @@ void DemoRabbit::updateStopVelocity() {
     MR::reboundVelocityFromCollision(this);
 
     TVec3f normal;
+#ifdef PETARI_NATIVE
+    // A miss leaves normal untouched. Keep gravity/rebound motion while airborne;
+    // only a real surface supplies a direction for the stopping projection.
+    if (!MR::getFirstPolyNormalOnLineToMap(&normal, mPosition, mGravity * 10.0f, nullptr, nullptr)) {
+        static const bool traceMiss = std::getenv("PETARI_RABBIT_STOP_DIAG") != nullptr;
+        static unsigned int misses = 0;
+        if (traceMiss && ++misses <= 32) {
+            PetariNative::HostAllocationScope host;
+            const Nerve* nerve = mSpine != nullptr ? mSpine->getCurrentNerve() : nullptr;
+            Dl_info type{};
+            if (nerve != nullptr) dladdr(*reinterpret_cast<void* const*>(nerve), &type);
+            std::fprintf(stderr, "[rabbit-stop] no polygon actor=%p nerve=%s step=%d air=%d pos=(%.9g,%.9g,%.9g) velocity=(%.9g,%.9g,%.9g); projection skipped\n",
+                         static_cast<void*>(this), type.dli_sname != nullptr ? type.dli_sname : "<unknown>", getNerveStep(), mAirTimer,
+                         mPosition.x, mPosition.y, mPosition.z, mVelocity.x, mVelocity.y, mVelocity.z);
+        }
+        return;
+    }
+#else
     MR::getFirstPolyNormalOnLineToMap(&normal, mPosition, mGravity * 10.0f, nullptr, nullptr);
+#endif
     MR::vecKillElement(mVelocity, normal, &normal);
     mVelocity.sub(normal);
 }

@@ -1892,26 +1892,28 @@ void MarioActor::calcAnimInMovement() {
             MR::releaseAnimFrame(this);
             _3DE = 1;
 
+            // Keyed by PlayerMode, as in MarioActor::setPlayerMode (the decompiled switch used the
+            // explanation order instead, so a Spring Mushroom showed the Ice Flower explanation).
             switch (mPlayerMode) {
-            case 1:
+            case PlayerMode_Bee:
                 MR::explainBeeMarioIfAtFirst();
                 break;
-            case 2:
+            case PlayerMode_Teresa:
                 MR::explainTeresaMarioIfAtFirst();
                 break;
-            case 3:
+            case PlayerMode_Hopper:
                 MR::explainHopperMarioIfAtFirst();
                 break;
-            case 4:
+            case PlayerMode_2:  // fire
                 MR::explainFireMarioIfAtFirst();
                 break;
-            case 5:
+            case PlayerMode_Ice:
                 MR::explainIceMarioIfAtFirst();
                 break;
-            case 6:
+            case PlayerMode_Foo:
                 MR::explainFlyingMarioIfAtFirst();
                 break;
-            case 7:
+            case PlayerMode_Invincible:
                 MR::explainInvincibleMarioIfAtFirst();
                 break;
             }

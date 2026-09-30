@@ -368,7 +368,13 @@ namespace MR {
         TVec3f start(pActor->mPosition - gravity * upperDistance);
         TVec3f direction(gravity * length);
         HitInfo hit;
+#ifdef PETARI_NATIVE
+        if (pParts->checkStrikeLine(&hit, 1, start, direction, nullptr) == 0) {
+            return false;
+        }
+#else
         pParts->checkStrikeLine(&hit, 1, start, direction, nullptr);
+#endif
         CollisionPartsFilterSensor filter(pParts->mHitSensor);
         return ::getFirstPolyOnLineCategory(pGround, nullptr, hit.mHitPos, direction, nullptr, &filter, 0);
     }

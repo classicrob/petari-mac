@@ -317,6 +317,14 @@ def patch_aurora(text):
 
 def patch_window(text):
     text = replace_once(text,
+                        '  if ((flags & SDL_WINDOW_HIDDEN) != 0u) {\n',
+                        '  if ((flags & SDL_WINDOW_HIDDEN) != 0u && !SDL_GetHintBoolean("PETARI_SMOKE_BACKGROUND", false)) {\n')
+    text = replace_once(text,
+                        '    TRY_WARN(SDL_ShowWindow(g_window), "Failed to show window: {}", SDL_GetError());',
+                        '    if (!SDL_GetHintBoolean("PETARI_SMOKE_BACKGROUND", false)) {\n'
+                        '      TRY_WARN(SDL_ShowWindow(g_window), "Failed to show window: {}", SDL_GetError());\n'
+                        '    }')
+    text = replace_once(text,
                         '  flags |= SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;\n',
                         '  flags |= SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;\n'
                         '  if (SDL_GetHintBoolean("PETARI_SMOKE_BACKGROUND", false)) {\n'

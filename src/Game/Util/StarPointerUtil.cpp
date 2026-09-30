@@ -581,7 +581,14 @@ namespace MR {
 
         TVec3f camNorm = -MR::getCamZdir();
         TVec3f forceIntersectPos;
+#ifdef PETARI_NATIVE
+        if (!MR::checkHitSemilinePlane(&forceIntersectPos, camPos, pointRay, rPlaneBasePos, camNorm)) {
+            pPos->set(rPlaneBasePos);
+            return false;
+        }
+#else
         MR::checkHitSemilinePlane(&forceIntersectPos, camPos, pointRay, rPlaneBasePos, camNorm);
+#endif
 
         TVec3f forceNorm;
         TVec3f checkDir = rPlaneBasePos;
@@ -593,7 +600,14 @@ namespace MR {
             forceNorm = rPlaneNorm;
         }
 
+#ifdef PETARI_NATIVE
+        if (!MR::checkHitSemilinePlane(pPos, forceIntersectPos, forceNorm, rPlaneBasePos, rPlaneNorm)) {
+            pPos->set(rPlaneBasePos);
+            return false;
+        }
+#else
         MR::checkHitSemilinePlane(pPos, forceIntersectPos, forceNorm, rPlaneBasePos, rPlaneNorm);
+#endif
 
         return true;
     }

@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Convert foreground PETARI_ROUTE_RECORD CSV to dome-driver waypoints.
+Hop is a recorded jump (no automatic spin); Spin preserves the recorded spin.
+Only one continuous visit to --stage is accepted. Output needs live validation.
+"""
+import argparse
+import csv
+import math
+from pathlib import Path
+
+
+def convert(rows, stage="AstroGalaxy", spacing=150.0):
+    selected = []
+    started = ended = False
+    for row in rows:
+        valid = row["valid"] == "1" and row["stage"] == stage
+        if valid:
+            if ended:
+                raise ValueError("recording contains multiple stage visits; trim to one route")
+            started = True
+            selected.append(row)
+        elif started:
+            ended = True
+    if len(selected) < 2:
+        raise ValueError("need at least two valid frames in the selected stage")
+    def pos(row):
+        return tuple(float(row[k]) for k in ("x", "y", "z"))
+    if any(not all(math.isfinite(v) for v in pos(row)) for row in selected):
+        raise ValueError("non-finite recorded position")
+    points = [(pos(selected[0]), "Walk")]
+    last_ground = selected[0]
+    for i, row in enumerate(selected):
+        previous = selected[max(0, i-1)]
+        grounded = row["grounded"] == "1"
+        if row["jump"] == "1" and previous["jump"] != "1":
+            points.append((pos(last_ground), "Hop"))
+        if row["spin"] == "1" and previous["spin"] != "1":
+            points.append((pos(row), "Spin"))
+        landed = grounded and previous["grounded"] != "1"
+        # Preserve observed direction changes, without fitting across jump arcs.
+        turn = False
+        if grounded and i > 0 and i+1 < len(selected):
+            before = selected[max(0,i-5)]; after = selected[min(len(selected)-1,i+5)]
+            a = tuple(v-u for u,v in zip(pos(before),pos(row)))
+            b = tuple(v-u for u,v in zip(pos(row),pos(after)))
+            aa=math.sqrt(sum(v*v for v in a)); bb=math.sqrt(sum(v*v for v in b))
+            turn = aa > 2 and bb > 2 and sum(u*v for u,v in zip(a,b))/(aa*bb) < .94
+        if grounded and (landed or turn or math.dist(points[-1][0],pos(row)) >= spacing):
+            if points[-1][0] != pos(row): points.append((pos(row), "Walk"))
+        if grounded: last_ground = row
+    if points[-1][0] != pos(selected[-1]): points.append((pos(selected[-1]), "Walk"))
+    return [(*point, action) for point,action in points]
+
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument("recording",type=Path); p.add_argument("output",type=Path)
+    p.add_argument("--stage",default="AstroGalaxy");p.add_argument("--spacing",type=float,default=150)
+    args=p.parse_args()
+    if not math.isfinite(args.spacing) or args.spacing <= 0: p.error("spacing must be positive")
+    with args.recording.open() as f: points=convert(list(csv.DictReader(f)),args.stage,args.spacing)
+    with args.output.open("x",newline="") as f: csv.writer(f).writerows(points)
+    print(f"Wrote {len(points)} candidate waypoints to {args.output}; validate with a bounded dome tour.")
+
+if __name__ == "__main__": main()

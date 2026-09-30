@@ -23,7 +23,11 @@ LavaGalaxyParts::LavaGalaxyParts(const char* pName) : LiveActor(pName), mLodCtrl
 void LavaGalaxyParts::initAfterPlacement() {
     if (mMtxSetter != nullptr) {
 
+#ifdef PETARI_NATIVE
+        TVec3f groundVec(mPosition);  // no ground: retain the placement with zero offset
+#else
         TVec3f groundVec;
+#endif
         MR::calcMapGroundUpper(&groundVec, this);
 
         f32 yOffset = mPosition.distance(groundVec);

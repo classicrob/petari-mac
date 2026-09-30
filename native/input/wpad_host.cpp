@@ -506,6 +506,11 @@ void alarmHandler(OSAlarm*, OSContext*) {
 
 // --- Host API ---
 
+BoundState boundState() {
+    std::lock_guard<std::mutex> lock(gHostMutex);
+    return model().boundState();
+}
+
 void setBindings(const Bindings& value) {
     HostAllocationScope scope;
     std::lock_guard<std::mutex> lock(gHostMutex);

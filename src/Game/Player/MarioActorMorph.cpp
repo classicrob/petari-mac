@@ -375,7 +375,12 @@ const char* MarioActor::changeMorphString(const char* name) const {
             break;
         }
         if (item->_24 == hash) {
+#ifdef PETARI_NATIVE
+            // Slot 8 is the Luigi fallback, not a power-up; Tornado is mode 9.
+            const char* morph = mPlayerMode < PlayerMode_8 ? item->_0[mPlayerMode] : nullptr;
+#else
             const char* morph = item->_0[mPlayerMode];
+#endif
             if (morph == nullptr || mPlayerMode == PlayerMode_Normal) {
                 if (gIsLuigi) {
                     if (item->_0[8] != nullptr) {

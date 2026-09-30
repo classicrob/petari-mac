@@ -140,3 +140,44 @@ frontmost while System Events reports the user's app; this is a known observer
 discrepancy. Use System Events together with actual window-focus and input
 telemetry for this check, not LaunchServices alone. The extra monitor makes this
 run instrumentation evidence rather than a timing baseline.
+
+## Concurrent functional runs
+
+`--jobs 1..3` schedules bounded scenarios concurrently. Each instance still enters
+`build/locked-app.sh` independently; the lead controls available slots in
+`build/.app-slots`. `--lock-class functional` is the default.
+`--lock-class quiet --jobs 1` requests exclusive access for timing/audio
+measurements. Parallel batches and detected overlaps are marked as not
+performance evidence; no gameplay verdict is relaxed. Results publish atomically.
+
+Background mode now also requests a never-shown window and gain-zero SDL output.
+The full JAudio2/DSP/DMA pipeline, producer ring and physical device callback
+remain active, so muted output does not bypass audio diagnostics.
+
+Single-instance validation: `build/stage-sweep/isolation-hidden-v2` passed EggStar
+s1 on executable SHA256 `03845df64fe896be879bf49a818506c14fe9ddd28cd104319522fa436bf298d7`.
+There were 110 on-screen window inventories with zero visible windows and no
+observer errors, 1,457 gameplay frames, 4,371 EFB captures, zero physical
+assistance and zero renderer errors. Audio diagnostics covered 56.3 seconds with
+zero underruns, replayed blocks or DSP holds. Open Metal and Dawn cache files
+were confined to the fixture cache; both SQLite databases passed integrity checks.
+
+This instrumented functional run averaged 17.97 ms per gameplay frame (55.6 fps),
+with p99 43.55 ms. Compared with an earlier visible background run on a different
+binary, increases were mainly game work and draw completion waits; drawable
+acquisition and presentation remained small. This does not establish that hidden
+windows cause the slowdown. Three-instance validation remains pending.
+
+Background storage uses `<user>/cache` (or `PETARI_CACHE_DIR`). Exclusive directory
+locks reject concurrent reuse of a fixture or cache. Dawn and pipeline SQLite
+seeds are read-only snapshots. The native Metal cache uses a unique Darwin
+namespace linked to `<cache>/metal`, seeded by independent copies/APFS clones
+of the warm shared cache; no changes are copied back. TMPDIR uses `<cache>/tmp`; frameworks using Darwin temporary paths get a
+separate, OS-managed namespace with the same unique suffix. The sweep preserves captured pipeline configurations at the
+existing `user/pipeline_cache.db` location and normally removes disposable
+Dawn/Metal caches after the app exits; `--keep-user` retains them for inspection.
+
+NAND, settings and crash/hang reports already use the explicit fixture directory.
+Each scenario has its own log and frame CSV. Inherited soak/spike diagnostic
+paths are redirected to that scenario. Explicit additional diagnostic outputs
+must likewise be unique. Tracy is disabled in the current native build.

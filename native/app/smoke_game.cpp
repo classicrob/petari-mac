@@ -188,3 +188,51 @@ Observation observeGame(bool wantPlayer) {
 }
 
 }  // namespace PetariNative::App::Smoke
+
+#include "route_record.hpp"
+#include "route_record_writer.hpp"
+#include "Game/Map/HitInfo.hpp"
+#include "Game/Util/SceneUtil.hpp"
+#include <petari/host_allocation.hpp>
+#include <petari/input.hpp>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+
+namespace PetariNative::App {
+void recordRouteFrame(bool background) {
+    static const char* path = std::getenv("PETARI_ROUTE_RECORD");
+    if (!path || !*path) return;
+    PetariNative::HostAllocationScope host;
+    static RouteRecordWriter writer;
+    if (!writer.open(path, background)) return;
+    RouteRecordFrame row;
+    const auto* system = SingletonHolder<GameSystem>::get();
+    const auto* controller = system ? system->mSceneController : nullptr;
+    if (controller) {
+        row.stage = controller->mCurrSceneControlInfo.mStage;
+        row.scenario = controller->mCurrSceneControlInfo.mScenarioNo;
+        if (controller->mScene && controller->isSceneInitializeState(SceneInitializeState_End) &&
+            std::strcmp(controller->mCurrSceneControlInfo.mScene, "Game") == 0 &&
+            MR::isExistSceneObj(SceneObj_MarioHolder) && MR::isExistSceneObj(SceneObj_CameraContext)) {
+            const auto* holder = MR::getSceneObj<MarioHolder>(SceneObj_MarioHolder);
+            const auto* actor = holder ? holder->getMarioActor() : nullptr;
+            if (Smoke::canObservePlayer(actor)) {
+                row.valid = true;
+                row.x = actor->mPosition.x; row.y = actor->mPosition.y; row.z = actor->mPosition.z;
+                row.grounded = MR::isOnGroundPlayer();
+                const auto& gravity = actor->getMario()->getAirGravityVec();
+                row.gx = gravity.x; row.gy = gravity.y; row.gz = gravity.z;
+                const auto camera = MR::getCamZdir();
+                row.cx = camera.x; row.cy = camera.y; row.cz = camera.z;
+                row.yaw = std::atan2(camera.x, camera.z);
+                const auto* ground = actor->getMario()->mGroundPolygon;
+                if (ground && ground->isValid()) row.zone = ground->getHostPlacementZoneID();
+                row.bound = MR::isPlayerInBind();
+            }
+        }
+    }
+    row.input = PetariNative::Input::boundState();
+    writer.write(row);
+}
+}

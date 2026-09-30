@@ -10,6 +10,7 @@
 #include <SDL3/SDL_hints.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
+#include <pthread/qos.h>
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 
@@ -25,6 +26,7 @@
 
 #include "host.hpp"
 #include "smoke_background.hpp"
+#include "smoke_storage.hpp"
 #include <petari/host_allocation.hpp>
 
 extern "C" void petari_gx_pipeline_background_begin();
@@ -191,6 +193,14 @@ int main(int argc, char** argv) {
     }
 
     std::string error;
+    App::SmokeBackground::enabled = App::SmokeBackground::requested(
+        std::getenv("PETARI_SMOKE"), PetariNative::TestFixture::observatory,
+        std::getenv("PETARI_SMOKE_BACKGROUND"));
+    App::SmokeStorage smokeStorage;
+    if (App::SmokeBackground::enabled && !smokeStorage.prepare(paths.user, std::getenv("PETARI_CACHE_DIR"), &error)) {
+        std::fprintf(stderr, "petari: background storage: %s\n", error.c_str());
+        return 1;
+    }
     if (!App::Host::preparePlatform(paths, &error)) {
         std::fprintf(stderr, "petari: %s\n", error.c_str());
         return 1;
@@ -200,9 +210,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    App::SmokeBackground::enabled = App::SmokeBackground::requested(
-        std::getenv("PETARI_SMOKE"), PetariNative::TestFixture::observatory,
-        std::getenv("PETARI_SMOKE_BACKGROUND"));
     SDL_SetHintWithPriority("PETARI_SMOKE_BACKGROUND", App::SmokeBackground::enabled ? "1" : "0", SDL_HINT_OVERRIDE);
     if (App::SmokeBackground::enabled) {
         SDL_SetHintWithPriority(SDL_HINT_MAC_BACKGROUND_APP, "1", SDL_HINT_OVERRIDE);
@@ -224,6 +231,25 @@ int main(int argc, char** argv) {
             std::fputs("petari: could not set background app activation policy\n", stderr);
             return 1;
         }
+        // A hidden accessory process is otherwise a candidate for App Nap and
+        // background QoS, which slows the game (~7% simulation rate, 5x game_work).
+        // Declare the work user-initiated and latency critical, and raise this
+        // thread (threads created later inherit it). Background mode only.
+        {
+            const auto sendClass = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
+            const auto makeString = reinterpret_cast<id (*)(id, SEL, const char*)>(objc_msgSend);
+            const auto beginActivity = reinterpret_cast<id (*)(id, SEL, unsigned long long, id)>(objc_msgSend);
+            const id processInfo = sendClass(reinterpret_cast<id>(objc_getClass("NSProcessInfo")), sel_registerName("processInfo"));
+            const id reason = makeString(reinterpret_cast<id>(objc_getClass("NSString")), sel_registerName("stringWithUTF8String:"),
+                                         "Petari background smoke test");
+            constexpr unsigned long long userInitiated = 0x00FFFFFFULL, latencyCritical = 0xFF00000000ULL;
+            id activity = processInfo ? beginActivity(processInfo, sel_registerName("beginActivityWithOptions:reason:"),
+                                                      userInitiated | latencyCritical, reason) : nullptr;
+            if (activity) sendClass(activity, sel_registerName("retain")); // held until process exit
+            const int qos = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            std::fprintf(stderr, "PETARI SMOKE QOS: activity=%s thread_qos=%s\n", activity ? "user-initiated+latency-critical" : "unavailable",
+                         qos == 0 ? "user-interactive" : "unavailable");
+        }
         std::fputs("PETARI SMOKE BACKGROUND: enabled; physical input isolated; nonfocusable background window; VI pacing unchanged\n", stderr);
     }
 
@@ -231,7 +257,8 @@ int main(int argc, char** argv) {
     AuroraConfig config{};
     config.appName = "Super Mario Galaxy";
     config.userPath = userPath.c_str();
-    config.cachePath = userPath.c_str();
+    const std::string cachePath = App::SmokeBackground::enabled ? smokeStorage.cache.string() : userPath;
+    config.cachePath = cachePath.c_str();
     config.desiredBackend = BACKEND_METAL;
     // The game paces itself on VI retraces; a blocking present would add a
     // second wait per frame.
@@ -256,9 +283,14 @@ int main(int argc, char** argv) {
             aurora_shutdown();
             return 1;
         }
+        if (!(SDL_GetWindowFlags(window) & SDL_WINDOW_HIDDEN)) {
+            std::fputs("petari: background window unexpectedly visible\n", stderr);
+            aurora_shutdown();
+            return 1;
+        }
         int x = 0, y = 0;
         SDL_GetWindowPosition(window, &x, &y);
-        std::fprintf(stderr, "PETARI SMOKE BACKGROUND: accessory activation policy; window at %d,%d; flags=0x%llx\n",
+        std::fprintf(stderr, "PETARI SMOKE BACKGROUND: accessory activation policy; hidden window at %d,%d; flags=0x%llx\n",
                      x, y, static_cast<unsigned long long>(SDL_GetWindowFlags(window)));
         App::Events::assertFocus();
     }

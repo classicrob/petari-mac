@@ -109,7 +109,11 @@ AudSystem* AudNewAudSystem(JKRSolidHeap* pHeap, void* pV, JKRArchive* pSeqArchiv
         newHeap->getHeap()->freeTail();
     }
 
+#ifdef PETARI_NATIVE
+    u32 maxSeqDataSize = 0;  // no sequence archive: do not allocate dynamic sequence blocks
+#else
     u32 maxSeqDataSize;
+#endif
     if (pSeqArchive == nullptr) {
         if (DVDConvertPathToEntrynum(sJaiSeqArc) >= 0) {
             JKRArchive* seqArc = JKRArchive::mount(sJaiSeqArc, JKRArchive::MOUNT_MODE_DVD, newHeap->getHeap(), JKRArchive::MOUNT_DIRECTION_1);

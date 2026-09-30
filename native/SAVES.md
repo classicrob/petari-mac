@@ -1,15 +1,16 @@
 # Unlocked saves
 
-Ready-made saves let you open any dome, galaxy and mission from the observatory.
+Ready-made saves unlock the observatory destinations. Choose `grand-finale`
+for all content including Grand Finale and an already-completed Luigi file.
 They are for playing and testing. Each save is in its own directory under
 `build/saves/`. Your own save in `~/Library/Application Support/Petari` is never
 read or changed.
 
 | Directory | File 1 contains | Use it for |
 |---|---|---|
-| `build/saves/all-missions` | Mario with 120 stars. Every dome, galaxy and mission is open, and the observatory is fully restored. | Playing any level. **Start here.** |
+| `build/saves/all-missions` | Mario with 120 stars. All six domes and the regular missions are open; Grand Finale remains locked. The observatory is fully restored. | Replaying the regular game as Mario. |
 | `build/saves/complete-luigi` | The same, plus the 120-star ending counted as seen, so Luigi is playable. Luigi's own game starts from the beginning, as in the real game. | Playing as Luigi. |
-| `build/saves/grand-finale` | Mario and Luigi each with 120 stars and both endings seen, so the Grand Finale Galaxy is open. | The Grand Finale Galaxy. |
+| `build/saves/grand-finale` | Mario and Luigi each with 120 stars and both endings seen, so the Grand Finale Galaxy is open. | All content, including Grand Finale and unlocked Luigi levels. |
 
 ## Why the stars are collected
 
@@ -32,7 +33,7 @@ Use the directory directly. This leaves it unchanged except for your own
 progress:
 
 ```sh
-build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari --user build/saves/all-missions
+build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari --user build/saves/grand-finale
 ```
 
 Choose file 1 on the file select screen. The game saves progress to this
@@ -41,7 +42,9 @@ launch may prepare shaders for longer than your usual directory does. To start
 over, make the save again (see below). You can also copy the directory before
 playing and use the copy.
 
-To install one as your normal save, **quit Petari first**. Run these commands
+## Install as your normal save (about one minute)
+
+**Quit Petari first**. Run these commands
 from this repository's root in Terminal. Choose the variant on the first line.
 These are instructions for you to run; the test tools never install a save into
 your normal directory.
@@ -49,7 +52,7 @@ your normal directory.
 ```sh
 (
 set -e
-variant=all-missions
+variant=grand-finale
 save_relative=NAND/title/00010000/524d4745/data/GameData.bin
 petari_user="$HOME/Library/Application Support/Petari"
 petari_backup=$(mktemp -d "$HOME/Desktop/Petari-save-backup.XXXXXX")
@@ -67,7 +70,9 @@ and shader caches are retained. Each published variant changes file 1; the
 other five slots come from the test seed, not your existing save. Keep the printed
 backup directory. Launch Petari normally and select file 1.
 
-To restore your previous save, quit Petari, replace the example backup path
+### Restore your previous save
+
+Quit Petari, replace the example backup path
 below with the printed path, and copy back the original container:
 
 ```sh
@@ -144,17 +149,60 @@ Terrace galaxies at mission 1, and Good Egg missions 4, 5 and 6: **8/8 visits
 PASS**, exit 0, zero missing layout/sound references and no retained crash/hang
 reports. This used the frozen `Petari6.app`, not the latest renderer build.
 
-The later `build/unlocked-save/tour9/dome2/dome2.log` is a **failed** Fountain
-approach: the automated route got stuck over a lower floor before entering the
-dome. It proves no Fountain galaxy entry. The route planner's intervening-floor
-check is now corrected, but that correction requires a fresh live run. Other
-domes, Luigi selection, and Grand Finale access remain unverified through their
-normal UI until explicitly recorded here.
+Earlier Fountain attempts are retained as failures: `tour9/dome2` got stuck
+before the dome; `resume-11/dome2` crashed in the smoke observer at warp-pod
+entry. The route planner now rejects drops through intervening floors. The
+observer no longer assumes every rush state has a bound actor: ordinary warp
+status legitimately has no rush sensor in the unchanged decompilation. Its
+source audit and 13 sanitizer-backed regression checks are documented in
+`build/unlocked-save/resume-12/OBSERVER-AUDIT.md`. The successful run below
+exercised both fixes.
 
-The refreshed `resume-11/dome2` retry passed the old route dead-end but crashed
-inside the smoke observer at warp-pod entry (`getCurrentRushActor`, null sensor;
-exit -11). Ordinary warp status legitimately has no actor-bound rush sensor in
-the unchanged decompilation. The corrected observer and its 13 sanitizer-backed
-checks are documented in `build/unlocked-save/resume-12/OBSERVER-AUDIT.md`.
-`resume-12/tests.log` records 7/7 targeted CTests passing. These tests do not
-replace the pending live retry through that pod and the Fountain map.
+**Fountain live retry passed:** `build/unlocked-save/resume-14/dome2/` contains
+`dome2.log`, `dome-tour.json`, the per-galaxy `dome-tour.md`, launch hashes and
+settings. Exit 0 in 272 seconds; **5/5 visits PASS**, all five expected galaxies
+selectable, zero missing references, no retained crash/hang reports. Battle Rock,
+Hurry-Scurry, Bowser's Star Reactor, Space Junk and Rolling Green each loaded
+mission 1 through the normal UI, became ready, recorded movement, and returned
+through the pause menu. The mission menus showed Battle Rock 1–7, Space Junk
+1–6 and one star for each other galaxy. The run used stage-only shader
+preparation in a background window; it is functional evidence, not a timing or
+visual-fidelity benchmark. The Fountain route is now updated in the source
+table.
+
+**Bedroom live tour passed:** `build/unlocked-save/resume-14/dome4/` records
+exit 0 and **5/5 visits PASS**: Gusty Garden, Honeyclimb, Freezeflame, Bowser's
+Dark Matter Plant and Dusty Dune, each at mission 1, with all five expected map
+destinations selectable and zero missing references or retained crash/hang
+reports. Freezeflame moved 27 units and logged the driver's little-movement
+warning; other visits moved 51–60 units. Movement distance is reported, not a
+mission-completion assertion. The menus showed Gusty Garden and Freezeflame
+1–6, Dusty Dune 1–7, and the other two galaxies 1.
+
+`build/unlocked-save/resume-15/verified-menu-audit.json` independently compares
+the Fountain and Bedroom menu logs with every expected scenario ID: no
+mismatches. The runner now rejects missing or incorrect mission menus.
+
+Kitchen's `resume-14/dome3` attempt failed near its entrance before any galaxy
+visit; its successful retry is recorded below. Engine Room and variant-specific
+Luigi/Grand Finale checks remain pending.
+
+**Garden live tour passed:** `build/unlocked-save/resume-14/dome6/` records
+**4/4 visits PASS**, the complete four-galaxy map and every expected mission ID,
+zero missing references, and no retained crash/hang reports. Dreadnought,
+Melty Molten and Deep Dark each showed missions 1–6; Matter Splatter showed 1.
+All entered mission 1 and returned through the pause menu. Matter Splatter's
+movement check recorded only 2.4 units (warning), so this does not establish
+unobstructed movement there. The other visits recorded 44–66 units.
+
+Engine Room's `resume-14/dome5` approach failed before reaching the map after
+an airborne route overshoot. The Kitchen retry is recorded below; Engine Room remains pending.
+
+**Kitchen retry passed:** `build/unlocked-save/resume-15/kitchen/` records
+**5/5 visits PASS**, all five expected map destinations and all expected
+mission IDs, zero missing references and no retained crash/hang reports.
+Bubble Breeze, Beach Bowl, Bowser Jr.'s Airship Armada, Buoy Base and Ghostly
+Galaxy each loaded mission 1, became ready and returned via pause. Movement
+was 51–75 units. Beach Bowl and Ghostly showed 1–6, Buoy Base 1–2, the others 1.
+The verified route follows the outer lower ledge past the pillar and jumps up
+near the doorway; it is now in the source route table.

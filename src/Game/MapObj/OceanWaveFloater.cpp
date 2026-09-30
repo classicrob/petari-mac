@@ -98,6 +98,9 @@ void OceanWaveFloater::appear() {
 }
 
 void OceanWaveFloater::initAfterPlacement() {
+#ifdef PETARI_NATIVE
+    mMapGroundUpper.set(mPosition);  // no ground: retain the placement with zero offset
+#endif
     MR::calcMapGroundUpper(&mMapGroundUpper, this);
     mOffset = mPosition.distance(mMapGroundUpper);
 

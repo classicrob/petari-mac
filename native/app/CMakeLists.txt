@@ -48,8 +48,8 @@ if(NOT _petari_app_standalone)
     target_link_libraries(petari_app_host PUBLIC aurora::core petari_input_sdl3 petari_home_menu_imgui
         petari_host_runtime petari_app_smoke)
 
-    add_executable(petari MACOSX_BUNDLE app_main.cpp)
-    target_link_libraries(petari PRIVATE petari_app_host petari_app_platform aurora::core aurora::main)
+    add_executable(petari MACOSX_BUNDLE app_main.cpp smoke_storage.cpp)
+    target_link_libraries(petari PRIVATE petari_app_host petari_app_platform aurora::core aurora::main SQLite::SQLite3)
     # A real bundle identity: macOS uses it for the Dock/menu name, window state,
     # permissions and app identification. User data stays at the explicit path in app_main.
     set_target_properties(petari PROPERTIES OUTPUT_NAME "Petari"
@@ -91,10 +91,17 @@ else()
 endif()
 
 if(BUILD_TESTING)
+    if(NOT _petari_app_standalone)
+        add_executable(petari_app_smoke_storage_tests ${PETARI_REPO_ROOT}/native/tests/app_smoke_storage_tests.cpp smoke_storage.cpp)
+        target_link_libraries(petari_app_smoke_storage_tests PRIVATE SQLite::SQLite3)
+        add_test(NAME native_app_smoke_storage COMMAND petari_app_smoke_storage_tests)
+    endif()
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME native_stage_sweep_parallel COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/stage_sweep_parallel_tests.py")
     add_test(NAME native_observatory_fixture COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/test_fixture_tests.py")
     add_test(NAME native_unlocked_save COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/unlocked_save_tests.py")
     add_test(NAME native_smoke_observe_safety COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/smoke_observe_safety_tests.py")
+    add_test(NAME native_route_record COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/route_record_tests.py")
     add_test(NAME native_dome_tour_tools COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/dome_tour_tool_tests.py")
     add_executable(petari_app_smoke_domes_tests ${PETARI_REPO_ROOT}/native/tests/app_smoke_domes_tests.cpp)
     target_link_libraries(petari_app_smoke_domes_tests PRIVATE petari_app_smoke)

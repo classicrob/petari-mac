@@ -27,7 +27,11 @@ CameraTargetObj* CameraSpiral::calc() {
     const s32 timer = mTimer;
     f32 easeTime = timer < mStartTime ? 0.0f : timer - mStartTime;
 
+#ifdef PETARI_NATIVE
+    f32 rate = 0.0f;  // unsupported easing: retain the start pose
+#else
     f32 rate;
+#endif
     switch (mEaseType) {
     case EaseType_Linear: {
         f32 t = easeTime / getInterval();

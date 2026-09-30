@@ -19,6 +19,7 @@ extern "C" void petari_gx_pipeline_report();
 #include "host.hpp"
 #include "smoke_background.hpp"
 #include "smoke.hpp"
+#include "route_record.hpp"
 #include "smoke_domes.hpp"
 #include "smoke_goodegg.hpp"
 #include "smoke_soak.hpp"
@@ -580,6 +581,7 @@ extern "C" void petari_host_frame_mark(int mark) {
 extern "C" void petari_host_frame_seam(void) {
     const std::uint64_t entry = Telemetry::nowNs();
     PetariNative::HostAllocationScope host;
+    recordRouteFrame(SmokeBackground::enabled);
     // Game state is readable here, before the CPU is released.
     recordFrame(entry, gTiming.probe != nullptr ? gTiming.probe() : FrameStats::Phase::Gameplay);
     if (gSmoke != nullptr) {

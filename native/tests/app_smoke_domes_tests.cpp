@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <unistd.h>
 
 using namespace PetariNative::App::Smoke;
 static int checks;
@@ -9,7 +10,7 @@ static void check(bool ok, const char* message) {
     ++checks;
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
 }
-static void enterDome(DomesDriver& driver, Observation& o) {
+static void enterDome(DomesDriver& driver, Observation& o, bool routeOnly = false) {
     o.scene = "Game"; o.stage = "AstroGalaxy"; o.scenario = 5;
     o.sceneReady = o.playerValid = o.pausePermitted = o.playerOnGround = true;
     o.gravityY = -1; o.camXx = 1; o.camZz = 1;
@@ -23,6 +24,7 @@ static void enterDome(DomesDriver& driver, Observation& o) {
         driver.step(o);
     }
     check(std::string(driver.phase()) == "domes: walking to the dome", "calibration finished");
+    if (routeOnly) return;
     o.stage = "AstroDome"; o.scenario = 2;
     o.playerX = 0; o.playerY = -705; o.playerZ = 721;
     driver.step(o);
@@ -30,7 +32,18 @@ static void enterDome(DomesDriver& driver, Observation& o) {
     check(std::string(driver.phase()) == "domes: pointing at the Blue Star", "dome ready");
 }
 int main() {
-    DomesConfig config; config.dome = 2;
+    char routePath[] = "/tmp/petari-dome-route-XXXXXX";
+    const int routeFd = mkstemp(routePath);
+    check(routeFd >= 0, "temporary route created");
+    FILE* routeFile = fdopen(routeFd, "w");
+    std::fputs("100,0,100,Jump\n150,100,100,Walk\n300,100,100,Walk\n", routeFile);
+    std::fclose(routeFile);
+    setenv("PETARI_DOME_ROUTE", routePath, 1);
+
+    setenv("PETARI_SMOKE", "domes", 1);
+    setenv("PETARI_DOME", "2", 1);
+    DomesConfig config;
+    check(domesEnabledFromEnvironment(&config), "test route loaded through environment setup");
     DomesDriver driver(10000, config); Observation o;
     enterDome(driver, o);
     bool moved = false;
@@ -51,5 +64,38 @@ int main() {
     enterDome(missing, absent);
     for (int i = 0; i < 901 && missing.result() == Result::Running; ++i) missing.step(absent);
     check(missing.result() == Result::Fail, "approach does not waive missing-target timeout");
-    std::printf("%d dome approach checks passed\n", checks);
+    DomesConfig finaleConfig; finaleConfig.dome = 7;
+    DomesDriver finale(10000, finaleConfig); Observation finalObs;
+    finalObs.scene = "Game"; finalObs.stage = "AstroGalaxy"; finalObs.sceneReady = true;
+    finalObs.milestones = {"FileSelector.DemoStartWait"}; finale.step(finalObs); finalObs.milestones.clear();
+    finalObs.scene = "ScenarioSelect"; finalObs.stage = "PeachCastleFinalGalaxy";
+    finalObs.targets = {{"Scenario.Star", 1, .5f, .5f, kTargetSelectable | kTargetPointing}};
+    finale.step(finalObs);
+    check(std::string(finale.phase()) == "domes: selecting the mission", "finale route reaches real scenario UI");
+    bool selected = false;
+    for (int i = 0; i < 4; ++i)
+        for (const auto& press : finale.step(finalObs).presses) selected |= press.button == Button::A && press.down;
+    check(selected, "finale scenario selected with A");
+    check(std::string(finale.phase()) == "domes: loading the mission", "finale awaits selected mission load");
+    DomesDriver bypass(10000, finaleConfig);
+    finalObs.scene = "Game"; finalObs.stage = "AstroGalaxy";
+    finalObs.milestones = {"FileSelector.DemoStartWait"}; bypass.step(finalObs); finalObs.milestones.clear();
+    finalObs.stage = "PeachCastleFinalGalaxy"; finalObs.targets.clear(); bypass.step(finalObs);
+    check(bypass.result() == Result::Fail, "finale cannot pass an unobserved direct stage entry");
+    DomesDriver jumper(10000, config); Observation jumpObs;
+    enterDome(jumper, jumpObs, true);
+    jumper.step(jumpObs);
+    jumpObs.playerX = 150; jumpObs.playerY = 100; jumpObs.playerOnGround = false;
+    const auto advanced = [&]() {
+        for (const auto& line : jumper.log()) if (line.find("route waypoint 2 at") != std::string::npos) return true;
+        return false;
+    };
+    for (int i = 0; i < 10; ++i) {
+        jumper.step(jumpObs);
+        check(!advanced(), "airborne jump arrival does not advance the route");
+    }
+    jumpObs.playerOnGround = true; jumper.step(jumpObs);
+    check(advanced(), "grounded jump arrival advances the route");
+    unlink(routePath);
+    std::printf("%d dome/finale checks passed\n", checks);
 }

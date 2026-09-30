@@ -37,12 +37,19 @@ CameraRailHolder::CameraRailHolder(const char* pName) : NameObj(pName), mRails()
             if (MR::getJMapInfoRailArg0NoInit(iter, &arg) && arg >= 0) {
                 mRails[zoneId].mRails[railNum].mRailId = arg;
                 s32 linkId;
+#ifdef PETARI_NATIVE
+                if (!iter.getValue("l_id", &linkId)) continue;
+#else
                 iter.getValue("l_id", &linkId);
+#endif
                 mRails[zoneId].mRails[railNum].mRailRider = new RailRider(linkId, zoneId);
                 railNum++;
             }
         }
 
+#ifdef PETARI_NATIVE
+        mRails[zoneId].mNumRails = railNum;
+#endif
         for (s32 railId = 0; railId < mRails[zoneId].mNumRails - 1; railId++) {
             s32 sortId = railId;
             for (s32 j = railId + 1; j < mRails[zoneId].mNumRails; j++) {

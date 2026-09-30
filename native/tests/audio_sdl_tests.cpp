@@ -5,9 +5,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 extern "C" void __OSThreadInit();
+extern "C" bool SDL_SetHint(const char*, const char*);
 namespace {
 std::atomic<unsigned> callbacks{0};
 std::array<std::chrono::steady_clock::time_point, 32> starts;
@@ -20,7 +22,10 @@ void dma() {
 int main() {
     __OSThreadInit();
     alignas(32) std::int16_t samples[640]{};
-    for (unsigned rate = 0; rate < 2; ++rate) {
+    for (unsigned test = 0; test < 4; ++test) {
+        const unsigned rate = test % 2;
+        const bool muted = test >= 2;
+        if (!SDL_SetHint("PETARI_SMOKE_BACKGROUND", muted ? "1" : "0")) return 2;
         callbacks = 0;
         PetariNative::AudioSDL::install();
         AIInit(nullptr);
@@ -34,9 +39,13 @@ int main() {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         const bool ok = callbacks >= starts.size() && PetariNative::AudioSDL::active() &&
-                        PetariNative::AudioSDL::submittedFrames() >= 640;
+                        PetariNative::AudioSDL::submittedFrames() >= 640 &&
+                        PetariNative::AudioSDL::outputMuted() == muted;
         PetariNative::AudioSDL::shutdown();
-        if (!ok || PetariNative::AudioSDL::active()) return 1;
+        if (!ok || PetariNative::AudioSDL::active()) {
+            std::fprintf(stderr, "Audio case %u failed (muted=%d, callbacks=%u)\n", test, muted, callbacks.load());
+            return 1;
+        }
         // A device request can span several DMA blocks, but their interrupts
         // must be paced so the game can prepare the next block between them.
         for (std::size_t i = 1; i < starts.size(); ++i) {
@@ -47,5 +56,5 @@ int main() {
             }
         }
     }
-    std::puts("SDL audio callback, DMA interrupts, 32/48 kHz and reopen passed.");
+    std::puts("SDL audio callback, DMA interrupts, 32/48 kHz, reopen and silent realtime output passed.");
 }

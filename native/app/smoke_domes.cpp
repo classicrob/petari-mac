@@ -65,7 +65,7 @@ std::string number(float value) {
 }
 std::string text(Vec a) { return "(" + number(a.x) + ", " + number(a.y) + ", " + number(a.z) + ")"; }
 
-const char* const kDomeNames[] = {"", "Terrace", "Fountain", "Kitchen", "Bedroom", "Engine Room", "Garden"};
+const char* const kDomeNames[] = {"", "Terrace", "Fountain", "Kitchen", "Bedroom", "Engine Room", "Garden", "Grand Finale"};
 
 }  // namespace
 
@@ -90,7 +90,11 @@ void loadRouteOverride() {
         if (std::sscanf(line, "%f,%f,%f,%15s", &x, &y, &z, action) == 4) {
             const DomeWaypoint::Action kind = std::strncmp(action, "Warp", 4) == 0 ? DomeWaypoint::Warp
                                               : std::strncmp(action, "Jump", 4) == 0 ? DomeWaypoint::Jump
-                                                                                      : DomeWaypoint::Walk;
+                                              : std::strncmp(action, "Hop", 3) == 0 ? DomeWaypoint::Hop
+                                              : std::strncmp(action, "Spin", 4) == 0 ? DomeWaypoint::Spin
+                                              : std::strncmp(action, "Launch", 6) == 0 ? DomeWaypoint::Launch
+                                              : std::strncmp(action, "Talk", 4) == 0 ? DomeWaypoint::Talk
+                                                                                    : DomeWaypoint::Walk;
             gRouteOverride.push_back({x, y, z, kind});
         }
     }
@@ -110,8 +114,8 @@ bool domesEnabledFromEnvironment(DomesConfig* config) {
     if (smoke == nullptr || std::strcmp(smoke, "domes") != 0) return false;
     const char* dome = std::getenv("PETARI_DOME");
     const long number = dome != nullptr ? std::strtol(dome, nullptr, 10) : 0;
-    if (number < 1 || number > 6 || routeFor(static_cast<int>(number)).empty()) {
-        std::fputs("PETARI SMOKE: script domes needs PETARI_DOME (1..6, a dome with a planned route); not running\n", stderr);
+    if (number < 1 || number > 7 || routeFor(static_cast<int>(number)).empty()) {
+        std::fputs("PETARI SMOKE: script domes needs PETARI_DOME (1..7, a destination with a planned route); not running\n", stderr);
         return false;
     }
     config->dome = static_cast<int>(number);
@@ -144,6 +148,8 @@ const char* DomesDriver::phase() const {
     case Phase::Calibrate: return "domes: calibrating the stick";
     case Phase::Route: return "domes: walking to the dome";
     case Phase::Warp: return "domes: waiting for a warp pod";
+    case Phase::Launch: return "domes: using a Launch Star";
+    case Phase::Talk: return "domes: talking to the Grand Finale Luma";
     case Phase::EnterDome: return "domes: entering the dome";
     case Phase::DomeReady: return "domes: waiting in the dome";
     case Phase::BlueStar: return "domes: pointing at the Blue Star";
@@ -351,7 +357,7 @@ Step DomesDriver::step(const Observation& o) {
     }
     for (const Observation::Prompt& prompt : o.prompts) {
         note("prompt " + prompt.messageId + " type " + std::to_string(prompt.type));
-        if (mPhase == Phase::Answer && prompt.type == 2) {
+        if ((mPhase == Phase::Answer || mPhase == Phase::Talk) && prompt.type == 2) {
             mAnswering = true;
             mAimFrames = mPointingFrames = mAimMissing = 0;
         } else {
@@ -382,6 +388,18 @@ Step DomesDriver::step(const Observation& o) {
 
 void DomesDriver::route(const Observation& o, Step& step) {
     const std::vector<DomeWaypoint>& points = routeFor(mConfig.dome);
+    if (mConfig.dome == 7 && o.stage == "PeachCastleFinalGalaxy") {
+        steer({}, step);
+        if (mVisits.empty()) mVisits.push_back({"PeachCastleFinalGalaxy", 1});
+        const bool starShown = std::any_of(o.targets.begin(), o.targets.end(), [](const Observation::Target& target) {
+            return target.id == "Scenario.Star" && (target.flags & kTargetSelectable);
+        });
+        if (starShown) next(Phase::Scenario);
+        else if (o.scene == "Game" && o.sceneReady) {
+            finish(Result::Fail, "Grand Finale entered without observed scenario selection", step);
+        }
+        return;
+    }
     if (o.scene == "Game" && o.stage == "AstroDome") {
         steer({}, step);
         if (!o.sceneReady) return;
@@ -400,7 +418,7 @@ void DomesDriver::route(const Observation& o, Step& step) {
         }
         return;
     }
-    if (handleTalk(o, step)) return;
+    if (mPhase != Phase::Talk && handleTalk(o, step)) return;
     const Vec pos = position(o);
     const Vec u = up(o);
     const Vec right = across(Vec{o.camXx, o.camXy, o.camXz}, u);
@@ -444,6 +462,51 @@ void DomesDriver::route(const Observation& o, Step& step) {
         }
         return;
     }
+    if (mPhase == Phase::Talk) {
+        steer({}, step);
+        mTalkWasActive = mTalkWasActive || o.talkActive;
+        const bool yesShown = std::any_of(o.targets.begin(), o.targets.end(), [](const Observation::Target& target) {
+            return target.id == "Prompt.Yes" && (target.flags & kTargetSelectable);
+        });
+        if (yesShown) {
+            if (aimAndPress(o, "Prompt.Yes", -1, step)) note("accepted Grand Finale Luma invitation");
+        } else if (o.talkActive) {
+            handleTalk(o, step);
+        } else if (mTalkWasActive) {
+            ++mWaypoint;
+            mTalkWasActive = false;
+            mBestDistance = 1e30f;
+            next(Phase::Route);
+        } else {
+            const bool startShown = std::any_of(o.targets.begin(), o.targets.end(), [](const Observation::Target& target) {
+                return target.id == "Talk.Start" && (target.flags & kTargetSelectable);
+            });
+            if (startShown && mFrame >= mTalkTapAt) {
+                note("start Grand Finale Luma talk");
+                tap(Button::A, kTapFrames, step);
+                mTalkTapAt = mFrame + kTalkTapInterval;
+            }
+        }
+        if (mPhase == Phase::Talk && mPhaseFrames >= kReadyLimit) finish(Result::Fail, "Grand Finale Luma talk did not finish", step);
+        return;
+    }
+    if (mPhase == Phase::Launch) {
+        steer({}, step);
+        const float moved = length(sub(pos, Vec{mWarpX, mWarpY, mWarpZ}));
+        if (moved >= kWarpJump && o.playerOnGround && !o.playerInBind) {
+            note("Launch Star landed at " + text(pos));
+            ++mWaypoint;
+            mBestDistance = 1e30f;
+            mStuckFrames = 0;
+            mRecoveries = 0;
+            next(Phase::Route);
+        } else if (moved < kWarpJump) {
+            if (mPhaseFrames % 60 == 1 && o.playerOnGround && !o.playerInBind) tap(Button::A, kJumpHold, step);
+            if (mPhaseFrames % 30 == 16) tap(Button::Spin, kTapFrames, step);
+        }
+        if (mPhase == Phase::Launch && mPhaseFrames >= kReadyLimit) finish(Result::Fail, "Launch Star did not reach its destination", step);
+        return;
+    }
     if (mPhase == Phase::Warp) {
         steer({}, step);
         const float moved = length(sub(pos, Vec{mWarpX, mWarpY, mWarpZ}));
@@ -480,12 +543,28 @@ void DomesDriver::route(const Observation& o, Step& step) {
         note("route waypoint " + std::to_string(mWaypoint) + ": " + number(distance) + " away, height " + number(height) + ", at " + text(pos));
     }
     if (distance < (target.action == DomeWaypoint::Warp ? kArriveWarp : kArrive) && height < kArriveHeight) {
-        if (target.action == DomeWaypoint::Jump) {
+        if (mAwaitJumpLanding && target.action != DomeWaypoint::Spin && !o.playerOnGround) {
+            steer({}, step);
+            if (mPhaseFrames >= kRouteLimit) finish(Result::Fail, "jump destination never became grounded", step);
+            return;
+        }
+        if (target.action != DomeWaypoint::Spin) mAwaitJumpLanding = false;
+        if (target.action == DomeWaypoint::Spin) tap(Button::Spin, kTapFrames, step);
+        if (target.action == DomeWaypoint::Jump || target.action == DomeWaypoint::Hop) {
+            mAwaitJumpLanding = true;
             // A held for full height, then a spin near the apex for the extra lift
             // the observatory's terrace steps (up to about 310 units) need.
             note("jump and spin at waypoint " + std::to_string(mWaypoint) + " from " + text(pos));
             tap(Button::A, kJumpHold, step);
-            mSpinAt = mFrame + kJumpSpinDelay;
+            if (target.action == DomeWaypoint::Jump) mSpinAt = mFrame + kJumpSpinDelay;
+        }
+        if (target.action == DomeWaypoint::Launch || target.action == DomeWaypoint::Talk) {
+            steer({}, step);
+            note("route interaction at " + text(pos));
+            mWarpX = pos.x; mWarpY = pos.y; mWarpZ = pos.z;
+            mTalkWasActive = false;
+            next(target.action == DomeWaypoint::Launch ? Phase::Launch : Phase::Talk);
+            return;
         }
         if (target.action == DomeWaypoint::Warp) {
             steer({}, step);
@@ -713,6 +792,12 @@ void DomesDriver::dome(const Observation& o, Step& step) {
         if (aimAndPress(o, "PauseMenu.Back", -1, step)) next(Phase::Answer);
         return;
     case Phase::Answer:
+        if (mConfig.dome == 7 && o.scene == "Game" && o.stage == "AstroGalaxy" && o.sceneReady) {
+            closeVisit("PASS");
+            ++mVisit;
+            finish(Result::Pass, "Grand Finale selected through its Luma, loaded, ready and returned", step);
+            return;
+        }
         if (inDome && o.sceneReady) {
             if (o.scenario != mConfig.dome) {
                 finish(Result::Fail, "the galaxy exit returned to dome " + std::to_string(o.scenario), step);

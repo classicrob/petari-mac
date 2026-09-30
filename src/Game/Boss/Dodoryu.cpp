@@ -809,8 +809,17 @@ void Dodoryu::updateCameraTarget() {
     _14C->mMatrix.setInline(m1);
 }
 
-DodoryuBank::DodoryuBank() : ModelObj("ドドリュウ盛土", "DodoryuBank", _90, MR::DrawBufferType_MapObjStrongLight, -2, -2, false) {
+DodoryuBank::DodoryuBank() : ModelObj("ドドリュウ盛土", "DodoryuBank",
+#ifdef PETARI_NATIVE
+                                           nullptr,
+#else
+                                           _90,
+#endif
+                                           MR::DrawBufferType_MapObjStrongLight, -2, -2, false) {
     _90.identity();
+#ifdef PETARI_NATIVE
+    mMtx = _90;
+#endif
 }
 
 void DodoryuBank::init(const JMapInfoIter& rIter) {
@@ -830,9 +839,18 @@ void Dodoryu_FORCE_MATCH_RABBIT(LiveActor* pActor) {
 }
 
 DodoryuRabbit::DodoryuRabbit(Dodoryu* pHost, const JMapInfoIter& rIter)
-    : ModelObj("ドドリュウに追われるウサギ", "DodoryuRabbit", _94, MR::DrawBufferType_NPC, -2, -2, false), mHost(pHost), _C4(), mTalkCtrl(), _CC(300),
+    : ModelObj("ドドリュウに追われるウサギ", "DodoryuRabbit",
+#ifdef PETARI_NATIVE
+               nullptr,
+#else
+               _94,
+#endif
+               MR::DrawBufferType_NPC, -2, -2, false), mHost(pHost), _C4(), mTalkCtrl(), _CC(300),
       _D0(), _D4(), _D8(), mIsDisplayMessage() {
     _94.identity();
+#ifdef PETARI_NATIVE
+    mMtx = _94;
+#endif
 
     initWithoutIter();
 

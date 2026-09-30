@@ -375,6 +375,14 @@ void start(std::uint32_t rate, void*) {
     lastCallbackUs = 0;
     SDL_AudioSpec spec{SDL_AUDIO_S16, 2, static_cast<int>(rate)};
     device = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, fill, nullptr);
+    if (device && SDL_GetHintBoolean("PETARI_SMOKE_BACKGROUND", false)) {
+        if (!SDL_SetAudioStreamGain(device, 0.0f) || SDL_GetAudioStreamGain(device) != 0.0f) {
+            std::fprintf(stderr, "SDL background audio mute failed: %s\n", SDL_GetError());
+            stop(nullptr);
+            std::abort();
+        }
+        std::fputs("PETARI SMOKE AUDIO: output gain 0; realtime DSP/DMA and device callback retained\n", stderr);
+    }
     if (device) {
         // The elastic wait limit from the device's actual request size.
         SDL_AudioSpec deviceSpec{};
@@ -410,6 +418,7 @@ void install() {
 void shutdown() {
     Platform::Audio::shutdown();
 }
+bool outputMuted() { return device && SDL_GetAudioStreamGain(device) == 0.0f; }
 bool active() { return running.load() && !failed.load(); }
 std::uint64_t submittedFrames() { return submitted.load(); }
 }

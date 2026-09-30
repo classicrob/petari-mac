@@ -6,5 +6,6 @@ namespace PetariNative::AudioSDL {
 void install();
 void shutdown();
 bool active();
+bool outputMuted();
 std::uint64_t submittedFrames();
 }

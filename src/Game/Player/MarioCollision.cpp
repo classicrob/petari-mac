@@ -689,7 +689,11 @@ void Mario::checkAllWall(const TVec3f& rPosition, f32 radius) {
             }
         }
 
+#ifdef PETARI_NATIVE
+        f32 groundAngle = 0.0f;
+#else
         f32 groundAngle;
+#endif
 
         if (mMovementStates._1) {
             groundAngle = calcAngleD(_368);
@@ -703,7 +707,12 @@ void Mario::checkAllWall(const TVec3f& rPosition, f32 radius) {
             }
         }
 
+#ifdef PETARI_NATIVE
+        // Without a ground contact there is no ground angle to compare these walls against.
+        if (mMovementStates._1 && maxAngle - minAngle < 60.0f && maxAngle - minAngle > 5.0f && maxAngle < 80.0f) {
+#else
         if (maxAngle - minAngle < 60.0f && maxAngle - minAngle > 5.0f && maxAngle < 80.0f) {
+#endif
             mDrawStates._F = true;
 
             if (maxAngle > groundAngle) {

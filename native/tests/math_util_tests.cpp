@@ -8,6 +8,7 @@
 //
 // Usage: petari_math_util_tests
 #include "Game/Util/MathUtil.hpp"
+#include "Game/Util/MtxUtil.hpp"
 #include <cmath>
 #include <cstdio>
 
@@ -20,7 +21,45 @@ static void checkVec(const TVec3f& rActual, f32 x, f32 y, f32 z, const char* pTe
     }
 }
 
+static void checkRotationOrders() {
+    // Independent scalar matrices, in left-to-right product order.
+    const int orders[6][3] = {{2, 1, 0}, {1, 2, 0}, {2, 0, 1}, {0, 2, 1}, {1, 0, 2}, {0, 1, 2}};
+    for (int sample = 0; sample < 20; ++sample) {
+        const TVec3f angles(0.17f * sample, -0.11f * sample, 0.07f * sample);
+        const double x = angles.x, y = angles.y, z = angles.z;
+        const double rotation[3][3][3] = {
+            {{1, 0, 0}, {0, std::cos(x), -std::sin(x)}, {0, std::sin(x), std::cos(x)}},
+            {{std::cos(y), 0, std::sin(y)}, {0, 1, 0}, {-std::sin(y), 0, std::cos(y)}},
+            {{std::cos(z), -std::sin(z), 0}, {std::sin(z), std::cos(z), 0}, {0, 0, 1}}
+        };
+        for (int order = -1; order <= 6; ++order) {
+            const int* axes = orders[order < 0 || order > 5 ? 0 : order];
+            double expected[3][3] = {};
+            for (int row = 0; row < 3; ++row)
+                for (int col = 0; col < 3; ++col)
+                    for (int j = 0; j < 3; ++j)
+                        for (int k = 0; k < 3; ++k)
+                            expected[row][col] += rotation[axes[0]][row][j] * rotation[axes[1]][j][k] * rotation[axes[2]][k][col];
+            Mtx actual;
+            MR::orderRotateMtx(order, angles, actual);
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 4; ++col) {
+                    const double reference = col == 3 ? 0 : expected[row][col];
+                    // The game's sine/cosine come from JMath's lookup table, which differs from the scalar
+                    // reference by up to about 7e-4; an axis-order mistake is off by far more than that.
+                    if (!std::isfinite(actual[row][col]) || std::fabs(actual[row][col] - reference) > 2e-3) {
+                        std::fprintf(stderr, "FAIL rotation order %d sample %d [%d,%d]: %g vs %g\n", order, sample, row, col, actual[row][col], reference);
+                        ++sFailures;
+                    }
+                }
+            }
+        }
+    }
+    std::puts("Checked 160 rotation matrices against scalar reference (1920 elements)");
+}
+
 int main() {
+    checkRotationOrders();
     // PSvecBlend: dst = from * invRate + to * rate.
     TVec3f from(1.0f, 2.0f, 3.0f), to(10.0f, 20.0f, 30.0f), out(0.0f, 0.0f, 0.0f);
     MR::PSvecBlend(&from, &to, &out, 0.25f, 0.5f);

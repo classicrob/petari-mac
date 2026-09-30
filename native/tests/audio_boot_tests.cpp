@@ -381,6 +381,8 @@ int main(int argc, char** argv) {
               "chord table counts are sane");
     }
 
+    PAudio::takeDmaStats();
+    const std::uint64_t qualityReplaysBefore = PAudio::replayedBlocks();
     // Exercise the same fades and pause state transitions as the game's pause menu.
     // Measure after each fade so a valid fade-out is not mistaken for a gap.
     for (int cycle = 0; cycle < 3; ++cycle) {
@@ -430,6 +432,59 @@ int main(int argc, char** argv) {
         AudWrap::getSubBgm()->stop(0);
     }
 
+    struct StageAudioCase { const char* stage; const char* bgm; bool luigi; };
+    for (const StageAudioCase& entry : {
+             StageAudioCase{"EggStarGalaxy", "MBGM_GALAXY_01", false},
+             StageAudioCase{"AstroGalaxy", "STM_ASTRO_OUT", false},
+             StageAudioCase{"EggStarGalaxy", "MBGM_GALAXY_01", true},
+             StageAudioCase{"EggStarGalaxy", "MBGM_GALAXY_01", false}}) {
+        gWrapper->stopAllSound(0);
+        runFramesUntil([] { return false; }, 120);
+        gWrapper->loadStageWaveData("Game", entry.stage, entry.luigi);
+        const int stageFrames = runFramesUntil([] { return gWrapper->isLoadDoneStageWaveData(); }, 1800);
+        check(stageFrames >= 0, "stage and player wave banks finish loading after a transition");
+        if (stageFrames < 0) break;
+        gWrapper->loadScenarioWaveData("Game", entry.stage, 1);
+        const int scenarioFrames = runFramesUntil([] { return gWrapper->isLoadDoneScenarioWaveData(); }, 1800);
+        check(scenarioFrames >= 0, "scenario wave banks finish loading");
+        if (scenarioFrames < 0) break;
+        AudWrap::getSceneMgr()->startScene();
+        check(AudWrap::getSceneMgr()->isPlayerModeLuigi() == entry.luigi,
+              "stage transition selects the requested player voice bank");
+
+        JAISoundHandle voice;
+        const auto voiceId = AudSingletonHolder< AudSoundNameConverter >::get()->getSoundID("SE_PV_JUMP_S");
+        check(gWrapper->mAudSystem->startSound(voiceId, &voice, nullptr), "jump voice starts after switching player resources");
+        const std::size_t voiceStart = gCapture.size() / 2;
+        runFramesUntil([] { return false; }, 120);
+        const std::size_t voiceEnd = gCapture.size() / 2;
+        const double voiceLevel = std::max(rms(voiceStart, voiceEnd, 0), rms(voiceStart, voiceEnd, 1));
+        check(voiceLevel > 50.0, "isolated player voice is audible after the bank switch");
+        if (voice.getSound() != nullptr) voice->stop(0);
+        runFramesUntil([] { return false; }, 60);
+
+        const auto bgmId = AudSingletonHolder< AudSoundNameConverter >::get()->getSoundID(entry.bgm);
+        check(AudWrap::startStageBgm(bgmId, false) != nullptr, "new stage music starts after resource transition");
+        runFramesUntil([] { return false; }, 60);
+        const std::size_t musicStart = gCapture.size() / 2;
+        runFramesUntil([] { return false; }, 180);
+        const std::size_t musicEnd = gCapture.size() / 2;
+        const double musicLevel = std::max(rms(musicStart, musicEnd, 0), rms(musicStart, musicEnd, 1));
+        check(musicLevel > 100.0, "new stage music remains audible after its fade-in");
+        std::printf("stage %s player %s: wave loads %d/%d frames, voice RMS %.1f (%zu..%zu), BGM RMS %.1f (%zu..%zu)\n",
+                    entry.stage, entry.luigi ? "Luigi" : "Mario", stageFrames, scenarioFrames,
+                    voiceLevel, voiceStart, voiceEnd, musicLevel, musicStart, musicEnd);
+    }
+
+    const auto qualityDma = PAudio::takeDmaStats();
+    const auto qualityReplays = PAudio::replayedBlocks() - qualityReplaysBefore;
+    check(qualityDma.dspHolds == 0, "quality sweep has no unfinished DSP frames");
+    check(qualityDma.waitTimeouts == 0, "quality sweep has no expired DMA waits");
+    check(qualityReplays == 0, "quality sweep has no replayed audio blocks");
+    std::printf("quality sweep: %llu DSP holds, %llu DMA wait timeouts, %llu replays\n",
+                static_cast<unsigned long long>(qualityDma.dspHolds),
+                static_cast<unsigned long long>(qualityDma.waitTimeouts),
+                static_cast<unsigned long long>(qualityReplays));
     const std::filesystem::path wav = tmp / "petari_audio_boot.wav";
     writeWav(wav, PAudio::outputRate());
     std::printf("captured %zu frames to %s\n", gCapture.size() / 2, wav.c_str());

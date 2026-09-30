@@ -25,13 +25,16 @@ import subprocess
 import time
 import hashlib
 import os
+import contextlib
+import io
 
 from create_observatory_fixture import create
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DOMES = {1: "Terrace", 2: "Fountain", 3: "Kitchen", 4: "Bedroom", 5: "Engine Room", 6: "Garden"}
+DOMES = {1: "Terrace", 2: "Fountain", 3: "Kitchen", 4: "Bedroom", 5: "Engine Room", 6: "Garden", 7: "Grand Finale"}
 EXPECTED_MAPS = {
+    7: "",  # Grand Finale uses a Luma/Launch Star, not a dome map.
     1: "EggStarGalaxy FlipPanelExGalaxy HoneyBeeKingdomGalaxy SurfingLv1Galaxy TriLegLv1Galaxy",
     2: "StarDustGalaxy TamakoroExLv1Galaxy BattleShipGalaxy BreakDownPlanetGalaxy KoopaBattleVs1Galaxy",
     3: "HeavenlyBeachGalaxy CubeBubbleExLv1Galaxy PhantomGalaxy OceanFloaterLandGalaxy KoopaJrShipLv1Galaxy",
@@ -40,18 +43,35 @@ EXPECTED_MAPS = {
     6: "OceanPhantomCaveGalaxy CannonFleetGalaxy DarkRoomGalaxy HellProminenceGalaxy",
 }
 
+# Scenario IDs in the completed Mario/Luigi saves, including comet and hidden stars.
+SCENARIO_COUNTS = {
+    **dict.fromkeys("EggStarGalaxy HoneyBeeKingdomGalaxy StarDustGalaxy HeavenlyBeachGalaxy PhantomGalaxy CosmosGardenGalaxy IceVolcanoGalaxy ReverseKingdomGalaxy OceanRingGalaxy FactoryGalaxy OceanPhantomCaveGalaxy CannonFleetGalaxy HellProminenceGalaxy".split(), 6),
+    "BattleShipGalaxy": 7, "SandClockGalaxy": 7, "OceanFloaterLandGalaxy": 2,
+}
+
+
+def menu_errors(dome, menus):
+    galaxies = EXPECTED_MAPS[dome].split() if dome != 7 else ["PeachCastleFinalGalaxy"]
+    return {galaxy: {"expected": list(range(1, SCENARIO_COUNTS.get(galaxy, 1) + 1)),
+                     "shown": menus.get(galaxy, [])}
+            for galaxy in galaxies
+            if menus.get(galaxy, []) != list(range(1, SCENARIO_COUNTS.get(galaxy, 1) + 1))}
+
+
 VISIT = re.compile(r"DOMES VISIT dome (\d) galaxy (\S+) scenario (\d+): (PASS|FAIL.*?) \(load (\d+) frames, ready after (\d+), moved ([\d.]+)\)")
 MISSING = re.compile(r"^\[(layout|sound)\] missing")
 
 
 def run_dome(dome, args, output):
     user = output / f"dome{dome}-user"
-    create(ROOT / "build/observatory-user-2", user)
+    with contextlib.redirect_stdout(io.StringIO()):
+        create(ROOT / "build/observatory-user-2", user)
     shutil.copytree(args.save / "NAND", user / "NAND", dirs_exist_ok=True)
     (user / "tour-save-source.json").write_text(json.dumps({
         "source": str(args.save.resolve()),
         "sha256": hashlib.sha256((user / "NAND/title/00010000/524d4745/data/GameData.bin").read_bytes()).hexdigest(),
     }, indent=2) + "\n")
+    print(f"Created isolated fixture {user} from {args.save}; launch uses the saved progression without --test-fixture.", flush=True)
     log = output / f"dome{dome}.log"
     env = dict(os.environ, PETARI_SMOKE="domes", PETARI_DOME=str(dome), PETARI_TRACE_BOOT="1",
                PETARI_SMOKE_FRAMES=str(args.frames), TMPDIR=str(output.resolve()))
@@ -77,10 +97,14 @@ def run_dome(dome, args, output):
 def parse(dome, log, status):
     text = log.read_text(errors="replace").splitlines()
     visits, current, missing, result = [], None, [], None
+    menus = {}
     for line in text:
         body = line.split("]: ", 1)[1] if line.startswith("PETARI SMOKE [frame") else line
         if body.startswith("tap A: Galaxy.") and not body.startswith("tap A: Galaxy.Start"):
             current = {"galaxy": body.split("Galaxy.", 1)[1].split()[0], "missing": []}
+        menu = re.match(r"DOMES STARS (\S+): ([\d,]+)$", body)
+        if menu:
+            menus[menu[1]] = [int(n) for n in menu[2].split(",")]
         m = VISIT.search(body)
         if m:
             visit = {"dome": int(m[1]), "galaxy": m[2], "scenario": int(m[3]), "smoke": m[4], "load": int(m[5]),
@@ -98,8 +122,8 @@ def parse(dome, log, status):
     expected = set(EXPECTED_MAPS[dome].split())
     open_galaxy = current["galaxy"] if current else None
     return {"visits": visits, "unattributed_missing": missing, "result": result, "status": status,
-            "in_progress": open_galaxy, "map": map_line, "missing_galaxies": sorted(expected - map_galaxies),
-            "unexpected_galaxies": sorted(map_galaxies - expected)}
+            "in_progress": open_galaxy, "map": map_line, "scenario_menus": menus, "missing_galaxies": sorted(expected - map_galaxies),
+            "unexpected_galaxies": sorted(map_galaxies - expected), "menu_errors": menu_errors(dome, menus)}
 
 
 def session_passed(parsed):
@@ -107,7 +131,7 @@ def session_passed(parsed):
             and bool(parsed["visits"]) and not parsed["in_progress"]
             and not parsed.get("missing_galaxies") and not parsed.get("unexpected_galaxies")
             and not parsed["unattributed_missing"] and not parsed.get("hang_samples")
-            and not parsed.get("crash_reports")
+            and not parsed.get("crash_reports") and not parsed.get("menu_errors")
             and all(v["smoke"] == "PASS" and not v["missing"] for v in parsed["visits"]))
 
 
@@ -134,6 +158,8 @@ def main():
         parsed["crash_reports"] = [str(p) for p in (user / "Crashes").glob("*")] if (user / "Crashes").exists() else []
         report[dome] = parsed
         print(f"dome {dome} ({DOMES[dome]}): exit {status}, {seconds:.0f} s, {parsed['result']}")
+        for galaxy, mismatch in parsed["menu_errors"].items():
+            print(f"  {galaxy}: FAIL mission menu {mismatch}")
         for v in parsed["visits"]:
             ok = v["smoke"] == "PASS" and not v["missing"]
             print(f"  {v['galaxy']} scenario {v['scenario']}: {'PASS' if ok else 'FAIL'}"
@@ -144,6 +170,8 @@ def main():
     rows = ["| Dome | Galaxy | Mission | Result | Load (frames) | Ready after (frames) | Moved | Missing refs | Notes |",
             "|---|---|---|---|---|---|---|---|---|"]
     for dome, parsed in report.items():
+        for galaxy, mismatch in parsed["menu_errors"].items():
+            rows.append(f"| {dome} {DOMES[dome]} | {galaxy} | menu | FAIL | | | | | {mismatch} |")
         for v in parsed["visits"]:
             ok = v["smoke"] == "PASS" and not v["missing"]
             rows.append(f"| {dome} {DOMES[dome]} | {v['galaxy']} | {v['scenario']} | {'PASS' if ok else 'FAIL'} | {v['load']} | "

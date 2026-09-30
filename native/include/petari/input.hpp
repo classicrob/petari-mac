@@ -263,6 +263,15 @@ enum class Steering : std::uint8_t {
 };
 void motionControlShown(Steering steering);
 
+// Read-only bound output for route recording, including controller axes.
+struct BoundState {
+    float moveX = 0, moveY = 0;
+    bool jump = false, spin = false, crouch = false;
+    bool cameraLeft = false, cameraRight = false, cameraCenter = false;
+    bool cameraUp = false, cameraDown = false;
+};
+BoundState boundState();
+
 // --- Device state ---
 
 // Connects or disconnects the virtual remote on a channel. Channel 0 is

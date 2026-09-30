@@ -112,6 +112,19 @@ public:
 
     // Current output (after minimum pulse lengths), for tests.
     std::uint32_t outputBits() const { return mOutput; }
+    BoundState boundState() const {
+        BoundState state;
+        stickVector(&state.moveX, &state.moveY);
+        state.jump = (mOutput & actionBits(Action::A)) != 0;
+        state.spin = (mOutput & actionBits(Action::Shake)) != 0;
+        state.crouch = (mOutput & actionBits(Action::NunchukZ)) != 0;
+        state.cameraLeft = (mOutput & actionBits(Action::DpadLeft)) != 0;
+        state.cameraRight = (mOutput & actionBits(Action::DpadRight)) != 0;
+        state.cameraCenter = (mOutput & actionBits(Action::NunchukC)) != 0;
+        state.cameraUp = (mOutput & actionBits(Action::DpadUp)) != 0;
+        state.cameraDown = (mOutput & actionBits(Action::DpadDown)) != 0;
+        return state;
+    }
 
 private:
     std::uint32_t heldBits() const;

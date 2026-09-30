@@ -4,6 +4,15 @@
 #include "Game/Util/MapUtil.hpp"
 #include "Game/Util/MathUtil.hpp"
 #include <algorithm>
+#ifdef PETARI_NATIVE
+#include "Game/LiveActor/AllLiveActorGroup.hpp"
+#include "Game/LiveActor/LiveActor.hpp"
+#include <petari/host_allocation.hpp>
+#include <petari/collision_limits.hpp>
+#include <cstdio>
+#include <cstdlib>
+#include <dlfcn.h>
+#endif
 
 void Binder_FORCE_MATCH_SDATA2() {
     (void)1.0f;
@@ -193,7 +202,50 @@ void Binder::moveAlongHittedPlanes(TVec3f* pMovement, TVec3f* pPosition, TVec3f*
 
 u32 Binder::findBindedPos(TVec3f* pPosition, TVec3f* pMovement, bool* pHasRemainingMovement, HitInfo* pPlanes, u32 capacity, bool skipInitial,
                           bool stopAtFirstHit) {
+#ifdef PETARI_NATIVE
+    const s32 steps = PetariNative::binderSweepSteps(pMovement->length());
+    const bool rejected = steps == 0 || !std::isfinite(pPosition->x) || !std::isfinite(pPosition->y) || !std::isfinite(pPosition->z);
+    static thread_local unsigned int rejectedReports = 0;
+    const bool reportRejected = rejected && (++rejectedReports <= 16 || (rejectedReports & (rejectedReports - 1)) == 0);
+    static const bool traceSteps = [] {
+        const char* value = std::getenv("PETARI_BINDER_STEP_DIAG");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    static thread_local s32 maximumSteps = 64;
+    if (reportRejected || (traceSteps && steps > maximumSteps)) {
+        maximumSteps = std::max(maximumSteps, steps);
+        PetariNative::HostAllocationScope host;
+        const LiveActor* owner = nullptr;
+        const AllLiveActorGroup* actors = MR::getAllLiveActorGroup();
+        if (actors != nullptr) {
+            for (s32 i = 0; i < actors->getObjNum(); ++i) {
+                const LiveActor* candidate = actors->getActor(i);
+                if (candidate != nullptr && candidate->mBinder == this) {
+                    owner = candidate;
+                    break;
+                }
+            }
+        }
+        Dl_info type{};
+        if (owner != nullptr) dladdr(*reinterpret_cast<void* const*>(owner), &type);
+        std::fprintf(stderr,
+                     "[binder-steps] %s %d, binder %p, owner %p name=%s type=%s; movement=(%.9g,%.9g,%.9g) length=%.9g; "
+                     "position=(%.9g,%.9g,%.9g) radius=%.9g skipInitial=%d\n",
+                     rejected ? "REJECTED unsafe movement; steps" : "new max", steps, static_cast<void*>(this), static_cast<const void*>(owner),
+                     owner != nullptr ? owner->mName : "<not a registered LiveActor>",
+                     type.dli_sname != nullptr ? type.dli_sname : "<unknown>",
+                     pMovement->x, pMovement->y, pMovement->z, pMovement->length(),
+                     pPosition->x, pPosition->y, pPosition->z, mRadius, skipInitial ? 1 : 0);
+        std::fflush(stderr);
+    }
+    if (rejected) {
+        pMovement->zero();
+        *pHasRemainingMovement = false;
+        return 0;
+    }
+#else
     s32 steps = static_cast< s32 >((1.0f / 35.0f) * pMovement->length()) + 1;
+#endif
     TVec3f step(*pMovement);
     if (steps > 1) {
         step /= steps;

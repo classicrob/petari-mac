@@ -574,3 +574,5 @@ int main() {
     std::printf("native app seam tests passed (%d checks)\n", checks);
     return 0;
 }
+
+namespace PetariNative::App { void recordRouteFrame(bool) {} }

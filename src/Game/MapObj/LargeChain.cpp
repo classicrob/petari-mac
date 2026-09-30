@@ -27,7 +27,11 @@ LargeChain::LargeChain(const char* pName) : LiveActor(pName), _8C(), _90(), mCha
 void LargeChain::init(const JMapInfoIter& rIter) {
     MR::initDefaultPos(this, rIter);
 
+#ifdef PETARI_NATIVE
+    s32 chainLen = static_cast<s32>(::sPartsLength);  // absent length: retain the one-part default
+#else
     s32 chainLen;
+#endif
     MR::getJMapInfoArg0NoInit(rIter, &chainLen);
     mChainCount = static_cast< s32 >(chainLen / ::sPartsLength);
 

@@ -98,7 +98,7 @@ class StaticWalls:
             blocked = False
             if candidates:
                 tris = self.tris[list(candidates)]
-                length = CELL / math.hypot(di, dj)
+                length = CELL
                 for height in (40.0, 110.0):
                     p = np.array([x, y + height, z])
                     q = p + np.array([di * length, 0.0, dj * length])

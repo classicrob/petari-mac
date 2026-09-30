@@ -280,7 +280,11 @@ void DspBoot(void (*pCallback)(void*)) {
 int DSPSendCommands2(u32* pMessages, u32 param_2, void (*pCallback)(u16)) {
     s32 i;
     BOOL interruptFlag;
+#ifdef PETARI_NATIVE
+    s32 startWorkStatus = 0;  // No callback means no work-queue entry was allocated.
+#else
     s32 startWorkStatus;
+#endif
 
     BOOL firstWarning = TRUE;
     while (Dsp_Running_Check() == 0) {

@@ -226,7 +226,11 @@ void RingBeam::startBrk(const char* pchar) {
 
 void RingBeam::setRadius(f32 radius) {
     TVec3f Ydir;
+#ifdef PETARI_NATIVE
+    TVec3f temp2(_c0);
+#else
     TVec3f temp2;
+#endif
     TVec3f temp6;
 
     if (radius >= 2000.0f) {

@@ -325,11 +325,15 @@ if(_petari_build_testing)
     add_executable(petari_math_util_tests
         "${CMAKE_SOURCE_DIR}/native/tests/math_util_tests.cpp"
         "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"
-        "${CMAKE_SOURCE_DIR}/src/Game/Util/MathUtil.cpp")
+        "${CMAKE_SOURCE_DIR}/src/Game/Util/MathUtil.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Util/MtxUtil.cpp")
     petari_encode_target_sources(petari_math_util_tests)
     target_link_libraries(petari_math_util_tests PRIVATE petari_j3d)
     target_link_options(petari_math_util_tests PRIVATE -Wl,-dead_strip)
     add_test(NAME native_math_util COMMAND petari_math_util_tests)
+    add_test(NAME native_game_logic_safety COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/native/tests/game_logic_safety_tests.py" "${CMAKE_CXX_COMPILER}")
+    add_test(NAME native_player_mode_explanation COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/native/tests/player_mode_explanation_tests.py" "${CMAKE_CXX_COMPILER}")
+    add_test(NAME native_collision_safety COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/native/tests/collision_safety_tests.py" "${CMAKE_CXX_COMPILER}")
     add_test(NAME native_asm_only_bodies COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/native/tests/asm_only_bodies_tests.py")
     # Native branches vs the Wii paired-single asm they replace, run in a paired-single
     # interpreter (native/tests/paired_single.py) on the same inputs.

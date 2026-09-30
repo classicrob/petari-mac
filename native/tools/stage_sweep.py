@@ -23,6 +23,7 @@ build/stage-sweep/<name>/{results.json,results.csv,summary.md}.
 """
 import argparse
 import csv
+import concurrent.futures
 import datetime
 import hashlib
 import importlib.util
@@ -379,6 +380,9 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
     configs = re.findall(r"^\[gx stage config\] stage=(\S+) config=(\w+) phase=(\w+) covered=(\d)", text, re.M)
     mine = [c for c in configs if c[0] == stage]
     compile_status = re.findall(r"^\[gx pipeline compile\] .*status=(\w+)", text, re.M)
+    queue_ms = [float(v) for v in re.findall(r"^\[gx pipeline compile\] .*? queue_ms=([\d.]+)", text, re.M)]
+    build_ms = [float(v) for v in re.findall(r"^\[gx pipeline compile\] .*? build_ms=([\d.]+)", text, re.M)]
+    seed_line = re.findall(r"^PETARI SMOKE SHADER SEED: (.*)$", text, re.M)
     resolves = [float(v) for v in re.findall(r"^\[gx pipeline\] blocking resolve ([\d.]+) ms", text, re.M)]
     ready = re.findall(r"^\[gx stage ready\] stage=" + re.escape(stage) + r" residual_wait_ms=([\d.]+) pending=(\d+) failed=(\d+) result=(\w+)", text, re.M)
     result["shaders"] = {
@@ -387,6 +391,13 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
         "all_first_use_uncovered": len({c[1] for c in configs if c[3] == "0"}),
         "compiles": len(compile_status),
         "compile_failures": sum(1 for s in compile_status if s != "ready"),
+        # Compile-queue pressure (MTLCompilerService contention shows up as queue/build time).
+        "compile_queue_ms_p50": percentile(queue_ms, 0.5) if queue_ms else None,
+        "compile_queue_ms_p90": percentile(queue_ms, 0.9) if queue_ms else None,
+        "compile_queue_ms_total": round(sum(queue_ms), 1),
+        "compile_build_ms_total": round(sum(build_ms), 1),
+        "compile_cache_hits": sum(1 for v in build_ms if v < 20.0),
+        "shader_seed": seed_line[-1] if seed_line else None,
         "blocking_resolves": len(resolves),
         "blocking_resolve_max_ms": max(resolves) if resolves else 0.0,
         "stage_gate": [{"residual_wait_ms": float(a), "pending": int(b), "failed": int(c), "result": d} for a, b, c, d in ready],
@@ -454,6 +465,10 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
                            "choppy": rate > AUDIO_CHOPPY_HOLDS_PER_S}
     else:
         result["audio"] = None
+    storage = re.search(r"PETARI SMOKE STORAGE: user=(.*?) cache=(.*?) metal=(.*?) namespace=(.*?) temp=(.*?)(?: temp_namespace=(.*))?$", text, re.M)
+    result["storage"] = dict(zip(("user", "cache", "metal", "namespace", "temp", "temp_namespace"), storage.groups())) if storage else None
+    result["instrumented"] = "PETARI ISOLATION MONITOR: enabled;" in text
+    result["silent_audio"] = "PETARI SMOKE AUDIO: output gain 0;" in text
     result["assisted_inputs"] = len(re.findall(r"physical input while", text))
     result["fixture_lines"] = [l for l in lines if l.startswith("PETARI FIXTURE")]
     traced = re.findall(r"^Petari trace: frame \d+.*? at ([\d.]+) s", text, re.M)
@@ -585,6 +600,43 @@ class ConcurrencyWatcher:
                 "max_other_apps": self.max_others, "other_user_dirs": sorted(self.others)[:10]}
 
 
+def write_result(path, result):
+    temporary = path.with_suffix(".json.partial")
+    temporary.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
+    temporary.replace(path)
+
+
+def run_selected(chosen, jobs, action, completed):
+    if jobs == 1:
+        for stage, scenario in chosen:
+            action(stage, scenario)
+            completed()
+        return
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        remaining = iter(chosen)
+        pending = set()
+        def submit_next():
+            item = next(remaining, None)
+            if item is not None:
+                pending.add(pool.submit(action, *item))
+        for _ in range(jobs):
+            submit_next()
+        try:
+            while pending:
+                done, pending = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
+                # Check the whole completed batch before starting more work.
+                for future in done:
+                    future.result()
+                for _ in done:
+                    completed()
+                    submit_next()
+        except BaseException:
+            # Already-running apps retain their bounded alarms and are joined.
+            for future in pending:
+                future.cancel()
+            raise
+
+
 def run_one(args, out, baseline, fixture, stage, scenario):
     name = f"{stage['stage']}-s{scenario['scenario']}"
     run_dir = out / "runs" / name
@@ -607,7 +659,7 @@ def run_one(args, out, baseline, fixture, stage, scenario):
         shutil.copytree(source, run_dir, symlinks=True)
         previous["reused_from"] = str(source)
         previous["log"] = str(run_dir / "app.log")
-        (run_dir / "result.json").write_text(json.dumps(previous, indent=2, ensure_ascii=False) + "\n")
+        write_result(run_dir / "result.json", previous)
         print(f"[reuse] {name}: {previous['outcome']} from {other}", flush=True)
         return previous
     if run_dir.exists():
@@ -630,7 +682,15 @@ def run_one(args, out, baseline, fixture, stage, scenario):
         (run_dir / "warp-placement.json").write_text(json.dumps(placement, indent=2) + "\n")
     if args.frozen_seeds:
         env_extra["PETARI_PIPELINE_SEED_DIR"] = str(args.frozen_seeds)
+    if args.shader_seed_usable:
+        # Read-only canonical Metal cache for this exact build; the app clones it per instance.
+        env_extra["PETARI_SHADER_SEED_DIR"] = str(shader_seed_path(args))
     env = dict(os.environ, **env_extra)
+    env["PETARI_LOCK_CLASS"] = args.lock_class
+    # Diagnostic destinations inherited from another run must not be shared.
+    for variable, filename in (("PETARI_SOAK_CSV", "soak.csv"), ("PETARI_SPIKE_PROFILE", "spikes.json")):
+        if env.get(variable):
+            env[variable] = str(run_dir / filename)
     # The alarm starts inside the lock (perl keeps it across exec), so waiting
     # for another worker's app does not count against this run.
     full = [str(REPO / args.lock_script), args.owner, "/usr/bin/perl", "-e", "alarm shift; exec @ARGV or die",
@@ -662,8 +722,13 @@ def run_one(args, out, baseline, fixture, stage, scenario):
         timed_out = True
     result = analyze(log_path, run_dir / "frames.csv", stage["stage"], status, timed_out, user)
     result["concurrent_apps"] = watcher.summary()
+    result["performance_evidence"] = args.lock_class == "quiet" and args.jobs == 1 and not result["concurrent_apps"]["seen"] and not extra and not result.get("instrumented")
     if result["concurrent_apps"]["seen"] and result.get("frame_times"):
         result["frame_times"]["concurrent"] = True
+    if result["outcome"] == "TIMEOUT" and (args.jobs > 1 or result["concurrent_apps"]["seen"]):
+        # The runner alarm fired while sharing the machine (shader-compiler and CPU
+        # contention). Not evidence about the game: rerun quiet or with --jobs 1.
+        result["outcome"], result["signature"] = "INFRA_TIMEOUT", "runner timeout under concurrent load (not a game failure; rerun quiet)"
     if "Died at -e line" in log_path.read_text(errors="replace")[:4096]:
         # The app could not be executed at all: not a result for this stage.
         result["infra"] = "the app could not be executed"
@@ -674,22 +739,67 @@ def run_one(args, out, baseline, fixture, stage, scenario):
         "hidden": scenario["hidden"], "wall_seconds": round(time.time() - started, 1), "log": str(log_path),
         "repro": repro, "synthetic_entry": True, "app_sha256": args.app_sha256,
         # Extra environment (--env), e.g. diagnostics that make timing incomparable.
-        "extra_env": extra,
+        "extra_env": extra, "jobs": args.jobs, "lock_class": args.lock_class,
     })
     if result["outcome"] == "INFRA":
         # No result.json: a later invocation retries this run.
         (run_dir / "infra.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
         print(f"[infra] {name}: {result['signature']}; stopping the sweep", flush=True)
         raise SystemExit(3)
-    (run_dir / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
+    if args.publish_shader_seed and result["outcome"] in ("PASS", "PASS_WARN"):
+        publish_shader_seed(args, user / "cache/metal/dev.petari.Petari")
+    # Preserve the existing corpus layout while the app writes its private cache.
+    if (user / "cache/pipeline_cache.db").is_file():
+        snapshot_sqlite(user / "cache/pipeline_cache.db", user / "pipeline_cache.db")
+    write_result(run_dir / "result.json", result)
     # Keep the run's pipeline_cache.db (the captured configs map uncovered
     # shader hashes to their draw owners), crash reports and hang samples;
     # the Dawn blob cache is large and only a compile cache.
     if not args.keep_user:
-        for db in user.glob("dawn_cache.db*"):
-            db.unlink()
+        for directory in (user, user / "cache"):
+            for db in directory.glob("dawn_cache.db*"):
+                db.unlink()
+        storage = result.get("storage") or {}
+        if storage.get("cache") == str(user / "cache"):
+            for key, target in (("namespace", user / "cache/metal"), ("temp_namespace", user / "cache/tmp")):
+                alias = Path(storage[key]) if storage.get(key) else None
+                if alias and alias.is_symlink() and alias.resolve() == target.resolve():
+                    alias.unlink()
+            shutil.rmtree(user / "cache/metal", ignore_errors=True)
     print(f"[done] {name}: {result['outcome']} {result['signature']} ({result['wall_seconds']} s)", flush=True)
     return result
+
+
+def shader_seed_path(args):
+    return args.shader_seed_dir / args.app_sha256[:16]
+
+
+def shader_seed_valid(args):
+    try:
+        recorded = json.loads((shader_seed_path(args) / "seed.json").read_text()).get("exe_sha256")
+    except (OSError, ValueError):
+        return False
+    return recorded == args.app_sha256 and (shader_seed_path(args) / "metal/dev.petari.Petari").is_dir()
+
+
+def publish_shader_seed(args, metal):
+    """Publish a finished clean run's private Metal cache as the canonical seed for this
+    build hash (first finisher wins; atomic rename; APFS clone so it is cheap)."""
+    final = shader_seed_path(args)
+    if final.exists() or not metal.is_dir():
+        return
+    args.shader_seed_dir.mkdir(parents=True, exist_ok=True)
+    partial = final.with_name(final.name + f".partial-{os.getpid()}")
+    shutil.rmtree(partial, ignore_errors=True)
+    (partial / "metal").mkdir(parents=True)
+    subprocess.run(["cp", "-cR", str(metal), str(partial / "metal/dev.petari.Petari")], check=True)
+    (partial / "seed.json").write_text(json.dumps({"exe_sha256": args.app_sha256, "published": time.time(),
+                                                   "from_sweep": str(args.name)}, indent=2) + "\n")
+    try:
+        partial.rename(final)
+        print(f"[seed] published canonical shader seed {final.name}", flush=True)
+    except OSError:
+        shutil.rmtree(partial, ignore_errors=True)  # another run won the race
 
 
 def claim_sweep(out):
@@ -753,7 +863,7 @@ def summarize(out):
                "stage_first_use_configs", "stage_first_use_uncovered", "compiles", "compile_failures",
                "blocking_resolves", "blocking_resolve_max_ms", "min_heap_free_pct", "file_cache_archives", "file_cache_archive_bytes", "file_cache_other_use",
                "spilled_to_scene_gddr", "audio_seconds", "audio_underrun_frames", "audio_replayed_blocks",
-               "dsp_holds", "dsp_holds_per_s", "audio_choppy", "warn_checks", "wall_seconds", "app_sha256", "log"]
+               "dsp_holds", "dsp_holds_per_s", "audio_choppy", "warn_checks", "wall_seconds", "app_sha256", "log", "jobs", "lock_class", "performance_evidence", "silent_audio"]
     with (out / "results.csv").open("w", newline="") as handle:
         heap_names = sorted({name for r in results for name in (r.get("heaps") or {})})
         columns = columns + [f"heap_min_free[{n}]" for n in heap_names] + [f"heap_min_free_pct[{n}]" for n in heap_names]
@@ -765,7 +875,7 @@ def summarize(out):
             heaps = r.get("heaps") or {}
             writer.writerow({
                 **{k: r.get(k) for k in ("run", "dome_name", "stage", "scenario", "scenario_name", "outcome",
-                                         "signature", "exit_status", "load_to_ready_seconds", "wall_seconds", "app_sha256", "log")},
+                                         "signature", "exit_status", "load_to_ready_seconds", "wall_seconds", "app_sha256", "log", "jobs", "lock_class", "performance_evidence", "silent_audio")},
                 **{k: ft.get(k) for k in ("p50_ms", "p95_ms", "p99_ms", "max_ms", "late", "over_100ms")},
                 **{k: sh.get(k) for k in ("stage_first_use_configs", "stage_first_use_uncovered", "compiles",
                                           "compile_failures", "blocking_resolves", "blocking_resolve_max_ms")},
@@ -821,6 +931,12 @@ def summarize(out):
         perf = f"{ft.get('p50_ms')}/{ft.get('p95_ms')}/{ft.get('p99_ms')}/{ft.get('max_ms')}" if ft else ""
         if ft and (r.get("concurrent_apps") or {}).get("seen"):
             perf += " (concurrent run — not performance evidence)"
+        elif ft and r.get("jobs", 1) > 1:
+            perf += " (parallel batch — not performance evidence)"
+        elif ft and r.get("instrumented"):
+            perf += " (instrumented — not performance evidence)"
+        elif ft and r.get("lock_class") == "functional":
+            perf += " (functional run — not performance evidence)"
         elif ft and "concurrent_apps" not in r:
             perf += " (concurrency not recorded)"
         lines.append(
@@ -878,7 +994,10 @@ def main():
                           "Resources/pipeline-seeds; shared seed directories are regenerated by other workers)")
     run.add_argument("--owner", default="stage-sweep")
     run.add_argument("--lock-script", default="build/locked-app.sh",
-                     help="per-run app lock (default: build/locked-app.sh, one live app at a time)")
+                     help="per-run app slot lock (default: build/locked-app.sh)")
+    run.add_argument("--jobs", type=int, default=1, help="concurrent scenarios; every app still acquires a slot")
+    run.add_argument("--lock-class", choices=("functional", "quiet"), default="functional",
+                     help="functional slot or exclusive quiet run")
     run.add_argument("--timeout", type=int, default=600, help="seconds per app run, counted inside the app lock")
     run.add_argument("--lock-wait", type=int, default=7200, help="extra seconds allowed for waiting on the app lock")
     run.add_argument("--frames", type=int, default=12000, help="PETARI_SMOKE_FRAMES")
@@ -893,6 +1012,11 @@ def main():
     run.add_argument("--rerun", action="store_true")
     run.add_argument("--refreeze-app", action="store_true",
                      help="copy the app bundle again (default: reuse this sweep's frozen copy)")
+    run.add_argument("--shader-seed-dir", type=Path, default=REPO / "build/shader-seed",
+                     help="canonical Metal shader seeds, one directory per app sha (read-only for runs; "
+                          "stale or missing seeds fall back to the shared cache)")
+    run.add_argument("--publish-shader-seed", action="store_true",
+                     help="publish the first clean PASS run's private Metal cache as this build's canonical seed")
     run.add_argument("--keep-user", action="store_true", help="also keep each run's Dawn blob cache")
     args = parser.parse_args()
 
@@ -910,10 +1034,12 @@ def main():
                           old["timed_out"], path.parent / "user")
             keep = {k: old[k] for k in ("run", "stage", "dome", "dome_name", "scenario", "scenario_name", "comet",
                                         "hidden", "wall_seconds", "log", "repro", "synthetic_entry", "app_sha256",
-                                        "extra_env", "reused_from", "concurrent_apps")
+                                        "extra_env", "reused_from", "concurrent_apps", "jobs", "lock_class", "performance_evidence")
                     if k in old}
             if (keep.get("concurrent_apps") or {}).get("seen") and new.get("frame_times"):
                 new["frame_times"]["concurrent"] = True
+            if new.get("instrumented"):
+                keep["performance_evidence"] = False
             path.write_text(json.dumps({**new, **keep}, indent=2, ensure_ascii=False) + "\n")
         summarize(out)
         return
@@ -931,6 +1057,10 @@ def main():
                       f"{('comet ' + c['comet'] + ' ') if c['comet'] else ''}{c['name']}")
             print(f"{len(chosen)} runs across {len({s['stage'] for s, _ in chosen})} stages")
         return
+    if args.jobs < 1 or args.jobs > 3:
+        raise SystemExit("stage_sweep: --jobs must be 1..3")
+    if args.lock_class == "quiet" and args.jobs != 1:
+        raise SystemExit("stage_sweep: quiet runs require --jobs 1")
     chosen = select(stages, args)
     if not chosen:
         raise SystemExit("stage_sweep: nothing selected (use --domes, --stages or --all)")
@@ -944,6 +1074,9 @@ def main():
     fixture = load_fixture_module()
     freeze_app(args, out)
     args.frozen_seeds = None
+    args.shader_seed_dir = args.shader_seed_dir.resolve()
+    args.shader_seed_usable = shader_seed_valid(args)
+    print(f"shader seed: {'canonical ' + shader_seed_path(args).name if args.shader_seed_usable else 'none for this build (fallback: shared cache)'}")
     if args.seed_dir:
         seeds = out / "pipeline-seeds"
         if not seeds.is_dir():
@@ -959,9 +1092,9 @@ def main():
         args.frozen_seeds = seeds.resolve()
     (out / "selection.json").write_text(json.dumps([{"stage": s["stage"], "scenario": c["scenario"]} for s, c in chosen], indent=2) + "\n")
     print(f"{len(chosen)} runs; output {out}")
-    for stage, scenario in chosen:
-        run_one(args, out, baseline, fixture, stage, scenario)
-        summarize(out)
+    run_selected(chosen, args.jobs,
+                 lambda stage, scenario: run_one(args, out, baseline, fixture, stage, scenario),
+                 lambda: summarize(out))
 
 
 if __name__ == "__main__":

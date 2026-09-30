@@ -1,4 +1,7 @@
 #include "Game/Util/MathUtil.hpp"
+#ifdef PETARI_NATIVE
+#include <cmath>
+#endif
 #include <cstring>
 #include "Game/System/GameSystem.hpp"
 #include "Game/System/GameSystemObjHolder.hpp"
@@ -330,7 +333,11 @@ namespace MR {
     bool checkHitSemilinePlane(TVec3f* pHitPos, const TVec3f& rPos, const TVec3f& rDir, const TVec3f& rPlanePos, const TVec3f& rPlaneNorm) {
         f32 dot = rDir.dot(rPlaneNorm);
         TVec3f offset = rPlanePos - rPos;
+#ifdef PETARI_NATIVE
+        if (!std::isfinite(dot) || dot >= 0.0f) {
+#else
         if (0.0f < dot) {
+#endif
             return false;
         }
 

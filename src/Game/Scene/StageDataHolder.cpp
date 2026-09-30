@@ -290,13 +290,21 @@ JMapInfoIter StageDataHolder::getGeneralPosInfoFromDataIndex(int idx_) const {
 s32 StageDataHolder::getChildObjNum(const JMapInfoIter& rIter) const {
     s32 linkID;
     s32 count = 0;
+#ifdef PETARI_NATIVE
+    if (!MR::getJMapInfoLinkID(rIter, &linkID)) return 0;
+#else
     MR::getJMapInfoLinkID(rIter, &linkID);
+#endif
 
     if (mChildObjs.size() > 0) {
         for (const JMapInfo* pInfo = mChildObjs.begin(); pInfo != mChildObjs.end(); pInfo++) {
             for (s32 i = 0; i < pInfo->getNumEntries(); i++) {
                 s32 parentID;
+#ifdef PETARI_NATIVE
+                if (!pInfo->getValue(i, "ParentID", &parentID)) continue;
+#else
                 pInfo->getValue(i, "ParentID", &parentID);
+#endif
                 if (parentID == linkID) {
                     count++;
                 }
@@ -310,12 +318,20 @@ s32 StageDataHolder::getChildObjNum(const JMapInfoIter& rIter) const {
 JMapInfoIter StageDataHolder::getChildObjInfoFromDataIndex(const JMapInfoIter& rIter, int index) const {
     s32 linkID;
     s32 count = 0;
+#ifdef PETARI_NATIVE
+    if (!MR::getJMapInfoLinkID(rIter, &linkID)) return JMapInfoIter();
+#else
     MR::getJMapInfoLinkID(rIter, &linkID);
+#endif
 
     for (const JMapInfo* pInfo = mChildObjs.begin(); pInfo != mChildObjs.end(); pInfo++) {
         for (s32 i = 0; i < pInfo->getNumEntries(); i++) {
             s32 parentID;
+#ifdef PETARI_NATIVE
+            if (!pInfo->getValue(i, "ParentID", &parentID)) continue;
+#else
             pInfo->getValue(i, "ParentID", &parentID);
+#endif
             if (parentID == linkID) {
                 if (count == index) {
                     return JMapInfoIter(pInfo, i);

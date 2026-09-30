@@ -27,6 +27,9 @@
 //    dome for the next galaxy.
 //    PETARI_DOME_MISSIONS="Galaxy:scenario,..." adds missions after the
 //    mission-1 sweep (e.g. a comet or hidden star the file owns).
+// PETARI_DOME=7 uses a Grand Finale save and an explicit PETARI_DOME_ROUTE
+// CSV: Launch waypoints use jump/spin, Talk uses the Luma's visible dialogue
+// controls. It then selects Grand Finale mission 1 and returns to AstroGalaxy.
 // PASS: every galaxy on the dome's map (and every extra mission) was selected
 // through the UI, loaded with the requested scenario and became ready. Each
 // visit is logged as "DOMES VISIT dome D galaxy G scenario S: PASS|FAIL ...".
@@ -59,7 +62,7 @@ bool domesEnabledFromEnvironment(DomesConfig* config);
 // Mario to its pair (the next point). Jump: on arrival, jump toward the next
 // point with a spin near the apex (a ledge too high to walk up).
 struct DomeWaypoint {
-    enum Action { Walk, Warp, Jump };
+    enum Action { Walk, Warp, Jump, Launch, Talk, Hop, Spin };
     float x, y, z;
     Action action;
 };
@@ -81,7 +84,7 @@ public:
 
 private:
     enum class Phase {
-        Boot, Observatory, Calibrate, Route, Warp, EnterDome,
+        Boot, Observatory, Calibrate, Route, Warp, Launch, Talk, EnterDome,
         DomeReady, BlueStar, GalaxyMap, Confirm, Scenario, Load, Ready, Move,
         PauseOpen, PauseBack, Answer, ReturnDome, Done
     };
@@ -133,6 +136,7 @@ private:
     unsigned long mStuckFrames = 0;
     int mRecoveries = 0;
     float mWarpX = 0, mWarpY = 0, mWarpZ = 0;
+    bool mAwaitJumpLanding = false;
     unsigned long mSpinAt = 0;  // frame of the spin that follows a route jump
     // dome
     std::vector<Visit> mVisits;
@@ -144,6 +148,7 @@ private:
     unsigned long mPauseOpenBase = 0;
     float mMoveX = 0, mMoveY = 0, mMoveZ = 0;
     bool mAnswering = false;
+    bool mTalkWasActive = false;
     unsigned long mPhysicalBase = 0;
 };
 
