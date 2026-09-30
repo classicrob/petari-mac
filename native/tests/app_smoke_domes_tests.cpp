@@ -36,7 +36,7 @@ int main() {
     const int routeFd = mkstemp(routePath);
     check(routeFd >= 0, "temporary route created");
     FILE* routeFile = fdopen(routeFd, "w");
-    std::fputs("100,0,100,Jump\n150,100,100,Walk\n300,100,100,Walk\n", routeFile);
+    std::fputs("100,0,100,Jump\n150,100,100,Walk\n300,100,100,Hop\n310,400,100,Kick\n310,600,300,Kick\n500,700,300,Walk\n", routeFile);
     std::fclose(routeFile);
     setenv("PETARI_DOME_ROUTE", routePath, 1);
 
@@ -96,6 +96,43 @@ int main() {
     }
     jumpObs.playerOnGround = true; jumper.step(jumpObs);
     check(advanced(), "grounded jump arrival advances the route");
+    const auto logged = [&](const char* text) {
+        for (const auto& line : jumper.log()) if (line.find(text) != std::string::npos) return true;
+        return false;
+    };
+    const auto pressedA = [](const Step& step) {
+        for (const auto& press : step.presses) if (press.button == Button::A && press.down) return true;
+        return false;
+    };
+    jumpObs.playerX = 300; jumper.step(jumpObs);
+    check(logged("jump and spin at waypoint 2"), "hop before the wall-kick chain");
+    jumpObs.playerOnGround = false;
+    bool kicked = false, steered = false;
+    for (int i = 0; i < 6; ++i) {  // rising: moving, so no kick yet
+        jumpObs.playerY = 150 + 40 * i; jumpObs.playerX = 300 + i;
+        const auto rising = jumper.step(jumpObs);
+        kicked |= pressedA(rising);
+        for (const auto& press : rising.presses) steered |= press.button != Button::A && press.down;
+    }
+    check(!kicked && !logged("wall kick"), "no wall kick while Mario still moves");
+    check(steered, "wall-kick leg steers into the wall");
+    jumpObs.playerX = 310; jumpObs.playerY = 400; jumper.step(jumpObs);
+    const auto cling = jumper.step(jumpObs);
+    check(pressedA(cling) && logged("wall kick at waypoint 3"), "clinging at the contact presses A");
+    jumpObs.playerX = 1000; jumpObs.playerY = 100; jumper.step(jumpObs);
+    check(!pressedA(jumper.step(jumpObs)), "a stall far from the next contact is not a kick");
+    jumpObs.playerX = 300; jumpObs.playerOnGround = true;
+    bool retried = false;
+    for (int i = 0; i < 25 && !retried; ++i) {
+        jumper.step(jumpObs);
+        retried = logged("fell short");
+    }
+    check(retried && jumper.result() == Result::Running, "a missed kick retries from the chain's hop");
+    for (int attempt = 0; attempt < 4 && jumper.result() == Result::Running; ++attempt) {
+        jumpObs.playerX = 300; jumpObs.playerY = 100; jumpObs.playerOnGround = true;
+        for (int i = 0; i < 30 && jumper.result() == Result::Running; ++i) jumper.step(jumpObs);
+    }
+    check(jumper.result() == Result::Fail, "repeated missed kicks fail instead of looping");
     unlink(routePath);
     std::printf("%d dome/finale checks passed\n", checks);
 }

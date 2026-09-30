@@ -29,7 +29,14 @@ The converter selects one continuous AstroGalaxy visit. It rejects recordings
 with multiple visits instead of joining unrelated journeys. `--stage NAME`
 selects another stage. The output uses the dome route CSV format, with `Walk`
 points at landings and direction changes, `Hop` for a recorded jump without an
-automatic spin, and separate `Spin` points. It refuses existing output files.
+automatic spin, `Kick` for a jump pressed in the air (a wall kick, at the wall
+contact), `Launch` for a bind the player spun out of (a Launch or Sling Star,
+at the point where it caught Mario), `Warp` for a bind that carried Mario at
+least 800 units without a spin, and separate `Spin` points. The driver presses A
+for a `Kick` when Mario clings to the wall within 200 units of the recorded
+contact, and retries from the chain's `Hop` (at most three times) if he lands
+first. Conversion counts game frames, not wall-clock time, so a recording made
+at a low frame rate converts the same way. It refuses existing output files.
 This is a candidate route, not an exact frame-by-frame input replay. Validate
 it with `PETARI_DOME_ROUTE` and a bounded dome tour before promoting it.
 

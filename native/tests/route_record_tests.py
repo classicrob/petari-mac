@@ -55,6 +55,21 @@ int main(int argc,char** argv) {
         self.assertIn((30.,150.,0.,'Spin'),points)
         self.assertEqual(points[-1],(40.,0.,0.,'Walk'))
         with self.assertRaises(ValueError): convert(rows+[dict(rows[0],stage='Other')]+rows)
+
+    def test_wall_kick_and_launch_star(self):
+        def row(frame,x,y,ground,jump=0,spin=0,bound=0):
+            return dict(frame=str(frame),stage='AstroGalaxy',valid='1',x=str(x),y=str(y),z='0',
+                        grounded=str(ground),jump=str(jump),spin=str(spin),bound=str(bound))
+        rows=[row(0,0,0,1),row(1,0,20,0,1),row(2,5,100,0),row(3,5,100,0,1),row(4,50,200,0),
+              row(5,90,200,0,1),row(6,90,300,0),row(7,100,300,1),row(8,110,300,1),
+              row(9,120,310,0,0,0,1),row(10,130,320,0,0,1,1),row(11,2000,320,0,0,0,1),row(12,2000,300,1)]
+        points=convert(rows)
+        self.assertEqual([a for *_,a in points if a!='Walk'],['Hop','Kick','Kick','Launch'])
+        self.assertIn((5.,100.,0.,'Kick'),points)
+        self.assertIn((110.,300.,0.,'Launch'),points)
+        self.assertNotIn('Spin',[a for *_,a in points])
+        warp=[dict(r,spin='0') for r in rows[6:]]
+        self.assertIn((110.,300.,0.,'Warp'),convert(warp))
         with self.assertRaises(ValueError): convert([])
 
 if __name__=='__main__':unittest.main()

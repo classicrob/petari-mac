@@ -60,9 +60,11 @@ bool domesEnabledFromEnvironment(DomesConfig* config);
 
 // A route point in AstroGalaxy. Warp: stop here and wait for the pod to carry
 // Mario to its pair (the next point). Jump: on arrival, jump toward the next
-// point with a spin near the apex (a ledge too high to walk up).
+// point with a spin near the apex (a ledge too high to walk up). Kick: a wall
+// kick at this wall contact, after a Hop or Kick; A is pressed when Mario
+// clings to the wall there (recorded routes, native/tools/recorded_route.py).
 struct DomeWaypoint {
-    enum Action { Walk, Warp, Jump, Launch, Talk, Hop, Spin };
+    enum Action { Walk, Warp, Jump, Launch, Talk, Hop, Spin, Kick };
     float x, y, z;
     Action action;
 };
@@ -138,6 +140,9 @@ private:
     float mWarpX = 0, mWarpY = 0, mWarpZ = 0;
     bool mAwaitJumpLanding = false;
     unsigned long mSpinAt = 0;  // frame of the spin that follows a route jump
+    float mLastX = 0, mLastY = 0, mLastZ = 0;  // Mario's position on the previous route frame
+    unsigned long mKickGrounded = 0;           // frames grounded while a wall kick is due
+    int mKickRetries = 0;                      // wall-kick chain retries since the last walked point
     // dome
     std::vector<Visit> mVisits;
     bool mMapRecorded = false;

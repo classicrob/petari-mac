@@ -34,6 +34,9 @@ constexpr float kWarpJump = 800.0f;
 constexpr unsigned long kEnterLimit = 900;
 constexpr unsigned long kJumpHold = 12;
 constexpr unsigned long kJumpSpinDelay = 16;
+constexpr float kKickReach = 200.0f;          // wall contact within this of the recorded one
+constexpr float kClingStill = 0.5f;           // per-frame movement of Mario clinging to a wall
+constexpr unsigned long kKickGroundLimit = 20;  // grounded this long: the kick chain fell short
 constexpr unsigned long kMapSettle = 30;
 constexpr unsigned long kMoveHold = 45;
 constexpr unsigned long kMoveAfter = 15;
@@ -94,6 +97,7 @@ void loadRouteOverride() {
                                               : std::strncmp(action, "Spin", 4) == 0 ? DomeWaypoint::Spin
                                               : std::strncmp(action, "Launch", 6) == 0 ? DomeWaypoint::Launch
                                               : std::strncmp(action, "Talk", 4) == 0 ? DomeWaypoint::Talk
+                                              : std::strncmp(action, "Kick", 4) == 0 ? DomeWaypoint::Kick
                                                                                     : DomeWaypoint::Walk;
             gRouteOverride.push_back({x, y, z, kind});
         }
@@ -491,7 +495,18 @@ void DomesDriver::route(const Observation& o, Step& step) {
         return;
     }
     if (mPhase == Phase::Launch) {
-        steer({}, step);
+        // Finish walking onto the recorded capture point: some stars catch
+        // Mario as he walks into them (the Engine Room approach).
+        const DomeWaypoint* star = mWaypoint < points.size() ? &points[mWaypoint] : nullptr;
+        const Vec toStar = star != nullptr ? across(Vec{star->x - pos.x, star->y - pos.y, star->z - pos.z}, u) : Vec{};
+        if (star != nullptr && !o.playerInBind && length(toStar) > 15.0f && length(right) > 1e-3f && length(forward) > 1e-3f &&
+            length(sub(pos, Vec{mWarpX, mWarpY, mWarpZ})) < kWarpJump) {
+            steer(stickKeysFor(dot(toStar, scale(right, 1.0f / length(right))) * mSignRight,
+                               dot(toStar, scale(forward, 1.0f / length(forward))) * mSignForward),
+                  step);
+        } else {
+            steer({}, step);
+        }
         const float moved = length(sub(pos, Vec{mWarpX, mWarpY, mWarpZ}));
         if (moved >= kWarpJump && o.playerOnGround && !o.playerInBind) {
             note("Launch Star landed at " + text(pos));
@@ -542,6 +557,59 @@ void DomesDriver::route(const Observation& o, Step& step) {
     if (mPhaseFrames % 120 == 0) {
         note("route waypoint " + std::to_string(mWaypoint) + ": " + number(distance) + " away, height " + number(height) + ", at " + text(pos));
     }
+    const Vec last{mLastX, mLastY, mLastZ};
+    mLastX = pos.x; mLastY = pos.y; mLastZ = pos.z;
+    if (target.action == DomeWaypoint::Kick) {
+        // Steer along the recorded leg (into the wall), not at the contact
+        // point: Mario rises past it, so the direction to it is unstable.
+        const DomeWaypoint& from = points[mWaypoint > 0 ? mWaypoint - 1 : 0];
+        const Vec leg = across(Vec{target.x - from.x, target.y - from.y, target.z - from.z}, u);
+        const Vec contact = sub(Vec{target.x, target.y, target.z}, pos);
+        const bool clinging = !o.playerOnGround && !o.playerInBind && length(sub(pos, last)) < kClingStill;
+        if (clinging && length(contact) < kKickReach) {
+            note("wall kick at waypoint " + std::to_string(mWaypoint) + " from " + text(pos));
+            tap(Button::A, kJumpHold, step);
+            ++mWaypoint;
+            mKickGrounded = 0;
+            mBestDistance = 1e30f;
+            mStuckFrames = 0;
+            mPhaseFrames = 0;
+            return;
+        }
+        mKickGrounded = o.playerOnGround ? mKickGrounded + 1 : 0;
+        if (mKickGrounded >= kKickGroundLimit) {
+            // Fell back without a kick: walk back to the chain's Hop and retry.
+            size_t hop = mWaypoint;
+            while (hop > 0 && points[hop].action != DomeWaypoint::Hop) --hop;
+            mKickGrounded = 0;
+            if (points[hop].action != DomeWaypoint::Hop || ++mKickRetries > kRecoveries) {
+                finish(Result::Fail, "wall kick at waypoint " + std::to_string(mWaypoint) + " " + text(Vec{target.x, target.y, target.z}) +
+                                         " not reached, at " + text(pos),
+                       step);
+                return;
+            }
+            note("wall kick at waypoint " + std::to_string(mWaypoint) + " fell short at " + text(pos) + "; retrying from waypoint " +
+                 std::to_string(hop));
+            mWaypoint = hop;
+            mAwaitJumpLanding = false;
+            mPhaseFrames = 0;
+            return;
+        }
+        if (mPhaseFrames >= kRouteLimit) {
+            finish(Result::Fail, "wall kick at waypoint " + std::to_string(mWaypoint) + " not reached within " + std::to_string(kRouteLimit) +
+                                     " frames, at " + text(pos),
+                   step);
+            return;
+        }
+        if (length(leg) < 1e-3f || length(right) < 1e-3f || length(forward) < 1e-3f) {
+            steer({}, step);
+            return;
+        }
+        steer(stickKeysFor(dot(leg, scale(right, 1.0f / length(right))) * mSignRight,
+                           dot(leg, scale(forward, 1.0f / length(forward))) * mSignForward),
+              step);
+        return;
+    }
     if (distance < (target.action == DomeWaypoint::Warp ? kArriveWarp : kArrive) && height < kArriveHeight) {
         if (mAwaitJumpLanding && target.action != DomeWaypoint::Spin && !o.playerOnGround) {
             steer({}, step);
@@ -573,6 +641,7 @@ void DomesDriver::route(const Observation& o, Step& step) {
             next(Phase::Warp);
             return;
         }
+        if (target.action != DomeWaypoint::Hop) mKickRetries = 0;
         ++mWaypoint;
         mBestDistance = 1e30f;
         mStuckFrames = 0;

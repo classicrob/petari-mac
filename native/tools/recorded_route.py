@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Convert foreground PETARI_ROUTE_RECORD CSV to dome-driver waypoints.
 Hop is a recorded jump (no automatic spin); Spin preserves the recorded spin.
+Kick is a jump pressed while airborne (a wall kick), at the wall contact.
+Launch is a bind (Launch/Sling Star) the player spun out of, at the capture
+point; Warp is a bind that carried the player at least 800 units without a spin.
 Only one continuous visit to --stage is accepted. Output needs live validation.
+Everything is counted in game frames, so the recording's wall-clock frame rate
+does not matter.
 """
 import argparse
 import csv
@@ -29,11 +34,24 @@ def convert(rows, stage="AstroGalaxy", spacing=150.0):
         raise ValueError("non-finite recorded position")
     points = [(pos(selected[0]), "Walk")]
     last_ground = selected[0]
+    bind_start = None
+    bind_spun = False
     for i, row in enumerate(selected):
         previous = selected[max(0, i-1)]
         grounded = row["grounded"] == "1"
+        bound = row.get("bound") == "1"
+        if bound and bind_start is None:
+            bind_start, bind_spun = pos(previous if previous.get("bound") != "1" else row), False
+        if bound:
+            bind_spun = bind_spun or (row["spin"] == "1" and previous["spin"] != "1")
+            continue
+        if bind_start is not None:
+            if bind_spun: points.append((bind_start, "Launch"))
+            elif math.dist(bind_start, pos(row)) >= 800: points.append((bind_start, "Warp"))
+            bind_start = None
         if row["jump"] == "1" and previous["jump"] != "1":
-            points.append((pos(last_ground), "Hop"))
+            if previous["grounded"] == "1" or grounded or i == 0: points.append((pos(last_ground), "Hop"))
+            else: points.append((pos(row), "Kick"))
         if row["spin"] == "1" and previous["spin"] != "1":
             points.append((pos(row), "Spin"))
         landed = grounded and previous["grounded"] != "1"
