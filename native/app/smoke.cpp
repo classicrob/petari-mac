@@ -397,6 +397,22 @@ void Driver::playable(const Observation& observation, Step& step) {
             tap(Button::A, kTapFrames, step);
             mPrologueTapAt = -1;
         }
+        // A start without the prologue (a Luigi file goes straight to the Gateway,
+        // StorySequenceExecutor: !isDataMario) opens with a demo whose dialogue a
+        // player advances with A; press it once a second while that demo runs.
+        if (!seen("Prologue.PictureBook") && observation.scene == "Game" && observation.sceneReady && observation.demoActive &&
+            mSinceProgress >= 300 && mSinceProgress % 60 == 0) {
+            if (mDemoTaps++ == 0) note("tap A: advancing the opening demo (no prologue on this file)");
+            tap(Button::A, kTapFrames, step);
+        }
+        if (mSinceProgress % 600 == 599) {
+            // Why the game is not yet playable, for stalled starts.
+            note("waiting in " + observation.scene + "/" + observation.stage + ": sceneReady " +
+                 std::to_string(observation.sceneReady) + ", player " + std::to_string(observation.playerValid) + ", demo " +
+                 std::to_string(observation.demoActive) + ", pause permitted " + std::to_string(observation.pausePermitted) +
+                 ", talk " + std::to_string(observation.talkActive) + ", off control " + std::to_string(observation.playerOffControl) +
+                 ", dead " + std::to_string(observation.playerDead));
+        }
         if (++mSinceProgress >= kPrologueStallLimit) {
             finish(Result::Fail,
                    "no prologue milestone for " + std::to_string(kPrologueStallLimit) + " frames (last: " +

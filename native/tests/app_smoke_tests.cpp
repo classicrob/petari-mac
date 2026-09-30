@@ -914,6 +914,25 @@ void testReload() {
               run.logged("in the game without a prologue"),
           "reload reaches gameplay without a prologue and passes the checks");
 
+    // A start without the prologue that opens with a demo (Luigi's fresh file at
+    // the Gateway): A once a second after 300 frames, until the game is playable.
+    Run opening(1000000, Smoke::Script::Reload);
+    toStart(opening);
+    Observation demo = garden();
+    demo.stage = "HeavensDoorGalaxy";
+    demo.demoActive = true;
+    const int aBefore = opening.count(Button::A, true);
+    opening.frames(demo, 250);
+    check(opening.count(Button::A, true) == aBefore, "no presses early in an opening demo");
+    opening.frames(demo, 200);
+    check(opening.count(Button::A, true) >= aBefore + 2 && opening.logged("advancing the opening demo"),
+          "A advances an opening demo without a prologue");
+    Observation calm = garden();
+    calm.stage = "HeavensDoorGalaxy";
+    const int aCalm = opening.count(Button::A, true);
+    opening.frames(calm, 30);
+    check(opening.count(Button::A, true) == aCalm, "no demo presses once the demo ends");
+
     Run prologue(1000000, Smoke::Script::Reload);
     toStart(prologue);
     prologue.frame(with(garden(), "Prologue.PictureBook"));

@@ -252,5 +252,17 @@ rule but only unit-tested, not yet seen live.
 **Still failing or unchecked:** the Grand Finale galaxy route
 (`resume-20/grand-finale-mario-dome7`, `resume-22/finale`): the Launch Star
 works, but the hand-planned walk on the small planet never reaches the Grand
-Finale Luma. A route recorded by a person is requested. Luigi as the player
-(`PETARI_SMOKE_PLAYER=luigi`) is not yet checked on either variant.
+Finale Luma. A route recorded by a person is requested.
+
+**Luigi as the player** (`PETARI_SMOKE_PLAYER=luigi`, file select's Bros button),
+`build/unlocked-save/luigi/`:
+- `grand-finale`: the reload check (`grand-finale-reload.log`: idle, jump,
+  opposite moves, pause and resume) passes as Luigi, and a Terrace dome tour as
+  Luigi (`grand-finale-dome1/`) passes 5/5 with the full map.
+- `complete-luigi`: Luigi's own game starts fresh, and the game sends him
+  straight to the Gateway with no letter prologue (`StorySequenceExecutor`:
+  `!isDataMario()`, as on the Wii). Its opening demo waits for A presses to
+  advance. With those (`complete-luigi-tap.log`), the reload check passes: Luigi
+  is playable at the Gateway, jumps 221 units, moves both ways, pauses and
+  resumes. The first attempt without A presses (`complete-luigi-diag.log`) only
+  showed the demo waiting; that was a harness gap, not a game fault.

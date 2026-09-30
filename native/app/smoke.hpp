@@ -378,6 +378,7 @@ private:
     int mLuigiPresses = 0;             // FileSelect.Bros presses so far
     unsigned long mLuigiPressFrame = 0;  // mPhaseFrames at the last press
     long mPrologueTapAt = -1;
+    unsigned long mDemoTaps = 0;  // A presses advancing an opening demo without a prologue
     unsigned long mSinceProgress = 0;
     unsigned long mMoveFrame = 0;
     float mStartX = 0.0f, mStartY = 0.0f, mStartZ = 0.0f;
