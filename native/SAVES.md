@@ -184,8 +184,8 @@ the Fountain and Bedroom menu logs with every expected scenario ID: no
 mismatches. The runner now rejects missing or incorrect mission menus.
 
 Kitchen's `resume-14/dome3` attempt failed near its entrance before any galaxy
-visit; its successful retry is recorded below. Engine Room and variant-specific
-Luigi/Grand Finale checks remain pending.
+visit; its successful retry is recorded below. Variant-specific Luigi/Grand
+Finale checks are recorded at the end.
 
 **Garden live tour passed:** `build/unlocked-save/resume-14/dome6/` records
 **4/4 visits PASS**, the complete four-galaxy map and every expected mission ID,
@@ -195,8 +195,19 @@ All entered mission 1 and returned through the pause menu. Matter Splatter's
 movement check recorded only 2.4 units (warning), so this does not establish
 unobstructed movement there. The other visits recorded 44–66 units.
 
-Engine Room's `resume-14/dome5` approach failed before reaching the map after
-an airborne route overshoot. The Kitchen retry is recorded below; Engine Room remains pending.
+Engine Room's `resume-14/dome5` and `resume-18/engine` approaches (east side,
+warp pod) fell off the upper ring before the map. **Engine Room now passes** on a
+route recorded by a person (`native/ROUTE_RECORDING.md`): two wall kicks up a
+chimney, a star that catches Mario at a ledge, a spin launch to the upper ring.
+`build/unlocked-save/resume-19/engine/` records exit 0 in 356 s and **5/5 visits
+PASS**: FactoryGalaxy, FloaterOtaKingGalaxy, OceanRingGalaxy,
+ReverseKingdomGalaxy and SkullSharkGalaxy each loaded mission 1, became ready
+and returned via pause. The full map was shown, with Factory, OceanRing and
+ReverseKingdom 1–6 and the other two 1. There were zero menu errors, missing references, crash or hang
+reports. The first wall-kick attempt landed short and the driver's bounded
+retry (at most three) succeeded; the route is timing-sensitive there. Movement
+was 44–354 units. The route is now in the source table. With it the
+`all-missions` save has 32 passing visits across all six domes.
 
 **Kitchen retry passed:** `build/unlocked-save/resume-15/kitchen/` records
 **5/5 visits PASS**, all five expected map destinations and all expected
@@ -206,3 +217,11 @@ Galaxy each loaded mission 1, became ready and returned via pause. Movement
 was 51–75 units. Beach Bowl and Ghostly showed 1–6, Buoy Base 1–2, the others 1.
 The verified route follows the outer lower ledge past the pillar and jumps up
 near the doorway; it is now in the source route table.
+
+**`grand-finale` variant, first domes:** `build/unlocked-save/resume-17/`
+`grand-finale-dome1/` (Terrace, 711 s) and `grand-finale-dome2/` (Fountain,
+536 s) each record exit 0 and **5/5 visits PASS** on the frozen resume-18 app:
+full maps, every expected mission ID (Good Egg and Honeyhive 1–6, Battle Rock
+1–7, Space Junk 1–6, others 1), zero menu errors, missing references, crash or
+hang reports. Its Kitchen run was interrupted by a worker restart (no result). The remaining
+domes, Grand Finale and `complete-luigi` are being run in `resume-20/`.
