@@ -49,7 +49,10 @@ namespace JGeometry {
 #else
 #ifdef PETARI_NATIVE
     inline void subInternal(const f32* a, const f32* b, f32* dst) {
-        for (int i = 0; i < 3; ++i) dst[i] = a[i] - b[i];
+        // The Wii helper reverses the operands for z (unlike TVec3::sub).
+        dst[0] = a[0] - b[0];
+        dst[1] = a[1] - b[1];
+        dst[2] = b[2] - a[2];
     }
 #else
     static void subInternal(const f32* vec1, const f32* vec2, f32* dst);

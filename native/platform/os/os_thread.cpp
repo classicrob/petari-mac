@@ -96,11 +96,13 @@ std::atomic<std::int64_t> gPreemptSince{0};
 // Wakes the baton monitor when a preemption becomes pending, so a forced
 // preemption follows gPreemptAfterMs later instead of at its next 2 ms poll.
 std::atomic<semaphore_t> gMonitorWake{MACH_PORT_NULL};
+std::atomic<bool> gMonitorWakePending{false};
 std::int64_t nowTicks();
 void setPreemptPending(bool pending) {
     if (pending && !gPreemptPending) {
         gPreemptSince.store(nowTicks(), std::memory_order_relaxed);
-        if (const semaphore_t wake = gMonitorWake.load(std::memory_order_relaxed); wake != MACH_PORT_NULL) {
+        if (const semaphore_t wake = gMonitorWake.load(std::memory_order_relaxed);
+            wake != MACH_PORT_NULL && !gMonitorWakePending.exchange(true)) {
             semaphore_signal(wake);
         }
     } else if (!pending) {
@@ -548,6 +550,7 @@ void interruptReschedule() {
         // No strictly higher thread waits (for example it was suspended,
         // cancelled or lowered): the dependency the override expressed ended.
         detachHolderOverride();
+        setPreemptPending(false);
     }
     if (current->state != kStateRunning || highestReadyPriority() < current->priority) {
         setPreemptPending(true);
@@ -1007,7 +1010,7 @@ struct PreemptAttempt {
 // Interrupt lock taken here (try only). While the holder is suspended only
 // the cache is read (no allocation, no dyld); unknown addresses are returned
 // to be symbolized after it runs again.
-ForceResult tryForcePreempt(PreemptAttempt& attempt) {
+ForceResult tryForcePreempt(PreemptAttempt& attempt, std::int64_t expectedSince) {
     std::unique_lock<std::mutex> lock(interruptMutex(), std::try_to_lock);
     if (!lock.owns_lock()) {
         return ForceResult::Busy;  // someone is in an OS call; the holder may be about to take the preemption
@@ -1017,7 +1020,8 @@ ForceResult tryForcePreempt(PreemptAttempt& attempt) {
         ~Release() { setInterruptOwner(false); }
     } release;
     OSThread* holder = gCurrent.load(std::memory_order_relaxed);
-    if (holder == nullptr || !gCurrentRunning || !gPreemptPending || Reschedule > 0 || RunQueueBits == 0 ||
+    if (holder == nullptr || !gCurrentRunning || !gPreemptPending ||
+        gPreemptSince.load(std::memory_order_relaxed) != expectedSince || Reschedule > 0 || RunQueueBits == 0 ||
         highestReadyPriority() >= holder->priority || holder->state != kStateRunning) {
         return ForceResult::NotNeeded;
     }
@@ -1158,10 +1162,14 @@ void* batonMonitor(void*) {
     Stretch stretch;
     double waitMs = kMonitorPollMs, retryMs = kFirstRetryMs;
     std::int64_t retrySince = 0;  // the pending preemption the backoff belongs to
+    std::int64_t lastStatePoll = 0;
     while (true) {
         if (const semaphore_t wake = gMonitorWake.load(std::memory_order_relaxed); wake != MACH_PORT_NULL) {
             const auto ns = static_cast<long long>(waitMs * 1e6);
-            semaphore_timedwait(wake, mach_timespec_t{static_cast<unsigned>(ns / 1000000000), static_cast<clock_res_t>(ns % 1000000000)});
+            if (semaphore_timedwait(wake, mach_timespec_t{static_cast<unsigned>(ns / 1000000000),
+                                                        static_cast<clock_res_t>(ns % 1000000000)}) == KERN_SUCCESS) {
+                gMonitorWakePending.store(false);
+            }
         } else {
             std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(waitMs));
         }
@@ -1172,6 +1180,21 @@ void* batonMonitor(void*) {
             std::fprintf(chatter, "baton monitor poll %llu\n", static_cast<unsigned long long>(poll));
             std::fflush(chatter);
         }
+        // A cooperative handoff often clears the request before its deadline.
+        // Keep the host-wait detector at its normal cadence instead of making
+        // another Mach thread_info call on every wake and cancelled deadline.
+        // A due preemption bypasses this throttle, preserving its short delay.
+        const std::int64_t woke = nowTicks();
+        const std::int64_t pendingSince = gPreemptSince.load(std::memory_order_relaxed);
+        const double deadlineMs = pendingSince != 0
+            ? gPreemptAfterMs.load(std::memory_order_relaxed) - ticksToMs(woke - pendingSince) : kMonitorPollMs;
+        const bool forcing = pendingSince != 0 && gForcePreemption.load(std::memory_order_relaxed);
+        const double untilStatePoll = kMonitorPollMs - ticksToMs(woke - lastStatePoll);
+        if (untilStatePoll > 0 && !(forcing && deadlineMs <= 0)) {
+            waitMs = forcing ? std::min(untilStatePoll, deadlineMs) : untilStatePoll;
+            continue;
+        }
+        lastStatePoll = woke;
         const std::uint64_t hand = gHolderHand.load(std::memory_order_acquire);
         const bool running = gHolderRunning.load(std::memory_order_acquire);
         const mach_port_t port = gHolderPort.load(std::memory_order_relaxed);
@@ -1196,16 +1219,17 @@ void* batonMonitor(void*) {
             }
             if (running && since != 0 && gForcePreemption.load(std::memory_order_relaxed)) {
                 if (pendingMs < afterMs) {
-                    waitMs = afterMs - pendingMs;  // wake at the deadline
+                    waitMs = std::min(waitMs, afterMs - pendingMs);  // wake no later than the deadline
                     continue;
                 }
                 PreemptAttempt attempt;
-                const ForceResult result = tryForcePreempt(attempt);
+                const ForceResult result = tryForcePreempt(attempt, since);
                 const double attemptUs = ticksToMs(nowTicks() - now) * 1000.0;
+                // Consume cached site pointers before learnCode can evict them.
+                noteForcedPreemption(result, attempt, pendingMs, attemptUs);
                 if (attempt.unknownCount != 0) {
                     learnCode(attempt);  // then retried at once
                 }
-                noteForcedPreemption(result, attempt, pendingMs, attemptUs);
                 if (result == ForceResult::NeedNames) {
                     waitMs = 0;
                 } else if (result == ForceResult::Busy || result == ForceResult::Unsafe) {

@@ -554,9 +554,30 @@ void DomesDriver::dome(const Observation& o, Step& step) {
             finish(Result::Fail, "the dome never became playable", step);
         }
         return;
-    case Phase::BlueStar:
+    case Phase::BlueStar: {
+        const bool shown = std::any_of(o.targets.begin(), o.targets.end(), [](const Observation::Target& target) {
+            return target.id == "Dome.BlueStar" && (target.flags & kTargetSelectable);
+        });
+        // Some dome entrance cameras put the star outside the screen. Walk
+        // toward the room centre until it is visible, just as a player does.
+        const Vec delta = across(sub(Vec{0, o.playerY, 0}, position(o)), up(o));
+        if (!shown && o.playerValid && !o.demoActive && !o.talkActive && mPhaseFrames > kSettle && length(delta) > 180.0f) {
+            const Vec right = across(Vec{o.camXx, o.camXy, o.camXz}, up(o));
+            const Vec forward = across(Vec{o.camZx, o.camZy, o.camZz}, up(o));
+            if (length(right) > 1e-3f && length(forward) > 1e-3f) {
+                steer(stickKeysFor(dot(delta, scale(right, 1.0f / length(right))) * mSignRight,
+                                   dot(delta, scale(forward, 1.0f / length(forward))) * mSignForward), step);
+            }
+        } else {
+            steer({}, step);
+        }
+        if (mPhaseFrames % 120 == 0) {
+            note("dome idle at " + text(position(o)) + ", camera forward " + text(Vec{o.camZx, o.camZy, o.camZz}) +
+                 ", targets " + std::to_string(o.targets.size()));
+        }
         if (aimAndPress(o, "Dome.BlueStar", -1, step)) next(Phase::GalaxyMap);
         return;
+    }
     case Phase::GalaxyMap: {
         std::vector<std::string> galaxies;
         std::string unlock;
@@ -608,7 +629,18 @@ void DomesDriver::dome(const Observation& o, Step& step) {
         if (aimAndPress(o, "Galaxy.Start", -1, step)) next(Phase::Scenario);
         return;
     case Phase::Scenario:
-        if (aimAndPress(o, "Scenario.Star", visit->scenario, step)) next(Phase::Load);
+        if (aimAndPress(o, "Scenario.Star", visit->scenario, step)) {
+            std::vector<int> shown;
+            for (const auto& target : o.targets) {
+                if (target.id == "Scenario.Star" && (target.flags & kTargetSelectable)) shown.push_back(target.index);
+            }
+            std::sort(shown.begin(), shown.end());
+            shown.erase(std::unique(shown.begin(), shown.end()), shown.end());
+            std::string list;
+            for (int scenario : shown) list += (list.empty() ? "" : ",") + std::to_string(scenario);
+            note("DOMES STARS " + visit->galaxy + ": " + list);
+            next(Phase::Load);
+        }
         return;
     case Phase::Load:
         if (o.scene == "Game" && o.stage == visit->galaxy && o.sceneReady) {

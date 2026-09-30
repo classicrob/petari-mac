@@ -8,6 +8,7 @@
 #include <sstream>
 
 #include "host.hpp"
+#include "smoke_background.hpp"
 #include "petari/input.hpp"
 #include "petari/input_sdl3.hpp"
 
@@ -135,6 +136,10 @@ void countPhysical(const SDL_Event& event) {
 }  // namespace
 
 bool input(const SDL_Event& event) {
+    if (SmokeBackground::enabled && (SmokeBackground::physicalEvent(event.type) ||
+        event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_FOCUS_GAINED)) {
+        return true;
+    }
     countPhysical(event);
     return Input::SDL3::handleEvent(event);
 }

@@ -7,6 +7,9 @@
 #include <aurora/gfx.h>
 
 #include <SDL3/SDL_init.h>
+#include <SDL3/SDL_hints.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 
@@ -21,6 +24,7 @@
 #include <petari/pipeline_startup.hpp>
 
 #include "host.hpp"
+#include "smoke_background.hpp"
 #include <petari/host_allocation.hpp>
 
 extern "C" void petari_gx_pipeline_background_begin();
@@ -196,6 +200,33 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    App::SmokeBackground::enabled = App::SmokeBackground::requested(
+        std::getenv("PETARI_SMOKE"), PetariNative::TestFixture::observatory,
+        std::getenv("PETARI_SMOKE_BACKGROUND"));
+    SDL_SetHintWithPriority("PETARI_SMOKE_BACKGROUND", App::SmokeBackground::enabled ? "1" : "0", SDL_HINT_OVERRIDE);
+    if (App::SmokeBackground::enabled) {
+        SDL_SetHintWithPriority(SDL_HINT_MAC_BACKGROUND_APP, "1", SDL_HINT_OVERRIDE);
+        SDL_SetHintWithPriority(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0", SDL_HINT_OVERRIDE);
+        SDL_SetHintWithPriority(SDL_HINT_WINDOW_ACTIVATE_WHEN_RAISED, "0", SDL_HINT_OVERRIDE);
+        SDL_SetEventFilter(App::SmokeBackground::eventFilter, nullptr);
+        // Let SDL install its Cocoa application/delegate first, before creating
+        // any window. Accessory policy avoids normal foreground application activation.
+        if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+            std::fprintf(stderr, "petari: background video initialization: %s\n", SDL_GetError());
+            return 1;
+        }
+        const auto sendObject = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
+        const id application = sendObject(reinterpret_cast<id>(objc_getClass("NSApplication")),
+                                          sel_registerName("sharedApplication"));
+        constexpr long backgroundActivation = 1; // NSApplicationActivationPolicyAccessory
+        const auto setPolicy = reinterpret_cast<BOOL (*)(id, SEL, long)>(objc_msgSend);
+        if (!application || !setPolicy(application, sel_registerName("setActivationPolicy:"), backgroundActivation)) {
+            std::fputs("petari: could not set background app activation policy\n", stderr);
+            return 1;
+        }
+        std::fputs("PETARI SMOKE BACKGROUND: enabled; physical input isolated; nonfocusable background window; VI pacing unchanged\n", stderr);
+    }
+
     const std::string userPath = paths.user.string();
     AuroraConfig config{};
     config.appName = "Super Mario Galaxy";
@@ -217,6 +248,19 @@ int main(int argc, char** argv) {
         std::fputs("petari: Metal initialization failed\n", stderr);
         aurora_shutdown();
         return 1;
+    }
+    if (App::SmokeBackground::enabled) {
+        auto* window = static_cast<SDL_Window*>(info.window);
+        if (!SDL_SetWindowFocusable(window, false)) {
+            std::fprintf(stderr, "petari: could not isolate background window focus: %s\n", SDL_GetError());
+            aurora_shutdown();
+            return 1;
+        }
+        int x = 0, y = 0;
+        SDL_GetWindowPosition(window, &x, &y);
+        std::fprintf(stderr, "PETARI SMOKE BACKGROUND: accessory activation policy; window at %d,%d; flags=0x%llx\n",
+                     x, y, static_cast<unsigned long long>(SDL_GetWindowFlags(window)));
+        App::Events::assertFocus();
     }
     if (!prepareKnownPipelines(static_cast<SDL_Window*>(info.window))) {
         aurora_shutdown();

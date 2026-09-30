@@ -198,6 +198,7 @@ void Tamakoro::control() {
         const bool riding = !isNerve(GET_NERVE(Tamakoro, TamakoroNrvStandByBind)) && !isNerve(GET_NERVE(Tamakoro, TamakoroNrvStandByTutorial)) &&
                             !isNerve(GET_NERVE(Tamakoro, TamakoroNrvBindEnd));
         MR::Native::publishActor("StarBall", mPosition, -mGravity, riding ? 1 : 0, riding ? PETARI_ACTOR_BOUND : PETARI_ACTOR_READY);
+        MR::Native::publishActor("StarBallInput", mPosition, mAccelDir * mAccelRate, MR::isBindedGround(this) ? 1 : 0, 0);
     }
 #endif
 }

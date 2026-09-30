@@ -48,6 +48,7 @@
 #include <revolution/vi.h>
 
 #include <petari/host_allocation.hpp>
+#include <petari/host_image_heap.hpp>
 #include <petari/platform/audio.hpp>
 #include <petari/platform/crash.hpp>
 #include <petari/platform/dvd.hpp>
@@ -71,6 +72,14 @@ alignas(16) static unsigned char gGameSystemStorage[sizeof(GameSystem)] = {};
 alignas(16) static unsigned char gObjHolderStorage[sizeof(GameSystemObjHolder)] = {};
 template <>
 GameSystem* SingletonHolder< GameSystem >::sInstance = reinterpret_cast<GameSystem*>(gGameSystemStorage);
+
+// HeapMemoryWatcher registers the model-loader resolver during audio heap setup.
+// This audio-only executable has no J3D loader; retain its registration as scaffold
+// state without pulling in the renderer. No audio allocation uses this resolver.
+static PetariNative::J3D::HostImageHeapResolver gModelHeapResolver = nullptr;
+void PetariNative::J3D::setHostImageHeapResolver(HostImageHeapResolver resolver) {
+    gModelHeapResolver = resolver;
+}
 
 namespace PAudio = PetariNative::Platform::Audio;
 namespace PDVD = PetariNative::Platform::DVD;
@@ -241,6 +250,7 @@ int main(int argc, char** argv) {
     HeapMemoryWatcher::createRootHeap();
     SingletonHolder< HeapMemoryWatcher >::init();
     HeapMemoryWatcher* heaps = SingletonHolder< HeapMemoryWatcher >::get();
+    check(gModelHeapResolver != nullptr, "heap setup registers the model-heap resolver");
     heaps->setCurrentHeapToStationedHeap();
     FileRipper::setup(0x20000, MR::getStationedHeapNapa());
     // GameSystem::init and GameSystemObjHolder.
@@ -369,6 +379,55 @@ int main(int argc, char** argv) {
         check(chords->mTable.mChordCount > 0 && chords->mTable.mChordCount < 256 && chords->mTable.mScaleCount > 0 &&
                   chords->mTable.mScaleCount < 256,
               "chord table counts are sane");
+    }
+
+    // Exercise the same fades and pause state transitions as the game's pause menu.
+    // Measure after each fade so a valid fade-out is not mistaken for a gap.
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        gWrapper->mAudSystem->enterPauseMenu();
+        runFramesUntil([] { return false; }, 60);
+        check(gWrapper->mAudSystem->mIsPaused, "pause menu pauses the BGM after its fade");
+        const std::size_t pausedStart = gCapture.size() / 2;
+        runFramesUntil([] { return false; }, 60);
+        const std::size_t pausedEnd = gCapture.size() / 2;
+        const double paused = std::max(rms(pausedStart, pausedEnd, 0), rms(pausedStart, pausedEnd, 1));
+        check(paused < 2.0, "settled pause output is silent");
+        gWrapper->mAudSystem->exitPauseMenu();
+        runFramesUntil([] { return false; }, 60);
+        check(!gWrapper->mAudSystem->mIsPaused && !gWrapper->mAudSystem->isPauseMenuActive(),
+              "leaving pause restores active playback");
+        const std::size_t resumedStart = gCapture.size() / 2;
+        runFramesUntil([] { return false; }, 120);
+        const std::size_t resumedEnd = gCapture.size() / 2;
+        const double resumed = std::max(rms(resumedStart, resumedEnd, 0), rms(resumedStart, resumedEnd, 1));
+        check(resumed > 100.0, "BGM remains audible after repeated pause/resume");
+        std::printf("pause cycle %d: settled RMS %.2f, resumed RMS %.1f\n", cycle + 1, paused, resumed);
+    }
+
+    // Isolate the star pickup sound and the actual Power/Grand Star fanfares;
+    // background BGM must not satisfy their output checks accidentally.
+    AudWrap::getStageBgm()->stop(2);
+    runFramesUntil([] { return false; }, 120);
+    JAISoundHandle starSe;
+    const auto starId = AudSingletonHolder< AudSoundNameConverter >::get()->getSoundID("SE_SY_STAR_GET");
+    check(gWrapper->mAudSystem->startSound(starId, &starSe, nullptr), "SE_SY_STAR_GET starts");
+    const std::size_t starStart = gCapture.size() / 2;
+    runFramesUntil([] { return false; }, 180);
+    const std::size_t starEnd = gCapture.size() / 2;
+    check(std::max(rms(starStart, starEnd, 0), rms(starStart, starEnd, 1)) > 50.0,
+          "isolated star pickup sound is audible");
+    if (starSe.getSound() != nullptr) starSe->stop(0);
+    for (const char* name : {"BGM_CLEAR", "BGM_GRAND_STAR_GET", "BGM_GRAND_STAR_GET_2"}) {
+        runFramesUntil([] { return false; }, 120);
+        const auto id = AudSingletonHolder< AudSoundNameConverter >::get()->getSoundID(name);
+        check(AudWrap::startSubBgm(id, false) != nullptr, "star fanfare starts");
+        const std::size_t start = gCapture.size() / 2;
+        runFramesUntil([] { return false; }, 240);
+        const std::size_t end = gCapture.size() / 2;
+        const double level = std::max(rms(start, end, 0), rms(start, end, 1));
+        check(level > 100.0, "isolated star fanfare is audible");
+        std::printf("%s: RMS %.1f, capture frames %zu..%zu\n", name, level, start, end);
+        AudWrap::getSubBgm()->stop(0);
     }
 
     const std::filesystem::path wav = tmp / "petari_audio_boot.wav";

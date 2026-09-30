@@ -1,5 +1,6 @@
 #include <petari/pipeline_startup.hpp>
 #include <petari/input.hpp>
+#include "smoke_background.hpp"
 
 #include <aurora/aurora.h>
 #include <aurora/event.h>
@@ -94,7 +95,7 @@ bool preparePipelines(SDL_Window* window) {
             const auto& input = event->sdl;
             if (input.type == SDL_EVENT_WINDOW_FOCUS_LOST) focused = false;
             if (input.type == SDL_EVENT_WINDOW_FOCUS_GAINED) focused = true;
-            if (!focused) continue;
+            if (SmokeBackground::enabled || !focused) continue;
             const bool key = input.type == SDL_EVENT_KEY_DOWN && !input.key.repeat &&
                 (input.key.scancode == SDL_SCANCODE_RETURN || input.key.scancode == SDL_SCANCODE_KP_ENTER);
             const bool button = input.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
@@ -110,7 +111,7 @@ bool preparePipelines(SDL_Window* window) {
         // then consumes the available slack instead of moving every draw later.
         const Uint64 beforeWait = SDL_GetTicksNS();
         if (beforeWait < deadline) {
-            if (shown && focused) SDL_DelayPrecise(deadline - beforeWait);
+            if (shown && (focused || SmokeBackground::enabled)) SDL_DelayPrecise(deadline - beforeWait);
             else SDL_DelayNS(deadline - beforeWait);
             const auto awake = SDL_GetTicksNS();
             timing.ms[PrepTiming::Sleep] = (awake - beforeWait) / 1e6;
@@ -178,7 +179,7 @@ bool preparePipelines(SDL_Window* window) {
     // Global startup requests already use the utility-QoS background queue.
     // Leaving this loop does not cancel them; stage/draw requests still promote
     // matching jobs, and the normal stage gates protect stages not ready yet.
-    Input::focusChanged((SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0);
+    Input::focusChanged(SmokeBackground::enabled || (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0);
     SDL_SetWindowTitle(window, "Super Mario Galaxy");
     petari_gx_pipeline_preparation_status(&total, &pending, &failed);
     std::sort(intervals.begin(), intervals.end());

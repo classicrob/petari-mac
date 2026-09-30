@@ -174,7 +174,13 @@ def graph(nodes, by_column):
                     edges[k].append((j, None))
                     degree[k] += 1
                 elif clear >> d & 1 and -DROP <= dy < -STEP_UP:
-                    edges[k].append((j, "drop"))
+                    # A lower floor is not reachable through an intervening platform.
+                    # Choosing every hit in a column routed Mario underneath the
+                    # Terrace floor while he was still standing on it.
+                    intervening = any(nodes[j][1] < nodes[h][1] <= y + STEP_UP
+                                      for h in by_column.get((key[0] + di, key[1] + dj), ()))
+                    if not intervening:
+                        edges[k].append((j, "drop"))
                 elif STEP_UP < dy <= JUMP_UP and nodes[j][3] >> back & 1:
                     # A ledge: blocked at +40 from below, open from above.
                     edges[k].append((j, "jump"))

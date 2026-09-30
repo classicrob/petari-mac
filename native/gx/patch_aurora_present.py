@@ -316,6 +316,12 @@ def patch_aurora(text):
 
 
 def patch_window(text):
+    text = replace_once(text,
+                        '  flags |= SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;\n',
+                        '  flags |= SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;\n'
+                        '  if (SDL_GetHintBoolean("PETARI_SMOKE_BACKGROUND", false)) {\n'
+                        '    flags |= SDL_WINDOW_NOT_FOCUSABLE;\n'
+                        '  }\n')
     text = replace_once(text, 'namespace aurora::window {\n',
                         '// Petari: the displayed image\'s aspect (native/gx/present/present.h); 0 while\n'
                         '// XFBs are not presented.\n'

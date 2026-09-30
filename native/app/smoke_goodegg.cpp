@@ -225,13 +225,13 @@ const std::vector<Point3> kRockRails[4] = {
 // Closed rails loop; on the open one boulders break at its end.
 constexpr bool kRockRailClosed[4] = {true, true, true, false};
 constexpr float kRockOffRail = 350.0f;  // farther: not rolling on its rail
-constexpr float kRockWatch = 1500.0f;   // boulders this close are predicted
-// Prediction samples 5 frames apart, 45 frames ahead: Mario's straight-line
-// run over longer horizons leaves the Peanut's curved lobes (radius ~700) and
-// overestimated clearance in goodegg-19 (90 frames: three hits).
-constexpr int kRockSteps = 9;
+constexpr float kRockWatch = 2200.0f;   // boulders this close are predicted
+// Look far enough ahead to stop before entering a crossing. Candidate dodges
+// run for only 15 frames then brake: long tangent rays leave curved ground.
+constexpr int kRockSteps = 18;
 constexpr int kRockStepFrames = 5;
-constexpr float kMarioSpeed = 8.0f;     // running, units per frame
+constexpr float kMarioSpeed = 13.0f;    // MarioConst::mWalkSpeed
+constexpr float kDodgeRunFrames = 15.0f;
 // Mario's position is his feet, a boulder's its centre, about a radius above
 // its rail: contact is near 340 feet-to-centre. The margin covers the rail
 // fit (observed boulders median 60, at most 235 from the fitted curves) and
@@ -814,6 +814,12 @@ void GoodEggDriver::mission(const Observation& o, Step& step) {
         if (mLastLife >= 0) {
             note("life " + std::to_string(mLastLife) + " -> " + std::to_string(o.playerLife) + " at " + text(pos) + " on " +
                  planetName(mPlanet));
+            for (const auto& actor : o.actors) {
+                if ((actor.flags & kActorHostile) && length(actorPos(actor) - pos) < 600.0f) {
+                    note("damage proximity: " + actor.kind + " at " + text(actorPos(actor)) +
+                         ", distance " + number(length(actorPos(actor) - pos)));
+                }
+            }
         }
         mLastLife = o.playerLife;
     }
@@ -1035,63 +1041,76 @@ bool GoodEggDriver::dodgeRocks(const Observation& o, Step& step) {
     if (rocks.empty()) {
         return false;
     }
-    // Candidate moves across the ground: toward the goal, eight directions
-    // around it, and standing still; Mario runs about 8 units per frame.
     const Vec toGoal = mHasGoal ? normalized(across(vec(mGoalPoint) - pos, u)) : Vec{};
-    const Vec side = length(toGoal) > 0.5f ? normalized(cross(u, toGoal)) : Vec{};
-    auto clearance = [&](Vec dir) {
+    if (length(toGoal) < 0.5f) {
+        return false;
+    }
+    const Vec camX{o.camXx, o.camXy, o.camXz};
+    const Vec camZ{o.camZx, o.camZy, o.camZz};
+    const Vec camY = cross(camZ * -1.0f, camX);
+    const Vec right = normalized(across(camX, u));
+    const Vec forward = normalized(across(camZ, u) + across(camY, u));
+    auto directionForKeys = [&](const StickKeys& keys) {
+        return normalized(right * static_cast<float>(int(keys.right) - int(keys.left)) +
+                          forward * static_cast<float>(int(keys.up) - int(keys.down)));
+    };
+    // The first few frames retain momentum even when the stick is released
+    // or reversed. Bound its contribution after a landing/knockback.
+    Vec velocity = across(vec(mLastMove), u);
+    if (length(velocity) > 22.0f) {
+        velocity = normalized(velocity) * 22.0f;
+    }
+    auto future = [&](Vec dir, float t, bool stop) {
+        const float moving = stop ? std::min(t, kDodgeRunFrames) : t;
+        const float acceleration = 5.0f * (1.0f - std::exp(-moving / 5.0f));
+        const float brake = stop ? 5.0f * (1.0f - std::exp(-std::max(0.0f, t - moving) / 5.0f)) : 0.0f;
+        return pos + velocity * (5.0f * (1.0f - std::exp(-t / 5.0f))) +
+               dir * (kMarioSpeed * (moving - acceleration + brake));
+    };
+    auto clearance = [&](Vec dir, bool stop) {
         float least = 1e30f;
         for (const auto& path : rocks) {
-            for (int k = 0; k <= kRockSteps; ++k) {
-                const Vec mario = pos + dir * (kMarioSpeed * static_cast< float >(k * kRockStepFrames));
+            for (int k = 1; k <= kRockSteps; ++k) {
+                const Vec mario = future(dir, static_cast<float>(k * kRockStepFrames), stop);
                 least = std::min(least, length(path[k] - mario));
             }
         }
         return least;
     };
-    if (length(toGoal) < 0.5f || clearance(toGoal) >= kRockSafe) {
+    const Vec intended = directionForKeys(stickKeysForWorld(o, {toGoal.x, toGoal.y, toGoal.z}));
+    // A full-speed straight prediction is useful only over the local patch;
+    // the stopped prediction catches a crossing arriving just after we enter.
+    if (clearance(intended, true) >= kRockSafe && clearance(intended, false) >= kRockSafe) {
         return false;
     }
     Vec best{};
+    StickKeys bestKeys{};
     float bestScore = -1e30f;
     float bestClearance = 0.0f;
-    bool anyGrounded = false;
-    // Two passes: moves that stay on known ground; if none does, the Peanut
-    // allows any move (brushing the mud beats standing in a boulder's way; in
-    // goodegg-23 standing still there cost hits). Off the Fruit Peel is a
-    // fall into its black hole: never.
-    for (int pass = 0; pass < 2 && !anyGrounded; ++pass) {
-        if (pass == 1 && mPlanet == Planet::FruitPeel) {
-            break;
+    for (int i = 0; i <= 8; ++i) {
+        StickKeys keys{};
+        if (i < 8) {
+            const float angle = static_cast<float>(i) * 0.785398f;
+            keys = stickKeysFor(std::cos(angle), std::sin(angle));
         }
-        for (int i = 0; i <= 8; ++i) {
-            Vec dir{};
-            if (i < 8) {
-                const float angle = static_cast< float >(i) * 0.785398f;
-                dir = toGoal * std::cos(angle) + side * std::sin(angle);
-            }
-            // Checked at 10, 20 and 40 frames of running.
-            bool grounded = true;
-            for (int k : {2, 4, 8}) {
-                grounded = grounded &&
-                           onKnownGround(mPlanet, pos + dir * (kMarioSpeed * static_cast< float >(k * kRockStepFrames)));
-            }
-            if (pass == 0 && !grounded) {
-                continue;
-            }
-            anyGrounded = anyGrounded || pass == 0;
-            const float c = clearance(dir);
-            // Safe moves win, the nearer the goal's direction the better; else
-            // the move that stays farthest from every boulder.
-            const float score = c >= kRockSafe ? 10000.0f + (i < 8 ? dot(dir, toGoal) : -0.5f) : c;
-            if (score > bestScore) {
-                bestScore = score;
-                best = dir;
-                bestClearance = c;
-            }
+        const Vec dir = directionForKeys(keys);
+        bool grounded = true;
+        for (int k : {1, 2, 3, 5}) {
+            grounded = grounded && onKnownGround(mPlanet, future(dir, static_cast<float>(k * kRockStepFrames), true));
         }
-        if (pass == 1) {
-            anyGrounded = true;  // (ends the loop)
+        if (!grounded && i < 8) {
+            continue;
+        }
+        const float c = clearance(dir, true);
+        // Prefer waiting to needless sideways movement when both are safe.
+        // If trapped, maximize clearance instead of defaulting to no input.
+        const float progress = i < 8 ? dot(dir, toGoal) : 0.2f;
+        const float score = c >= kRockSafe ? 10000.0f + progress : c;
+        if (score > bestScore) {
+            bestScore = score;
+            best = dir;
+            bestKeys = keys;
+            bestClearance = c;
         }
     }
     if (mFrame >= mRockLogAt) {
@@ -1099,7 +1118,7 @@ bool GoodEggDriver::dodgeRocks(const Observation& o, Step& step) {
         note(std::string(length(best) < 0.5f ? "waiting for a boulder to pass" : "stepping around a boulder") +
              " (clearance " + number(bestClearance) + ", Mario " + text(pos) + ")");
     }
-    steer(length(best) < 0.5f ? StickKeys{} : stickKeysForWorld(o, {best.x, best.y, best.z}), step);
+    steer(bestKeys, step);
     return true;
 }
 
@@ -1259,8 +1278,10 @@ void GoodEggDriver::fruitPeel(const Observation& o, Step& step) {
         const Vec target = actorPos(*head);
         const Vec pos = position(o);
         const float flat = length(across(target - pos, up(o)));
-        if (flat < 170.0f && mLastSpin + 240 < mFrame) {
-            spin(step, "the Hammer Head's head");
+        if (flat < 200.0f && mLastHammerSpin + 240 < mFrame) {
+            if (spin(step, "the Hammer Head's head")) {
+                mLastHammerSpin = mFrame;
+            }
         }
         if (flat < 150.0f && o.playerOnGround && mFrame - mLastA >= 40) {
             mLastA = mFrame;
@@ -1268,7 +1289,15 @@ void GoodEggDriver::fruitPeel(const Observation& o, Step& step) {
             tap(Button::A, 12, step);
         }
         // Keep steering onto it, in the air too.
-        goTo(o, {target.x, target.y, target.z}, 15.0f, "the Hammer Head's head", step, true);
+        goTo(o, {target.x, target.y, target.z}, 40.0f, "the Hammer Head's head", step, true);
+        if (!o.playerOnGround) {
+            // Counter horizontal momentum before crossing the head. Driving
+            // straight at it until 15 units away overshot every jump in run 24.
+            const Vec velocity = across(vec(mLastMove), up(o));
+            const Vec landing = across(target - pos, up(o)) - velocity * 8.0f;
+            steer(flat < 50.0f && length(velocity) < 2.0f ? StickKeys{} :
+                  stickKeysForWorld(o, {landing.x, landing.y, landing.z}), step);
+        }
         return;
     }
     // Draw its attack: it notices Mario within 800 of its base

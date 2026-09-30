@@ -95,6 +95,7 @@ private:
     int mStage = 0;
     unsigned long mStageFrames = 0;
     int mAttempts = 0;
+    bool mSpinHeld = false;
     bool mHeld[5] = {};        // up, down, left, right, A
     unsigned long mReleaseA = 0;
     // Measurements.

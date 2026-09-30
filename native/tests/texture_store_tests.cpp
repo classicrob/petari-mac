@@ -18,14 +18,19 @@
 #include <petari/host_allocation.hpp>
 #include <revolution/gx.h>
 #include <revolution/os.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 
+extern "C" void GXInitTexObjData(GXTexObj*, const void*);
 extern "C" std::uint64_t petari_dc_store_generation(void);
 extern "C" int petari_dc_stored_since(const void* addr, std::size_t nBytes, std::uint64_t since);
 extern "C" bool petari_gx_revalidate_texobj(GXTexObj* obj);
+extern "C" std::size_t petari_gx_tex_store_entries();
+extern "C" std::size_t petari_gx_tex_store_capacity();
+extern "C" std::size_t petari_gx_tex_store_bytes();
 
 static int sFailures = 0;
 static void check(bool condition, const char* pText) {
@@ -114,6 +119,51 @@ static void testGameThreadBookkeeping(JKRHeap* pTiny) {
     check(pTiny->getTotalFreeSize() == before, "texture and store bookkeeping on a game thread leave the current JKR heap untouched");
 }
 
+static void testBoundedChurn() {
+    GXTexObj old, shared;
+    GXInitTexObj(&old, sTexels, 8, 8, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GXInitTexObj(&shared, sTexels, 8, 8, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    petari_gx_revalidate_texobj(&old);
+    petari_gx_revalidate_texobj(&shared);
+    DCStoreRange(sTexels, 64);
+    check(petari_gx_revalidate_texobj(&old), "first shared-data object observes the store");
+    check(petari_gx_revalidate_texobj(&shared), "loading one object does not consume another object's store");
+
+    const auto capacity = petari_gx_tex_store_capacity();
+    check(capacity <= 65536 && capacity > 0, "texture history capacity is bounded");
+    check(petari_gx_tex_store_bytes() <= 1024 * 1024, "texture history occupies at most 1 MiB");
+    constexpr unsigned loads = 1500000;
+    double maxUs = 0;
+    const auto start = std::chrono::steady_clock::now();
+    for (unsigned i = 0; i < loads; ++i) {
+        GXTexObj fresh;
+        GXInitTexObj(&fresh, sOther, 8, 8, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        const auto before = std::chrono::steady_clock::now();
+        check(!petari_gx_revalidate_texobj(&fresh), "fresh object has no old upload under churn");
+        const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - before).count();
+        if (us > maxUs) maxUs = us;
+        check(petari_gx_tex_store_entries() <= capacity, "churn never exceeds fixed capacity");
+    }
+    check(petari_gx_tex_store_entries() == capacity, "churn fills and replaces the bounded table");
+    DCStoreRange(sTexels, 64);
+    check(petari_gx_revalidate_texobj(&old), "evicted object still detects stores since its cached upload");
+    check(!petari_gx_revalidate_texobj(&old), "evicted object establishes a new baseline after revalidation");
+    check(petari_gx_revalidate_texobj(&shared), "evicted shared-data object independently detects the store");
+
+    // Reusing an address via GXInitTexObjData must check the new data's pages.
+    GXInitTexObjData(&old, sSecond);
+    DCStoreRange(sSecond, 64);
+    check(petari_gx_revalidate_texobj(&old), "replacement data stores are observed");
+    // Initialization resets the identity, even at the same object/data address.
+    GXInitTexObj(&old, sTexels, 8, 8, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    check(!petari_gx_revalidate_texobj(&old), "reinitialized object starts without a cached upload");
+    DCStoreRange(sTexels, 64);
+    check(petari_gx_revalidate_texobj(&old), "reinitialized object tracks subsequent stores");
+    std::printf("texture churn: loads=%u entries=%zu bytes=%zu elapsed_ms=%.3f max_revalidate_us=%.3f\n",
+                loads, petari_gx_tex_store_entries(), petari_gx_tex_store_bytes(),
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), maxUs);
+}
+
 int main() {
     OSInit();
     PetariNative::setGameAllocationThread(true);
@@ -128,6 +178,7 @@ int main() {
     testGameThreadBookkeeping(pTiny);  // first: the maps are created under the tiny heap
     testStoreLog();
     testTextureRevalidation();
+    testBoundedChurn();
     check(pTiny->getTotalFreeSize() == tinyFree, "no test allocated from the current JKR heap");
     PetariNative::setAllocationSiteCheck(true);
     if (sFailures != 0) {

@@ -109,7 +109,8 @@ def main():
     if log.exists():
         parser.error('session log already exists; choose the next session number')
     env = {k: v for k, v in os.environ.items() if not k.startswith('PETARI_SMOKE')}
-    env.update(PETARI_TRACE_BOOT='1', PETARI_AUDIO_DIAG='1', PETARI_BATON_DIAG='1',
+    # CU sessions drive the real keyboard/mouse, so opt out of the fixture's background isolation.
+    env.update(PETARI_SMOKE_BACKGROUND='0', PETARI_TRACE_BOOT='1',PETARI_AUDIO_DIAG='1', PETARI_BATON_DIAG='1',
                PETARI_BATON_SAMPLE='0', PETARI_PIPELINE_GLOBAL_PRECOMPILE='0', PETARI_FRAME_CSV=str(prefix.with_suffix('.csv')))
     binary = args.app.resolve() / 'Contents/MacOS/Petari'
     command = [str(binary), '--disc', str(ROOT / 'build/game-data/RMGE01'),

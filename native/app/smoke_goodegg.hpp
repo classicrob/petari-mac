@@ -131,7 +131,7 @@ private:
     void resetStuck();
     bool seen(const char* milestone) const;
     // Boulders (rolling along the Peanut's rails): predicts them and Mario's
-    // candidate moves 45 frames ahead; when heading for the goal would pass
+    // short candidate moves and braking 90 frames ahead; when the goal path passes
     // within 500 of one, steers the safe move nearest the goal's direction
     // (or waits, or keeps farthest away); true while doing so.
     bool dodgeRocks(const Observation& observation, Step& step);
@@ -162,6 +162,7 @@ private:
     size_t mWaypoint = 0;
     bool mWaypointChosen = false;
     unsigned long mLastSpin = 0;
+    unsigned long mLastHammerSpin = 0;
     unsigned long mLastA = 0;
     unsigned long mTalkFrames = 0;     // frames with a talk shown (since asking the Luma)
     bool mLumaAsked = false;           // A pressed next to the Disk Garden Luma

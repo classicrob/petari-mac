@@ -64,6 +64,37 @@ PetariTexStoreSeen& petariTexStoreSlot(u32 id) {
   if (slot.id == 0) ++sPetariTexStoreEntries;
   return slot;
 }
+// Opt-in call timing complements the sampling spike profiler: it records the
+// worst full GXLoadTexObj call, including FIFO writes, not just revalidation.
+struct PetariTexLoadProfile {
+  std::uint64_t loads = 0;
+  double maxUs = 0;
+  void report() const {
+    if (loads) std::fprintf(stderr, "[gx texture loads] calls=%llu max_us=%.3f store_entries=%zu store_bytes=%zu\\n",
+                            static_cast<unsigned long long>(loads), maxUs, sPetariTexStoreEntries,
+                            sizeof(sPetariTexStoreSeen));
+  }
+};
+PetariTexLoadProfile sPetariTexLoadProfile;
+struct PetariTexLoadTimer {
+  bool enabled;
+  std::chrono::steady_clock::time_point start;
+  PetariTexLoadTimer() {
+    static const bool profile = std::getenv("PETARI_SPIKE_PROFILE") != nullptr;
+    enabled = profile;
+    if (enabled) start = std::chrono::steady_clock::now();
+  }
+  ~PetariTexLoadTimer() {
+    if (!enabled) return;
+    const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
+    ++sPetariTexLoadProfile.loads;
+    const bool newMaximum = us > sPetariTexLoadProfile.maxUs;
+    sPetariTexLoadProfile.maxUs = std::max(sPetariTexLoadProfile.maxUs, us);
+    // Normal game shutdown uses _Exit, so stream every new maximum and periodic
+    // occupancy checkpoints rather than relying on a static destructor.
+    if (newMaximum || (sPetariTexLoadProfile.loads & 0x3FFF) == 0) sPetariTexLoadProfile.report();
+  }
+};
 }  // namespace
 
 extern "C" void petari_gx_track_new_texobj(u32 id) {
@@ -111,11 +142,13 @@ extern "C" bool petari_gx_revalidate_texobj(GXTexObj* obj_) {
 }
 
 void GXLoadTexObj(GXTexObj* obj_, GXTexMapID id) {
+  PetariNative::HostAllocationScope petariHostAllocations;
+  PetariTexLoadTimer petariTextureLoadTimer;
   petari_gx_revalidate_texobj(obj_);
 ''')
 if '#include <petari/host_allocation.hpp>' not in text:
     text = '#include <petari/host_allocation.hpp>\n' + text
-text = '#include <cstddef>\n#include <cstdint>\nextern \"C\" void petari_gx_track_new_texobj(unsigned int);\n' + text
+text = '#include <chrono>\n#include <cstdlib>\n#include <cstddef>\n#include <cstdint>\nextern \"C\" void petari_gx_track_new_texobj(unsigned int);\n' + text
 old = '  obj.texObjId = next_tex_obj_id();\n'
 if text.count(old) != 1:
     raise SystemExit('Aurora texture initialization patch anchor mismatch')

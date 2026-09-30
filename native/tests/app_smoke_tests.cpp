@@ -2151,6 +2151,14 @@ void testGoodEggObjectives() {
     away.frames(start, 3);
     away.frames(rolling(start, -9310, -15930, -2620, -2.5f, -6.9f, -6.8f), 2);
     check(!away.logged("stepping around") && !away.logged("waiting for a boulder"), "a boulder rolling away is ignored");
+    // A crossing outside the old 45-frame lookahead must trigger braking
+    // before Mario runs into the rock's path at full speed.
+    EggRun early;
+    toGoodEgg(early);
+    early.frames(start, 3);
+    early.frames(rolling(start, -9682, -15504, -3481, 4.0f, 0.0f, 9.2f), 2);
+    check(early.logged("stepping around a boulder") || early.logged("waiting for a boulder to pass"),
+          "a distant oncoming boulder is considered before entering its crossing");
     // Five chips got: the launch star they form, which floats above the ground.
     EggRun star;
     toGoodEgg(star);
@@ -2174,6 +2182,23 @@ void testGoodEggObjectives() {
     hammer.frames(down, 2);
     check(hammer.count(Button::Spin, true) == 1 && hammer.logged("jump onto the Hammer Head"),
           "Hammer Head's head down: spin and jump onto it");
+    EggRun recentSpin;
+    toGoodEgg(recentSpin);
+    recentSpin.frames(actor(egg(-18240, -10822, -10449), "Karipon", -18230, -10822, -10449, 0,
+                           Smoke::kActorHostile), 2);
+    recentSpin.frames(egg(-18240, -10822, -10449), 31);
+    const int beforeHead = recentSpin.count(Button::Spin, true);
+    recentSpin.frames(down, 2);
+    check(recentSpin.count(Button::Spin, true) == beforeHead + 1,
+          "a previous Karipon spin does not suppress the Hammer Head stun beyond normal spin cooldown");
+
+    Observation jumping = actor(egg(-18173, -10520, -10420), "HammerHead", -18140, -10800, -10420, 0,
+                               Smoke::kActorReady | Smoke::kActorHostile);
+    jumping.playerOnGround = false;
+    hammer.frame(jumping);
+    jumping.playerX += 13.0f;
+    hammer.frame(jumping);
+    check(hammer.held(Button::StickLeft), "jump approaching the head brakes horizontal momentum before overshooting");
     // Up again (not READY): stand off near its base, no jumping at it.
     Observation up = actor(egg(-18240, -10822, -10449), "HammerHead", -17716, -10500, -9460, 0, Smoke::kActorHostile);
     const int jumps = hammer.count(Button::A, true);

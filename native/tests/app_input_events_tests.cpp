@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "../app/host.hpp"
+#include "../app/smoke_background.hpp"
 #include "petari/input.hpp"
 
 namespace Input = PetariNative::Input;
@@ -150,6 +151,34 @@ int main() {
     bindings.bind(Input::Action::A, Input::Binding::key(Input::Key::Space));
     bindings.bind(Input::Action::B, Input::Binding::mouse(Input::MouseButton::Left));
     Input::setBindings(bindings);
+
+    namespace Background = PetariNative::App::SmokeBackground;
+    check(!Background::requested(nullptr, false, nullptr), "normal launch stays interactive");
+    check(Background::requested("stage", false, nullptr), "smoke defaults to background");
+    check(Background::requested(nullptr, true, nullptr), "fixture defaults to background");
+    check(!Background::requested("stage", true, "0"), "explicit opt-out stays interactive");
+    Background::enabled = true;
+    for (SDL_Event event : {key(SDL_SCANCODE_W, true), mouseButton(SDL_BUTTON_LEFT, true),
+                           padButton(SDL_GAMEPAD_BUTTON_SOUTH, true), padAxis(SDL_GAMEPAD_AXIS_LEFTX, 32767),
+                           ofType(SDL_EVENT_MOUSE_MOTION), ofType(SDL_EVENT_FINGER_DOWN)}) {
+        check(!Background::eventFilter(nullptr, &event), "hardware event filtered before Aurora");
+        Events::input(event);
+    }
+    Events::input(ofType(SDL_EVENT_WINDOW_FOCUS_LOST));
+    check(gDelivered.empty(), "background hardware/focus events cannot change driver input");
+    check(Events::physicalInputs().gameplay == 0 && Events::physicalInputs().pointer == 0 &&
+          Events::physicalInputs().focus == 0, "isolated run still has zero assistance counters");
+    Events::assertFocus();
+    Events::pressButton(0, true);
+    Events::pressButton(0, false);
+    Events::movePointer(20, 30);
+    check(gDelivered.size() == 4, "driver controls still delivered in background mode");
+    SDL_Event quit = ofType(SDL_EVENT_QUIT);
+    SDL_Event audio = ofType(SDL_EVENT_AUDIO_DEVICE_ADDED);
+    check(Background::eventFilter(nullptr, &quit) && Background::eventFilter(nullptr, &audio),
+          "quit and audio device lifecycle events remain observable");
+    gDelivered.clear();
+    Background::enabled = false;
 
     Smoke::PhysicalInputs now = Events::physicalInputs();
     check(now.gameplay == 0 && now.pointer == 0 && now.focus == 0 && last().empty(), "nothing counted at start");

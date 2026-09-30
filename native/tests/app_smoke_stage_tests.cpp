@@ -246,6 +246,31 @@ int main() {
         expect(driver.result() == Result::Pass, "a warped run passes: " + driver.reason());
         expect(world.warps == 1, "the warp is requested exactly once: " + std::to_string(world.warps));
     }
+    {
+        MechanicRun bee(*findMechanic("bee"));
+        Observation o;
+        o.playerValid = true;
+        o.playerMode = 0;
+        o.gravityY = -1;
+        o.camXx = 1;
+        o.camZz = 1;
+        o.playerX = -15750;
+        o.playerY = 12350;
+        o.playerZ = -1000;
+        bool spun = false;
+        for (unsigned long frame = 1; frame <= 60; ++frame) {
+            Step step;
+            expect(bee.step(o, frame, step) == Result::Running, "proximity alone cannot pass bee mechanics");
+            for (const auto& press : step.presses) if (press.button == Button::Spin && press.down) spun = true;
+        }
+        expect(spun, "bee route spins to break the mushroom crystal");
+        o.demoActive = true;
+        Step demo;
+        bee.step(o, 61, demo);
+        bool released = false;
+        for (const auto& press : demo.presses) if (press.button == Button::Spin && !press.down) released = true;
+        expect(released, "a power-up demo releases the spin pulse");
+    }
     if (gFailures == 0) std::puts("app smoke stage tests passed");
     return gFailures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

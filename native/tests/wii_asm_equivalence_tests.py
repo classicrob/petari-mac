@@ -68,6 +68,36 @@ def wii(name, x):
     """Run the Wii asm for `name` on inputs `x`; return the outputs in the harness layout."""
     c = Case()
     m, mem = c.m, c.mem
+    if name.startswith("JGeometry::subInternal"):
+        a, b, d = c.floats(x[:3]), c.floats(x[3:6]), c.floats([0.0] * 3)
+        dst = a if name.endswith("_a") else b if name.endswith("_b") else d
+        c.ptr("vec1", a), c.ptr("vec2", b), c.ptr("dst", dst)
+        c.run(TVEC, "inline static void subInternal(register")
+        return mem.f32s(dst, 3)
+    if name.startswith("SDK::PSMTXMultVec"):
+        matrix, src, dst = c.floats(x[:12]), c.floats(x[12:15]), c.floats([0.0] * 3)
+        if name.endswith("_inplace"):
+            dst = src
+        c.ptr("m", matrix), c.ptr("src", src), c.ptr("dst", dst)
+        func = "PSMTXMultVecSR" if "SR" in name else "PSMTXMultVec"
+        c.run(ROOT / "src/RVL_SDK/mtx/mtxvec.c", "asm void " + func + "\n")
+        return mem.f32s(dst, 3)
+    if name == "SDK::PSMTXQuat":
+        q, matrix = c.floats(x[:4]), c.floats([0.0] * 12)
+        c.ptr("q", q), c.ptr("m", matrix)
+        m.bind_f("c_one", 1.0)
+        c.run(ROOT / "src/RVL_SDK/mtx/mtx.c", "void PSMTXQuat (")
+        return mem.f32s(matrix, 12)
+    if name.startswith("SDK::PSQUATMultiply") or name == "SDK::PSQUATDotProduct":
+        a, b, dst = c.floats(x[:4]), c.floats(x[4:8]), c.floats([0.0] * 4)
+        if name.endswith("_a"):
+            dst = a
+        if name.endswith("_b"):
+            dst = b
+        c.ptr("p", a), c.ptr("q", b), c.ptr("pq", dst)
+        multiply = "Multiply" in name
+        c.run(ROOT / "src/RVL_SDK/mtx/quat.c", "void PSQUATMultiply" if multiply else "f32 PSQUATDotProduct(")
+        return mem.f32s(dst, 4) if multiply else [m.f("dp")[0]]
     if name == "J3DPSCalcInverseTranspose":
         src, dst = c.floats(x[:12]), c.floats(x[12:21])
         c.ptr("src", src, "r3"), c.ptr("dst", dst, "r4")
@@ -272,6 +302,14 @@ def cases(rng):
         keys = [t0, rng.randint(-20000, 20000), rng.randint(-300, 300), t1, rng.randint(-20000, 20000), rng.randint(-300, 300)]
         out.append(("J3DHermiteInterpolation_s16", [frame] + [float(k) for k in keys]))
         out.append(("J3DHermiteInterpolation_f32", [frame, float(t0), *rand(rng, 2, 3), float(t1), *rand(rng, 2, 3)]))
+    for _ in range(80):
+        for suffix in ("", "_a", "_b"):
+            out.append(("JGeometry::subInternal" + suffix, rand(rng, 6)))
+            out.append(("SDK::PSQUATMultiply" + suffix, rand(rng, 8, 1.0)))
+        for suffix in ("", "SR", "_inplace", "SR_inplace"):
+            out.append(("SDK::PSMTXMultVec" + suffix, rand(rng, 15, 1.0)))
+        out.append(("SDK::PSMTXQuat", rand(rng, 4, 1.0)))
+        out.append(("SDK::PSQUATDotProduct", rand(rng, 8, 1.0)))
     # Edges: zeros and -0, identity, a singular matrix (no write), large values.
     out.append(("J3DPSCalcInverseTranspose", identity + [7.0] * 9))
     out.append(("J3DPSCalcInverseTranspose", singular + [7.0] * 9))

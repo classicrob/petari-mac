@@ -37,7 +37,35 @@ static Vec vec(const f32* p) {
 // Each case receives its inputs and appends its outputs. Layouts match the Python side.
 static bool run(const std::string& rName, const Floats& in, Floats& out) {
     const f32* p = in.data();
-    if (rName == "J3DPSCalcInverseTranspose") {
+    if (rName.find("JGeometry::subInternal") == 0) {
+        f32 a[3], b[3], d[3];
+        std::memcpy(a, p, sizeof(a));
+        std::memcpy(b, p + 3, sizeof(b));
+        f32* dst = rName == "JGeometry::subInternal_a" ? a : rName == "JGeometry::subInternal_b" ? b : d;
+        JGeometry::subInternal(a, b, dst);
+        put(out, dst, 3);
+    } else if (rName.find("SDK::PSMTXMultVec") == 0) {
+        Mtx matrix;
+        std::memcpy(matrix, p, sizeof(matrix));
+        Vec v = vec(p + 12), d;
+        Vec* dst = rName.find("_inplace") != std::string::npos ? &v : &d;
+        if (rName.find("SR") != std::string::npos) PSMTXMultVecSR(matrix, &v, dst);
+        else PSMTXMultVec(matrix, &v, dst);
+        put(out, &dst->x, 3);
+    } else if (rName == "SDK::PSMTXQuat") {
+        Quaternion q{p[0], p[1], p[2], p[3]};
+        Mtx matrix;
+        PSMTXQuat(matrix, &q);
+        put(out, &matrix[0][0], 12);
+    } else if (rName.find("SDK::PSQUATMultiply") == 0) {
+        Quaternion a{p[0], p[1], p[2], p[3]}, b{p[4], p[5], p[6], p[7]}, d;
+        Quaternion* dst = rName == "SDK::PSQUATMultiply_a" ? &a : rName == "SDK::PSQUATMultiply_b" ? &b : &d;
+        PSQUATMultiply(&a, &b, dst);
+        put(out, &dst->x, 4);
+    } else if (rName == "SDK::PSQUATDotProduct") {
+        Quaternion a{p[0], p[1], p[2], p[3]}, b{p[4], p[5], p[6], p[7]};
+        out.push_back(PSQUATDotProduct(&a, &b));
+    } else if (rName == "J3DPSCalcInverseTranspose") {
         Mtx src;
         Mtx33 dst;
         std::memcpy(src, p, sizeof(src));

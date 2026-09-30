@@ -41,17 +41,45 @@ launch may prepare shaders for longer than your usual directory does. To start
 over, make the save again (see below). You can also copy the directory before
 playing and use the copy.
 
-To use it as your normal save instead, first back up your own save. Then copy the
-file over:
+To install one as your normal save, **quit Petari first**. Run these commands
+from this repository's root in Terminal. Choose the variant on the first line.
+These are instructions for you to run; the test tools never install a save into
+your normal directory.
 
 ```sh
-cp -R "$HOME/Library/Application Support/Petari/NAND" ~/Desktop/Petari-NAND-backup
-cp build/saves/all-missions/NAND/title/00010000/524d4745/data/GameData.bin \
+(
+set -e
+variant=all-missions
+save_relative=NAND/title/00010000/524d4745/data/GameData.bin
+petari_user="$HOME/Library/Application Support/Petari"
+petari_backup=$(mktemp -d "$HOME/Desktop/Petari-save-backup.XXXXXX")
+if [ -d "$petari_user/NAND" ]; then
+  ditto "$petari_user/NAND" "$petari_backup/NAND"
+fi
+mkdir -p "$petari_user/NAND/title/00010000/524d4745/data"
+cp "build/saves/$variant/$save_relative" "$petari_user/$save_relative"
+printf 'Keep this backup: %s\n' "$petari_backup"
+)
+```
+
+**This replaces the entire six-slot save container**, not just file 1. Settings
+and shader caches are retained. Each published variant changes file 1; the
+other five slots come from the test seed, not your existing save. Keep the printed
+backup directory. Launch Petari normally and select file 1.
+
+To restore your previous save, quit Petari, replace the example backup path
+below with the printed path, and copy back the original container:
+
+```sh
+cp "$HOME/Desktop/Petari-save-backup.EXAMPLE/NAND/title/00010000/524d4745/data/GameData.bin" \
    "$HOME/Library/Application Support/Petari/NAND/title/00010000/524d4745/data/GameData.bin"
 ```
 
-This replaces all six files in your normal save. To go back, copy the backup
-over it.
+For Luigi with every level already unlocked, use `grand-finale` and switch to
+Luigi on file 1's character selection. `complete-luigi` unlocks the character,
+but his separate adventure has no collected stars yet. Grand Finale is reached
+through its observatory NPC, rather than one of the six dome maps. Hungry Luma
+and other observatory destinations also use their own entrances.
 
 ## Making a save again
 
@@ -103,3 +131,30 @@ The save is made by the game's own code, not by editing bytes directly:
 `native/tests/unlocked_save_tests.py` (ctest `native_unlocked_save`) tests the
 format checker and the isolation rules. It also re-checks every published save
 against its manifest.
+
+## Verification and limits
+
+The three published saves pass the game's generation/read-back checks and the
+independent file-format/manifest regression. This establishes saved progression,
+not a completed playthrough or that every mission runs without bugs.
+
+Recovered live evidence: `build/unlocked-save/tour6/dome1/dome-tour.json` and
+`dome1.log` record a normal file load, observatory walk, Terrace map, all five
+Terrace galaxies at mission 1, and Good Egg missions 4, 5 and 6: **8/8 visits
+PASS**, exit 0, zero missing layout/sound references and no retained crash/hang
+reports. This used the frozen `Petari6.app`, not the latest renderer build.
+
+The later `build/unlocked-save/tour9/dome2/dome2.log` is a **failed** Fountain
+approach: the automated route got stuck over a lower floor before entering the
+dome. It proves no Fountain galaxy entry. The route planner's intervening-floor
+check is now corrected, but that correction requires a fresh live run. Other
+domes, Luigi selection, and Grand Finale access remain unverified through their
+normal UI until explicitly recorded here.
+
+The refreshed `resume-11/dome2` retry passed the old route dead-end but crashed
+inside the smoke observer at warp-pod entry (`getCurrentRushActor`, null sensor;
+exit -11). Ordinary warp status legitimately has no actor-bound rush sensor in
+the unchanged decompilation. The corrected observer and its 13 sanitizer-backed
+checks are documented in `build/unlocked-save/resume-12/OBSERVER-AUDIT.md`.
+`resume-12/tests.log` records 7/7 targeted CTests passing. These tests do not
+replace the pending live retry through that pod and the Fountain map.

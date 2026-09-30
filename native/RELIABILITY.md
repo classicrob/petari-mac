@@ -341,3 +341,39 @@ and later missions not yet completed end to end; controller hardware untested.
 Known open: Good Egg driver deaths on Peanut/Fruit Peel boulders (runs 23-24;
 driver, not game); texture store-seen map grows to ~80 MB with an O(n) sweep
 on the game thread (fix in progress); StarBall tilt sign under investigation.
+
+## Texture store map — 2026-09-30
+
+- Replaced the ten-minute, fresh-ID store-history map and its full scan with a
+  fixed 65,536-slot / 1 MiB table. First loads retain their clean baseline;
+  evicted identities conservatively recheck stored pages. The 1.5M-ID churn,
+  shared-data, eviction and tiny-game-heap regression passes; GX ABI and RFL
+  render also pass (3/3, `build/texture-map/confirm1/ctest.log`).
+- Six isolated live profiles pass. SnowCapsule and the observatory/Good-Egg
+  before/after pairs have identical uploads (143 and 406 per run respectively)
+  and zero stable-object reuploads. Galaxy-map p99: 18.106 -> 18.131 ms;
+  47 uploads each. Confirmation worst measured GXLoadTexObj: 588.667 ->
+  169.458 us; final logged history checkpoints: 120,153 -> 65,536 entries.
+- Aurora's separate object-cache sweep is unchanged. Runtime confirms it runs
+  on main, after CPU-baton release. Confirmation CPU p99: 179.583 / 170.417 us;
+  maxima: 256.542 / 366.708 us. The lead accepts this cost within the frame
+  budget; no LRU/lifetime rewrite was made. Larger wall-time outliers include
+  scheduling time. This is measured-route evidence, not whole-game/long-soak or
+  visual-effect equivalence. Full evidence: `build/texture-map/REPORT.md`,
+  `windows.json`, and `confirm1/diagnostics.json`.
+
+## 2026-09-30 midday checkpoint
+
+- Build + ctest: 99/99 pass (build/lead-checkpoint-0930b.log).
+- Cosmic Mario race crash fix (64 post-matrix rows) verified live: OceanRing,
+  IceVolcano, HoneyBee and ReverseKingdom s4 races reach racing with no crash or
+  renderer error (the idle driver loses, so runs end DIED, not PASS).
+- Priority-aware preemption (0.5 ms, v2 with host-poll debounce) accepted:
+  four-busy-process handoffs p90 ≤0.85 ms (10/10), 2,000 handoffs at 553/s with
+  monitor cost 1.2% of one core; HeavensDoor 6-run interleaved noise check p99
+  ranges overlap (4 ms 18.04-19.02, 0.5 ms 18.47-18.94 ms); zero audio faults in
+  all quiet runs (build/gx-hang-priority/REPORT.md). Loaded-audio A/B pending.
+- Smoke/fixture launches run in the background: no focus, host input ignored,
+  System Events saw the user's app frontmost in 175/175 samples.
+- Dome-tour observer crash (getCurrentRushActor during a warp) fixed in the
+  harness; warp without a rush sensor is original game behaviour.

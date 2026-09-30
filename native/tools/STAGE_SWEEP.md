@@ -26,7 +26,7 @@ reaches the stage, or completing the mission.
   Requires `--test-fixture stage`. Tests: `native_app_smoke_stage`.
 - `native/tools/stage_sweep.py`: enumerates stages and scenarios from the disc
   (scenariodata.bcsv; domes from AstroDome placement layers A–F and the hidden
-  galaxies' `Appear<Galaxy>` flags), runs each through the sweep app lane `build/locked-sweep-lane.sh` (`--lock-script`)
+  galaxies' `Appear<Galaxy>` flags), runs each through the single-app lock `build/locked-app.sh` (`--lock-script`)
   with a per-run in-lock alarm, and classifies the log and exit status.
 
 ## Running
@@ -44,7 +44,7 @@ mix binaries into one sweep; `--refreeze-app` takes a new copy. Every run
 starts from a fresh fixture user directory (NAND copied from `--source`) plus a
 one-time SQLite snapshot of `--pipeline-cache-from`'s pipeline/Dawn caches
 (`--cold` for none), so first-use shader counts are comparable across runs.
-`PETARI_PIPELINE_SEED_DIR` is `build/pipeline-seeds` when present.
+Bundled seeds come from the frozen app. `--seed-dir` snapshots an explicit alternative.
 
 Output: `build/stage-sweep/<name>/runs/<Stage>-s<n>/{app.log,frames.csv,
 result.json,command.txt,user/Crashes}`, and `results.json`, `results.csv`,
@@ -72,3 +72,71 @@ Per run the summary also reports load-to-ready seconds, gameplay frame times
 configs attributed to the stage (and how many the seed manifest did not
 cover), blocking pipeline resolves (count and worst ms), and heap headroom
 after the stage's scene initialization (`[heap]` reports).
+
+## Placement warps and race probes
+
+`--env PETARI_STAGE_WARP=x,y,z` requests one synthetic warp after readiness.
+The native hook also accepts `name:<GeneralPos>` for a loaded named position.
+These runs do not validate walking to the destination.
+
+`--warp-placement 'NAME[:FIELD=integer][@index]'` resolves the position from
+placement or GeneralPos data in the root zone, filtering layers by the selected scenario.
+For GeneralPos, the selector may be its PosName (for example `ゴーストデモマリオ位置`).
+It rejects missing or ambiguous matches unless a zero-based index is given.
+It records the archive, table path, row, scenario mask and coordinates in
+`runs/<stage>-s<n>/warp-placement.json`. Subzone transforms are not supported;
+subzone-local coordinates are never silently used as world coordinates.
+Explicit warp/environment runs cannot reuse an ordinary baseline result.
+
+Cosmic Mario appears when a SwitchCube sets the GhostPlayer's SW_APPEAR.
+The active trigger selectors for scenario 4 are listed below. Honeyhive and
+Gold Leaf additionally require Mario to be grounded (Obj_arg2=0), so an area
+origin alone does not provide a safe grounded spawn. The Honeyhive origin
+probe fell below terrain and died before triggering the race. `ゴーストデモマリオ位置` resolves the authored
+Mario demo position in all three stages; this is also a candidate warp target.
+Honeyhive, Freezeflame and Gold Leaf race activation was observed in the rows-v1/v2
+probes (full 663-frame intro followed by control release). All idle race probes
+ended DIED and are excluded from PASS-only cache merging. Each new run must still establish its own activation evidence.
+
+
+| Stage | Selector |
+| --- | --- |
+| HoneyBeeKingdomGalaxy | `SwitchCube:SW_A=12@0` |
+| IceVolcanoGalaxy | `SwitchCube:SW_A=4@0` |
+| ReverseKingdomGalaxy | `SwitchCube:SW_A=7@0` |
+
+Example (synthetic race-trigger entry, live verification required):
+
+```sh
+python3 native/tools/stage_sweep.py run --stages HoneyBeeKingdomGalaxy --scenarios 4 --name honey-race --warp-placement 'ゴーストデモマリオ位置' --idle-frames 3600 --env PETARI_STAGE_PROBE=1
+```
+
+A stage PASS before the race starts is not race coverage. A DIED result after
+losing a race remains DIED, even if it demonstrates survival beyond an earlier
+renderer crash. Record actual race start/end evidence and elapsed duration.
+Every sweep enables `PETARI_AUDIO_DIAG=1`; summaries retain underrun frames,
+replayed blocks and DSP holds, with AUDIO-CHOPPY above one hold per second.
+
+## Background automation
+
+Smoke scripts and explicit test fixtures default to `PETARI_SMOKE_BACKGROUND=1`.
+The app requests no activation, uses an accessory application with a nonfocusable background window, ignores
+physical keyboard/mouse/controller/touch input before Aurora sees it, and keeps
+driver input logically focused. VI and audio continue normally; startup pacing
+uses the precise delay even without focus. The ASSISTED check remains unchanged.
+Frame CSV still records actual lack of window focus; it is not forged as focused.
+`result.json` records `background_smoke` from the app's startup marker. Background
+performance still requires absence of competing apps/builds and live validation.
+
+Set `PETARI_SMOKE_BACKGROUND=0` explicitly for human-controlled fixture playtests
+or visible foreground diagnostics; physical input and ASSISTED detection then
+behave as before. An ordinary non-fixture, non-smoke launch stays interactive.
+
+Background validation: `build/stage-sweep/background-live-v3` passed EggStar s1
+with all 1,457 measured frames unfocused, 0 physical assistance and fault-free
+audio. The external System Events monitor never reported Petari frontmost.
+LaunchServices (and a fresh NSWorkspace query) can nevertheless report Petari as
+frontmost while System Events reports the user's app; this is a known observer
+discrepancy. Use System Events together with actual window-focus and input
+telemetry for this check, not LaunchServices alone. The extra monitor makes this
+run instrumentation evidence rather than a timing baseline.

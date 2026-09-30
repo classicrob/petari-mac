@@ -102,6 +102,8 @@ void MechanicRun::hold(bool upKey, bool downKey, bool leftKey, bool rightKey, bo
 
 void MechanicRun::releaseAll(Step& step) {
     hold(false, false, false, false, false, step);
+    if (mSpinHeld) step.presses.push_back({Button::Spin, false});
+    mSpinHeld = false;
 }
 
 void MechanicRun::tapA(Step& step) {
@@ -168,6 +170,10 @@ void MechanicRun::next(int stage) {
 Result MechanicRun::step(const Observation& o, unsigned long frame, Step& step) {
     mFrame = frame;
     ++mStageFrames;
+    if (mSpinHeld) {
+        step.presses.push_back({Button::Spin, false});
+        mSpinHeld = false;
+    }
     if (mHeld[4] && mReleaseA != 0 && mFrame >= mReleaseA) {
         step.presses.push_back({Button::A, false});
         mHeld[4] = false;
@@ -272,6 +278,12 @@ Result MechanicRun::starBall(const Observation& o, Step& step) {
             mAxis = scale(flat(o, mAxis), 1.0f);
         }
         hold(tilt.up, tilt.down, tilt.left, tilt.right, false, step);
+        if (mStageFrames % 5 == 0) {
+            const auto* input = nearestActor(o, "StarBallInput", ballPos);
+            if (input) note(std::string("ball diagnostic ") + tilt.name + " frame " + std::to_string(mStageFrames) +
+                " pos " + text(ballPos) + " accel% " + text(scale({input->dx, input->dy, input->dz}, 100)) +
+                " grounded " + std::to_string(input->state));
+        }
         mMark2 = ballPos;
         if (mStageFrames >= settle + 25) {
             hold(false, false, false, false, false, step);
@@ -307,6 +319,14 @@ Result MechanicRun::bee(const Observation& o, Step& step) {
         }
         const float d = approach(o, kBeeMushroom, step);
         if (mStageFrames == 1) note("to the Bee Mushroom at " + text(kBeeMushroom) + ", " + number(d) + " away");
+        // This placement is inside a crystal (Obj_arg3 == -1). Break it with
+        // the normal spin input before expecting the mushroom to be collectible.
+        if (d < 250.0f && mStageFrames % 60 == 0) {
+            step.presses.push_back({Button::Spin, true});
+            mSpinHeld = true;
+            step.assertFocus = true;
+        }
+        if (mStageFrames % 120 == 0) note("mushroom approach: Mario at " + text(pos) + ", distance " + number(d));
         if (mStageFrames > kApproachLimit) {
             return fail("no Bee Mario: " + number(d) + " from the mushroom after " + std::to_string(kApproachLimit) + " frames (mode " + std::to_string(o.playerMode) + ")");
         }

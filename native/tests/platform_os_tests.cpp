@@ -1229,14 +1229,19 @@ void testPriorityHandoffLatency() {
         for (int i = 0; i < kHandoffs; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(3));  // the game thread runs meanwhile
             gHandoffSentNs.store(steadyNs());
-            OSSendMessage(&gDspQueue, nullptr, OS_MESSAGE_NOBLOCK);
+            check(OSSendMessage(&gDspQueue, nullptr, OS_MESSAGE_NOBLOCK), "DSP message enqueued");
             for (int w = 0; w < 3000 && gHandoffsReceived.load() <= i; ++w) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
+            check(gHandoffsReceived.load() > i, "DSP handoff did not hang");
         }
     });
     dsp.join();
     const bool all = gHandoffsReceived.load() == kHandoffs;
+    // The monitor publishes its diagnostic after giving the audio thread the
+    // baton; synchronize that publication before checking the exact count.
+    check(waitReleased([&] { return OSI::batonBlockStats().forcedPreemptions >= before.forcedPreemptions + kHandoffs; }, 3000),
+          "the monitor recorded all handoffs");
     gCollisionDone = true;
     petari_os_end_host_blocking();
     OSJoinThread(&audio, nullptr);
@@ -1252,11 +1257,63 @@ void testPriorityHandoffLatency() {
     check(after.forcedPreemptions == before.forcedPreemptions + kHandoffs, "each handoff was a forced preemption (no OS calls)");
     // 8 handoffs per 17.5 ms DSP block need well under 2 ms each (was over 4 ms).
     check(median <= 1.5, "a higher-priority thread made ready by an interrupt runs within 1.5 ms (median)");
+    check(p90 <= 1.5, "a higher-priority thread made ready by an interrupt runs within 1.5 ms (90th percentile)");
 }
 
-int main() {
+void* GameStylePeerThread(void*) {
+    OSMessage msg;
+    OSReceiveMessage(&gDspQueue, &msg, OS_MESSAGE_BLOCK);
+    gHandoffsReceived.fetch_add(1);
+    return nullptr;
+}
+
+void testNoPeerPreemption() {
+    namespace OSI = PetariNative::Platform::OS;
+    for (int priority : {16, 17}) {
+        gCollisionDone = false;
+        gCollisionSpinning = false;
+        gHandoffsReceived = 0;
+        OSInitMessageQueue(&gDspQueue, &gDspSlot, 1);
+        static OSThread peer, game;
+        alignas(32) static u8 peerStack[0x4000], gameStack[0x4000];
+        OSCreateThread(&peer, GameStylePeerThread, nullptr, peerStack + sizeof(peerStack), sizeof(peerStack), priority, 0);
+        OSResumeThread(&peer);
+        // Let the peer block before starting the busy holder, irrespective of
+        // the default thread's priority.
+        petari_os_begin_host_blocking();
+        check(waitReleased([&] {
+            const BOOL enabled = OSDisableInterrupts();
+            const bool waiting = peer.state == OS_THREAD_STATE_WAITING;
+            OSRestoreInterrupts(enabled);
+            return waiting;
+        }, 3000), "peer is waiting for its message");
+        petari_os_end_host_blocking();
+        OSCreateThread(&game, GameStyleCollisionCheck, nullptr, gameStack + sizeof(gameStack), sizeof(gameStack), 16, 0);
+        OSResumeThread(&game);
+        petari_os_begin_host_blocking();
+        check(waitReleased([] { return gCollisionSpinning.load(); }, 3000), "busy holder is running for peer test");
+        const auto before = OSI::batonBlockStats();
+        OSSendMessage(&gDspQueue, nullptr, OS_MESSAGE_NOBLOCK);
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        check(gHandoffsReceived == 0, "equal/lower-priority waiter does not preempt a busy holder");
+        check(OSI::batonBlockStats().forcedPreemptions == before.forcedPreemptions, "no forced preemption for peer waiter");
+        gCollisionDone = true;
+        petari_os_end_host_blocking();
+        OSJoinThread(&game, nullptr);
+        OSJoinThread(&peer, nullptr);
+        check(gHandoffsReceived == 1, "peer runs after the busy holder exits");
+    }
+}
+
+int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     __OSThreadInit();
+    if (argc == 2 && std::strcmp(argv[1], "--priority-handoff-only") == 0) {
+        testPriorityHandoffLatency();
+        testNoPeerPreemption();
+        OSReport("priority handoff tests passed (%d checks)\n", checks);
+        return 0;
+    }
     testInterrupts();
     testMisuse();
     testPriorityPreemption();
@@ -1275,6 +1332,7 @@ int main() {
     testMonitorForkSafety();
     testForcedPreemption();
     testPriorityHandoffLatency();
+    testNoPeerPreemption();
     testDispatchBeforeWake();
     testHolderQosOverride();
     OSReport("platform OS tests passed (%d checks)\n", checks);

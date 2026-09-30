@@ -1,6 +1,7 @@
 // Exercise the real startup loop without a window, GPU, game, or elapsed waits.
 #include <petari/pipeline_startup.hpp>
 #include <petari/input.hpp>
+#include "../app/smoke_background.hpp"
 #include <aurora/aurora.h>
 #include <aurora/event.h>
 #include <SDL3/SDL_timer.h>
@@ -107,6 +108,14 @@ int main() try {
     check(!PetariNative::App::preparePipelines(window) && finished == 1, "quit was ignored during preparation");
     reset(0); failCompile = true;
     check(!PetariNative::App::preparePipelines(window), "failed shader preparation claimed success");
+    reset(5000000000);
+    PetariNative::App::SmokeBackground::enabled = true;
+    focused = false;
+    inputEvent.type = SDL_EVENT_KEY_DOWN;
+    inputEvent.key.scancode = SDL_SCANCODE_RETURN;
+    check(PetariNative::App::preparePipelines(window) && !pendingAtReturn && gotFocus && preciseDelays > 0,
+          "background prep must ignore hardware skip, retain driver focus, and precisely pace unfocused frames");
+    PetariNative::App::SmokeBackground::enabled = false;
     std::puts("Startup preparation: warm invisibility, 60 Hz/event pumping, skip, focus, resize, fallback and failure pass");
 } catch (const std::exception& error) {
     std::fprintf(stderr, "FAIL: %s\n", error.what());

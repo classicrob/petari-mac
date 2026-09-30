@@ -1,5 +1,10 @@
 #include "Game/MapObj/AstroDomeBlueStar.hpp"
 #include "Game/Util/NativeUiObserve.hpp"
+#ifdef PETARI_NATIVE
+#include <petari/host_allocation.hpp>
+#include <cstdio>
+#include <cstdlib>
+#endif
 #include "Game/LiveActor/HitSensor.hpp"
 #include "Game/LiveActor/Nerve.hpp"
 #include "Game/Map/SphereSelector.hpp"
@@ -176,6 +181,18 @@ void AstroDomeBlueStar::forceKill() {
 
 void AstroDomeBlueStar::control() {
 #ifdef PETARI_NATIVE
+    if (petari_ui_observing() && std::getenv("PETARI_DOME_DIAG")) {
+        PetariNative::HostAllocationScope host;
+        static unsigned traceFrame = 0;
+        if (++traceFrame % 120 == 0) {
+            TVec2f screen;
+            const bool visible = MR::calcScreenPosition(&screen, mPosition);
+            std::fprintf(stderr, "[dome-star] valid=%d appear=%d bind=%d demo=%d visible=%d screen=%.1f,%.1f pos=%.1f,%.1f,%.1f\n",
+                         isValidBindStart(), isNerve(GET_NERVE(AstroDomeBlueStar, AstroDomeBlueStarNrvAppear)),
+                         isActiveBind(), MR::isDemoActive(), visible, screen.x, screen.y,
+                         mPosition.x, mPosition.y, mPosition.z);
+        }
+    }
     if (petari_ui_observing() && isValidBindStart()) {
         TVec2f screen;
         if (MR::calcScreenPosition(&screen, mPosition)) {

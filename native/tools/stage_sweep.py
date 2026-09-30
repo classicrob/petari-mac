@@ -106,6 +106,53 @@ def archive_tree(data):
     yield from walk(0, "")
 
 
+def resolve_placement(files, stage, scenario, selector):
+    """Resolve a root-zone placement in the selected scenario, never a disabled layer.
+
+    selector: object name, optionally :FIELD=integer and @zero-based-match-index.
+    Subzone coordinates are deliberately not treated as world coordinates.
+    """
+    match = re.fullmatch(r"([^:@]+)(?::([A-Za-z_0-9]+)=(-?\d+))?(?:@(\d+))?", selector)
+    if not match:
+        raise ValueError("placement must be NAME[:FIELD=integer][@index]")
+    name, field, value, index = match.groups()
+    scenario_file = files / "StageData" / stage / f"{stage}Scenario.arc"
+    mask = None
+    for path, data in archive_tree(scenario_file.read_bytes()):
+        if path.endswith("/scenariodata.bcsv"):
+            for row in bcsv_rows(data):
+                if row.get("ScenarioNo") == scenario:
+                    mask = row.get(field_hash(stage))
+    if mask is None:
+        raise ValueError(f"no root-zone layer mask for {stage} scenario {scenario}")
+    candidates = []
+    archive = files / "StageData" / f"{stage}.arc"
+    for path, data in archive_tree(archive.read_bytes()):
+        layer = re.search(r"/(?:placement|generalpos)/(common|layer[a-z])/", path)
+        if not layer:
+            continue
+        if layer[1] != "common" and not mask & (1 << (ord(layer[1][-1]) - ord("a"))):
+            continue
+        for row_number, row in enumerate(bcsv_rows(data)):
+            if row.get(field_hash("name")) != name and row.get(field_hash("PosName")) != name:
+                continue
+            if field and row.get(field_hash(field)) != int(value):
+                continue
+            xyz = [row.get(field_hash("pos_" + axis)) for axis in "xyz"]
+            if any(v is None for v in xyz):
+                raise ValueError(f"placement lacks coordinates: {path} row {row_number}")
+            candidates.append({"archive": str(archive), "path": path, "row": row_number,
+                               "position": xyz, "selector": selector, "layer_mask": mask})
+    if not candidates:
+        raise ValueError(f"{selector}: no active root-zone matches")
+    if index is None and len(candidates) != 1:
+        raise ValueError(f"{selector}: {len(candidates)} active root-zone matches; specify @index for multiple matches")
+    chosen = int(index or 0)
+    if chosen >= len(candidates):
+        raise ValueError(f"{selector}: index {chosen} outside {len(candidates)} active root-zone matches")
+    return candidates[chosen]
+
+
 def dome_map(files):
     domes = {}
     dome_arc = files / "StageData/AstroDome.arc"
@@ -282,7 +329,8 @@ def normalize(text):
 def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
     text = log_path.read_text(errors="replace") if log_path.is_file() else ""
     lines = text.splitlines()
-    result = {"exit_status": exit_status, "timed_out": timed_out}
+    result = {"exit_status": exit_status, "timed_out": timed_out,
+              "background_smoke": "PETARI SMOKE BACKGROUND: enabled;" in text}
 
     match = re.findall(r"PETARI SMOKE RESULT: (\w+) \((.*)\); pressing the power button", text)
     result["smoke_result"], result["smoke_reason"] = match[-1] if match else (None, None)
@@ -510,8 +558,11 @@ class ConcurrencyWatcher:
                 listing = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10).stdout
             except (OSError, subprocess.SubprocessError):
                 continue
-            apps = [line.strip() for line in listing.splitlines() if "Petari.app/Contents/MacOS/Petari" in line
-                    and "locked-" not in line and "perl" not in line.split(None, 2)[1]]
+            # Match the executable, not an --app argument in a queued Python runner
+            # or a shell command. Those are waiters, not concurrently running games.
+            apps = [line.strip() for line in listing.splitlines()
+                    if len(line.split(None, 2)) >= 2
+                    and line.split(None, 2)[1].endswith("Petari.app/Contents/MacOS/Petari")]
             own = [a for a in apps if self.user in a]
             if not own:
                 continue  # waiting for the lock, or already exited: not the measured window
@@ -540,7 +591,7 @@ def run_one(args, out, baseline, fixture, stage, scenario):
     if (run_dir / "result.json").is_file() and not args.rerun:
         print(f"[skip] {name}: result exists (use --rerun)")
         return json.loads((run_dir / "result.json").read_text())
-    for other in args.reuse_from:
+    for other in ([] if args.env or args.warp_placement else args.reuse_from):
         # The same run, finished by another sweep on the identical app binary
         # and without extra environment: copy it in (log, frames, result,
         # pipeline DB, crash reports) instead of running it again.
@@ -570,6 +621,13 @@ def run_one(args, out, baseline, fixture, stage, scenario):
     env_extra["PETARI_FRAME_CSV"] = str(run_dir / "frames.csv")
     extra = dict(item.split("=", 1) for item in args.env)
     env_extra.update(extra)
+    if args.warp_placement:
+        if "PETARI_STAGE_WARP" in env_extra or "PETARI_STAGE_WARP" in os.environ:
+            raise SystemExit("stage_sweep: do not combine --warp-placement with PETARI_STAGE_WARP")
+        placement = resolve_placement(args.disc / "files", stage["stage"], scenario["scenario"], args.warp_placement)
+        env_extra["PETARI_STAGE_WARP"] = ",".join(str(v) for v in placement["position"])
+        extra["PETARI_STAGE_WARP"] = env_extra["PETARI_STAGE_WARP"]
+        (run_dir / "warp-placement.json").write_text(json.dumps(placement, indent=2) + "\n")
     if args.frozen_seeds:
         env_extra["PETARI_PIPELINE_SEED_DIR"] = str(args.frozen_seeds)
     env = dict(os.environ, **env_extra)
@@ -830,6 +888,8 @@ def main():
                           "for draw-owner stacks; such runs are not timing data)")
     run.add_argument("--reuse-from", type=lambda v: [x for x in v.split(",") if x], default=[],
                      help="comma-separated sweep names whose finished runs on the identical app sha are copied in")
+    run.add_argument("--warp-placement", metavar="NAME[:FIELD=integer][@index]",
+                     help="warp to an active root-zone placement; records source archive, row and coordinates")
     run.add_argument("--rerun", action="store_true")
     run.add_argument("--refreeze-app", action="store_true",
                      help="copy the app bundle again (default: reuse this sweep's frozen copy)")

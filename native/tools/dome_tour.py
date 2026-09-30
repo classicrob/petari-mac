@@ -23,26 +23,48 @@ import re
 import shutil
 import subprocess
 import time
+import hashlib
+import os
+
+from create_observatory_fixture import create
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DOMES = {1: "Terrace", 2: "Fountain", 3: "Kitchen", 4: "Bedroom", 5: "Engine Room", 6: "Garden"}
+EXPECTED_MAPS = {
+    1: "EggStarGalaxy FlipPanelExGalaxy HoneyBeeKingdomGalaxy SurfingLv1Galaxy TriLegLv1Galaxy",
+    2: "StarDustGalaxy TamakoroExLv1Galaxy BattleShipGalaxy BreakDownPlanetGalaxy KoopaBattleVs1Galaxy",
+    3: "HeavenlyBeachGalaxy CubeBubbleExLv1Galaxy PhantomGalaxy OceanFloaterLandGalaxy KoopaJrShipLv1Galaxy",
+    4: "CosmosGardenGalaxy IceVolcanoGalaxy HoneyBeeExGalaxy SandClockGalaxy KoopaBattleVs2Galaxy",
+    5: "ReverseKingdomGalaxy OceanRingGalaxy SkullSharkGalaxy FactoryGalaxy FloaterOtaKingGalaxy",
+    6: "OceanPhantomCaveGalaxy CannonFleetGalaxy DarkRoomGalaxy HellProminenceGalaxy",
+}
+
 VISIT = re.compile(r"DOMES VISIT dome (\d) galaxy (\S+) scenario (\d+): (PASS|FAIL.*?) \(load (\d+) frames, ready after (\d+), moved ([\d.]+)\)")
 MISSING = re.compile(r"^\[(layout|sound)\] missing")
 
 
 def run_dome(dome, args, output):
     user = output / f"dome{dome}-user"
-    if user.exists():
-        shutil.rmtree(user)
-    user.mkdir(parents=True)
-    shutil.copytree(args.save / "NAND", user / "NAND")
+    create(ROOT / "build/observatory-user-2", user)
+    shutil.copytree(args.save / "NAND", user / "NAND", dirs_exist_ok=True)
+    (user / "tour-save-source.json").write_text(json.dumps({
+        "source": str(args.save.resolve()),
+        "sha256": hashlib.sha256((user / "NAND/title/00010000/524d4745/data/GameData.bin").read_bytes()).hexdigest(),
+    }, indent=2) + "\n")
     log = output / f"dome{dome}.log"
-    env = dict(__import__("os").environ, PETARI_SMOKE="domes", PETARI_DOME=str(dome), PETARI_TRACE_BOOT="1",
-               PETARI_SMOKE_FRAMES=str(args.frames), TMPDIR=str(output))
+    env = dict(os.environ, PETARI_SMOKE="domes", PETARI_DOME=str(dome), PETARI_TRACE_BOOT="1",
+               PETARI_SMOKE_FRAMES=str(args.frames), TMPDIR=str(output.resolve()))
     if args.missions:
         env["PETARI_DOME_MISSIONS"] = args.missions
     command = [str(args.app), "--disc", str(args.disc), "--user", str(user)]
+    metadata = {"command": command, "app_sha256": hashlib.sha256(args.app.read_bytes()).hexdigest(),
+                "environment": {k: v for k, v in env.items() if k.startswith("PETARI_")},
+                "save_sha256": hashlib.sha256((user / "NAND/title/00010000/524d4745/data/GameData.bin").read_bytes()).hexdigest()}
+    route = env.get("PETARI_DOME_ROUTE")
+    if route:
+        metadata["route_sha256"] = hashlib.sha256(Path(route).read_bytes()).hexdigest()
+    (output / f"dome{dome}-launch.json").write_text(json.dumps(metadata, indent=2) + "\n")
     started = time.time()
     with log.open("w") as stream:
         try:
@@ -71,9 +93,22 @@ def parse(dome, log, status):
             result = line.split(":", 1)[1].strip()
         if line.startswith("PETARI SMOKE [frame") and "DOMES MAP" in line:
             map_line = body
+    map_line = next((l.split("]: ", 1)[1] for l in text if "DOMES MAP" in l), None)
+    map_galaxies = set(map_line.split(": ", 1)[1].split(", ")) if map_line else set()
+    expected = set(EXPECTED_MAPS[dome].split())
     open_galaxy = current["galaxy"] if current else None
     return {"visits": visits, "unattributed_missing": missing, "result": result, "status": status,
-            "in_progress": open_galaxy, "map": next((l.split("]: ", 1)[1] for l in text if "DOMES MAP" in l), None)}
+            "in_progress": open_galaxy, "map": map_line, "missing_galaxies": sorted(expected - map_galaxies),
+            "unexpected_galaxies": sorted(map_galaxies - expected)}
+
+
+def session_passed(parsed):
+    return (parsed["status"] == 0 and (parsed["result"] or "").startswith("PASS (")
+            and bool(parsed["visits"]) and not parsed["in_progress"]
+            and not parsed.get("missing_galaxies") and not parsed.get("unexpected_galaxies")
+            and not parsed["unattributed_missing"] and not parsed.get("hang_samples")
+            and not parsed.get("crash_reports")
+            and all(v["smoke"] == "PASS" and not v["missing"] for v in parsed["visits"]))
 
 
 def main():
@@ -87,6 +122,8 @@ def main():
     parser.add_argument("--frames", type=int, default=72000)
     parser.add_argument("--timeout", type=float, default=1200, help="seconds per dome session (<= 20 min)")
     args = parser.parse_args()
+    if not 0 < args.timeout <= 1200:
+        parser.error("--timeout must be between 0 and 1200 seconds")
     args.output.mkdir(parents=True, exist_ok=True)
     report = {}
     for dome in [int(d) for d in args.domes.split(",") if d]:
@@ -117,7 +154,8 @@ def main():
             rows.append(f"| {dome} {DOMES[dome]} | (none reached) | | FAIL | | | | | exit {parsed['status']}, {parsed['result']} |")
     (args.output / "dome-tour.md").write_text("\n".join(rows) + "\n")
     print("\n".join(rows))
+    return 0 if report and all(session_passed(p) for p in report.values()) else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

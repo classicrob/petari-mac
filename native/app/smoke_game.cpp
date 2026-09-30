@@ -7,6 +7,7 @@
 #include "Game/System/GameSystem.hpp"
 #include "Game/System/GameSystemFunction.hpp"
 #include "Game/System/GameSystemSceneController.hpp"
+#include "Game/LiveActor/HitSensor.hpp"
 #include "Game/Player/Mario.hpp"
 #include "Game/Player/MarioActor.hpp"
 #include "Game/Player/MarioHolder.hpp"
@@ -23,6 +24,7 @@
 #include <petari/platform/vi.hpp>
 
 #include "smoke.hpp"
+#include "smoke_observe_safety.hpp"
 #include "actor_observe_store.hpp"
 #include "ui_observe_store.hpp"
 
@@ -40,7 +42,7 @@ bool warpPlayer(const Step& step) {
         return false;
     }
     const MarioHolder* pHolder = MR::getSceneObj< MarioHolder >(SceneObj_MarioHolder);
-    if (pHolder == nullptr || pHolder->getMarioActor() == nullptr) {
+    if (pHolder == nullptr || pHolder->getMarioActor() == nullptr || pHolder->getMarioActor()->getMario() == nullptr) {
         return false;
     }
     if (!step.warpName.empty()) {
@@ -100,17 +102,18 @@ Observation observeGame(bool wantPlayer) {
     observation.stage = pController->mCurrSceneControlInfo.mStage;
     observation.scenario = pController->mCurrSceneControlInfo.mScenarioNo;
     observation.selectedScenario = pController->mCurrSceneControlInfo.mSelectedScenarioNo;
-    observation.sceneReady = pController->isSceneInitializeState(SceneInitializeState_End);
+    observation.sceneReady = pController->mScene != nullptr && pController->isSceneInitializeState(SceneInitializeState_End);
     observation.strap = observation.sceneReady && GameSystemFunction::isDisplayStrapRemineder();
     if (pGameSystem->mSequenceDirector != nullptr) {
         observation.saveSequence = GameSequenceFunction::isActiveSaveDataHandleSequence();
     }
     // Mario: only when asked (after Prologue.GameStart), in a ready Game scene,
     // through the scene's MarioHolder when it and its actor exist.
-    if (wantPlayer && observation.sceneReady && observation.scene == "Game" && MR::isExistSceneObj(SceneObj_MarioHolder)) {
+    if (wantPlayer && observation.sceneReady && observation.scene == "Game" && MR::isExistSceneObj(SceneObj_MarioHolder) &&
+        MR::isExistSceneObj(SceneObj_CameraContext) && MR::isExistSceneObj(SceneObj_DemoDirector)) {
         const MarioHolder* pHolder = MR::getSceneObj< MarioHolder >(SceneObj_MarioHolder);
         const MarioActor* pMario = pHolder != nullptr ? pHolder->getMarioActor() : nullptr;
-        if (pMario != nullptr) {
+        if (canObservePlayer(pMario)) {
             observation.playerValid = true;
             observation.playerX = pMario->mPosition.x;
             observation.playerY = pMario->mPosition.y;
@@ -141,9 +144,7 @@ Observation observeGame(bool wantPlayer) {
             observation.beeWallWalk = pMario->isBeeWallWalk();
             observation.playerOffControl = MR::isOffPlayerControl();
             observation.playerInRush = MR::isPlayerInRush();
-            if (const LiveActor* pRush = MR::getCurrentRushActor(); pRush != nullptr && pRush->mName != nullptr) {
-                observation.rushActor = pRush->mName;
-            }
+            observation.rushActor = observedRushActorName(pMario, observation.playerInRush);
             observation.demoActive = MR::isDemoActive();
             observation.padA = MR::testCorePadButtonA(WPAD_CHAN0);
             observation.padB = MR::testCorePadButtonB(WPAD_CHAN0);

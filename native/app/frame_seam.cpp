@@ -17,6 +17,7 @@ extern "C" void petari_gx_pipeline_report();
 #include "frame_stats.hpp"
 #include "spike_profiler.hpp"
 #include "host.hpp"
+#include "smoke_background.hpp"
 #include "smoke.hpp"
 #include "smoke_domes.hpp"
 #include "smoke_goodegg.hpp"
@@ -186,6 +187,9 @@ void recordFrame(std::uint64_t entry, FrameStats::Phase phase) {
 }
 
 void startTiming() {
+    if (SmokeBackground::enabled) {
+        gTiming.unfocused = gTiming.unfocusedInFrame = true;
+    }
     const auto enabled = [](const char* name) {
         const char* value = std::getenv(name);
         return value != nullptr && value[0] != '\0' && value[0] != '0';
