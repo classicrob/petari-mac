@@ -197,7 +197,8 @@ must likewise be unique. Tracy is disabled in the current native build.
   executable; a missing/stale seed logs `PETARI SMOKE SHADER SEED: canonical unusable` and
   falls back to cloning the shared Darwin cache. `shaders.compile_*` fields record compile queue
   and build time and cache-hit count (builds under 20 ms).
-- Background mode declares NSProcessInfo user-initiated + latency-critical activity and
-  user-interactive thread QoS (`PETARI SMOKE QOS:` line); `PETARI_SMOKE_QOS=0` disables it for A/B.
+- `PETARI_SMOKE_QOS=1` (opt-in, background mode) declares NSProcessInfo user-initiated + latency-critical
+  activity and user-interactive thread QoS (`PETARI SMOKE QOS:` line). The on/off A/B showed no benefit
+  once machine load was controlled (hidden-run slowness was load, not App Nap), so it is off by default.
 - A runner timeout while `--jobs>1` or another Petari app was running is `INFRA_TIMEOUT`
   (shared-machine contention, not a game failure; rerun quiet). A single quiet timeout stays `TIMEOUT`.

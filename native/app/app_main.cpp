@@ -245,13 +245,12 @@ int main(int argc, char** argv) {
             std::fputs("petari: could not set background app activation policy\n", stderr);
             return 1;
         }
-        // A hidden accessory process is otherwise a candidate for App Nap and
-        // background QoS, which slows the game (~7% simulation rate, 5x game_work).
-        // Declare the work user-initiated and latency critical, and raise this
-        // thread (threads created later inherit it). Background mode only.
-        // PETARI_SMOKE_QOS=0 disables this for A/B measurement.
-        if (const char* qosEnv = std::getenv("PETARI_SMOKE_QOS"); qosEnv && qosEnv[0] == '0') {
-            std::fputs("PETARI SMOKE QOS: disabled by PETARI_SMOKE_QOS=0\n", stderr);
+        // Opt-in (PETARI_SMOKE_QOS=1): declare the hidden process user-initiated and latency
+        // critical (no App Nap) and raise this thread's QoS (later threads inherit it). The A/B
+        // on EggStarGalaxy s1 (qos-on-v2 / qos-off-v2) showed no benefit once machine load was
+        // controlled, so it is not the default.
+        if (const char* qosEnv = std::getenv("PETARI_SMOKE_QOS"); !qosEnv || qosEnv[0] != '1') {
+            std::fputs("PETARI SMOKE QOS: default (PETARI_SMOKE_QOS=1 enables activity + QoS boost)\n", stderr);
         } else {
             const auto sendClass = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
             const auto makeString = reinterpret_cast<id (*)(id, SEL, const char*)>(objc_msgSend);
