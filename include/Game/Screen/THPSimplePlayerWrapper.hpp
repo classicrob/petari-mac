@@ -120,6 +120,21 @@ public:
     void nativePollReadCompletion();
     void nativeCheckFrameRead(u32 offset, s32 size) const;
     void nativeValidateFrame(const u8* pFrame, s32 audio, u32* pCompSizes);
+    // Validates the frame in read buffer bufferIndex; its video component only if validateVideo.
+    void nativeValidateFrameAt(s32 bufferIndex, s32 audio, u32* pCompSizes, bool validateVideo);
+
+    // Audio read-ahead. Natively the game frame (which decodes video) and the DMA engine (which
+    // mixes audio) run on independent host clocks, and a game-frame hitch longer than the
+    // queued audio (2-4 frames when audio was decoded only with its video) mixed silence. So
+    // decode() first decodes the audio of up to cNativeAudioAheadFrames frames already read
+    // from disc, ahead of video, into the audio slots in play order; a frame whose audio is
+    // decoded ahead then decodes only its video. Audio is still mixed at the same sample times.
+    // 8 frames: after a decode 7 remain ahead, and the mixer keeps the last queued frame in
+    // reserve (it mixes from a slot only while the next one is queued), so about 6 frames
+    // (100 ms at 59.94 fps) of game-frame stall are covered at any point.
+    static const s32 cNativeAudioAheadFrames = 8;
+    void nativeDecodeAudioAhead(s32 audio);
+    s32 mNativeAudioAhead;  // frames from mNextDecodeIndex on whose audio is already decoded
 
     const char* mNativeName;
     PetariNative::Movie::ThpComponents mNativeComponents;
@@ -134,6 +149,9 @@ public:
     // samples mixed into JAudio2's DAC (mixAudio, the audio thread; the CPU baton
     // serializes it with the game thread). Drift is video time minus audio time.
     void nativeNoteDecode(s32 result);
+    // Decoded THP audio frames not yet fully mixed (including the one being mixed); 20 (full)
+    // for a movie without audio.
+    s32 nativeQueuedAudioFrames() const;
 
 private:
     void nativeResetAv();

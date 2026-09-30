@@ -42,7 +42,10 @@
 // (GameDataFunction::hasPowerStar) with one star more than at mission start;
 // System_Save00 answered and System_Save02 shown, then the save-data sequence
 // idle for 60 frames; Mario controllable there for 60 frames.
-// FAIL: Mario dies, a planet objective or the whole mission times out, a
+// Deaths: the game's miss sequence restarts the mission; the driver waits
+// until Mario stands again and plans from scratch, as a player retries. The
+// PASS reason counts the deaths.
+// FAIL: a third death, a planet objective or the whole mission times out, a
 // wrong stage, an unknown prompt (BLOCKED), the frame limit. Physical gameplay
 // input from the first frame makes a PASS "ASSISTED".
 
@@ -173,6 +176,10 @@ private:
     int mReleaseExperiment = 0;  // PETARI_GOODEGG_RELEASE: 0 none, 1 spin, 2 away
     int mLastLife = -1;
     bool mPeanutToured = false;
+    int mDeaths = 0;              // deaths so far (the game restarts; more than kMaxDeaths FAILs)
+    bool mDying = false;          // dead, waiting for the restart
+    unsigned long mRespawnFrames = 0;
+    size_t mChipBase = 0;         // milestones before the current attempt (chips reset on a restart)
     Point3 mGoalPoint{0.0f, 0.0f, 0.0f};  // goTo's latest target (boulder waits look at it)
     bool mHasGoal = false;
     unsigned long mRockLogAt = 0;

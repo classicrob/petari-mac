@@ -31,6 +31,9 @@
 //                  clinging. HOSTILE.
 //   "Rock"         Rock (a rolling boulder, body radius 225 x scale). dir: its motion since
 //                  the previous frame (units/frame). state: its type. HOSTILE.
+//   "StarBall"     Tamakoro. dir: up. state 1 Mario rides it (BOUND), 0 waiting (READY).
+//   "Ray"          SurfRay. dir: its front. state: 1 ridden (BOUND) plus 2 on the water.
+//   "FlipPanel"    FlipPanel (from calcAndSetBaseMtx). dir: up. state 1 flipped to its back, 0 front.
 //   "Vine"         Plant. position: its moving part. state: 1 growing, 2 Mario hangs,
 //                  3 grown, 0 otherwise. BOUND: Mario hangs on it.
 #ifdef PETARI_NATIVE

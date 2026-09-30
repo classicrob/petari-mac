@@ -57,7 +57,7 @@ bool domesEnabledFromEnvironment(DomesConfig* config);
 
 // A route point in AstroGalaxy. Warp: stop here and wait for the pod to carry
 // Mario to its pair (the next point). Jump: on arrival, jump toward the next
-// point (a ledge too high to walk up).
+// point with a spin near the apex (a ledge too high to walk up).
 struct DomeWaypoint {
     enum Action { Walk, Warp, Jump };
     float x, y, z;
@@ -133,6 +133,7 @@ private:
     unsigned long mStuckFrames = 0;
     int mRecoveries = 0;
     float mWarpX = 0, mWarpY = 0, mWarpZ = 0;
+    unsigned long mSpinAt = 0;  // frame of the spin that follows a route jump
     // dome
     std::vector<Visit> mVisits;
     bool mMapRecorded = false;

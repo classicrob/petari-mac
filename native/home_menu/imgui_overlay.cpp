@@ -212,7 +212,7 @@ bool drawPipelinePreparation(const PipelinePreparationView& view, float width, f
     centeredText(list, font, 34 * scale, contentWidth, ImVec2(center, height * 0.34f),
                  color(0.96f, 0.98f, 1, 1), "Preparing shaders for smooth play");
     centeredText(list, font, 21 * scale, contentWidth, ImVec2(center, height * 0.405f),
-                 color(0.65f, 0.76f, 0.91f, 1), view.global ? "First launch only" : "Preparing saved shaders");
+                 color(0.65f, 0.76f, 0.91f, 1), view.global ? "This may take a few minutes after installation or updates" : "Preparing saved shaders");
     char count[96];
     std::snprintf(count, sizeof(count), "%u / %u  (%u%%)", view.completed, view.total,
                   static_cast<unsigned>(fraction * 100));

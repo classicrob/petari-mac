@@ -14,7 +14,7 @@ import shutil
 import sqlite3
 
 
-def merge(seeds, stage, cache, logs):
+def merge(seeds, stage, cache, logs, validation=None):
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,96}', stage): raise ValueError('unsafe stage name')
     keys = set()
     for log in logs:
@@ -32,6 +32,8 @@ def merge(seeds, stage, cache, logs):
                   'cache_sha256': hashlib.sha256(cache.read_bytes()).hexdigest(),
                   'logs': {str(log.resolve()): hashlib.sha256(log.read_bytes()).hexdigest() for log in logs},
                   'observed_configs': len(rows), 'offline_material_replay': False}
+    if validation is not None:
+        provenance['run_validation'] = validation
     results = {}
     for name in (stage, '__global__'):
         target = seeds / (name + '.db')

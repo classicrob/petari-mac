@@ -5,11 +5,14 @@
 // animated map parts are measured in their current, not their placed, pose.
 // Runs a few milliseconds per frame at the seam, while this thread owns the game.
 //
+// PETARI_COLLISION_PROBE_NEAR="x,z,r" delays the survey until Mario is within r of
+// (x, z): collision of map parts far from the player may be inactive.
+//
 // CSV rows: x,z,y,nx,ny,nz,clear
 //   one row per floor or surface hit on a 50-unit grid, top to bottom;
 //   clear: for upward-facing hits (ny > 0.3), bit d set when a 50-unit
 //   horizontal ray in direction d (0..7: +x, +x+z, +z, -x+z, -x, -x-z, -z, +x-z)
-//   from 40 and from 110 units above the hit meets no map collision; else -1.
+//   from 40 and from 110 units above the hit meets no map or move-limit collision; else -1.
 
 #include "Game/Map/HitInfo.hpp"
 #include "Game/Util/MapUtil.hpp"
@@ -44,6 +47,7 @@ struct Probe {
     std::string stage;
     float minX = -9000.0f, maxX = 14000.0f, minZ = -7000.0f, maxZ = 9000.0f;
     long column = 0;
+    float nearX = 0.0f, nearZ = 0.0f, nearRadius = 0.0f;  // PETARI_COLLISION_PROBE_NEAR
     long budgetMs = 12;  // per frame; PETARI_COLLISION_PROBE_BUDGET_MS (a large value probes in one frame)
     std::vector<Sample> samples;
 };
@@ -70,6 +74,9 @@ void configure() {
     gProbe.minZ = envFloat("PETARI_COLLISION_PROBE_MIN_Z", gProbe.minZ);
     gProbe.maxZ = envFloat("PETARI_COLLISION_PROBE_MAX_Z", gProbe.maxZ);
     gProbe.budgetMs = static_cast<long>(envFloat("PETARI_COLLISION_PROBE_BUDGET_MS", 12.0f));
+    if (const char* near = std::getenv("PETARI_COLLISION_PROBE_NEAR")) {
+        std::sscanf(near, "%f,%f,%f", &gProbe.nearX, &gProbe.nearZ, &gProbe.nearRadius);
+    }
 }
 
 bool hitMap(const TVec3f& from, const TVec3f& segment, TVec3f* pHit, Triangle* pTriangle) {
@@ -87,7 +94,8 @@ int clearDirections(const TVec3f& floor) {
             TVec3f segment(kDirections[d][0] * kCell, 0.0f, kDirections[d][1] * kCell);
             TVec3f hit;
             Triangle triangle;
-            if (hitMap(from, segment, &hit, &triangle)) {
+            // Map collision and invisible move-limit walls (edges Mario cannot drop from).
+            if (MR::getFirstPolyOnLineToMapAndMoveLimit(&hit, &triangle, from, segment)) {
                 blocked = true;
                 break;
             }
@@ -138,9 +146,13 @@ bool collisionProbeActive() {
     return gProbe.enabled && !gProbe.done;
 }
 
-void stepCollisionProbe(const std::string& stage, bool sceneReady) {
+void stepCollisionProbe(const std::string& stage, bool sceneReady, bool playerValid, float playerX, float playerZ) {
     if (!collisionProbeActive() || !sceneReady || stage != gProbe.stage) {
         return;
+    }
+    if (gProbe.column == 0 && gProbe.nearRadius > 0.0f &&
+        (!playerValid || std::hypot(playerX - gProbe.nearX, playerZ - gProbe.nearZ) > gProbe.nearRadius)) {
+        return;  // not there yet: map parts far from the player may have no active collision
     }
     const long columnsX = static_cast<long>(std::ceil((gProbe.maxX - gProbe.minX) / kCell));
     const long columnsZ = static_cast<long>(std::ceil((gProbe.maxZ - gProbe.minZ) / kCell));

@@ -6,6 +6,9 @@
 #include "Game/MapObj/MapObjActorInitInfo.hpp"
 #include "Game/Util.hpp"
 #include <JSystem/JMath/JMath.hpp>
+#ifdef PETARI_NATIVE
+#include "Game/Util/NativeActorObserve.hpp"
+#endif
 
 void FlipPanel_FORCE_MATCH_SDATA2() {
     (void)MR::epsilon();
@@ -191,6 +194,10 @@ void FlipPanel::calcAndSetBaseMtx() {
     if (_CC) {
         mDelegator->registerCallBack();
     }
+#ifdef PETARI_NATIVE
+    // state: 1 flipped to the back (the side the puzzle wants), 0 front.
+    MR::Native::publishActor("FlipPanel", mPosition, -mGravity, _CD ? 1 : 0, 0);
+#endif
 }
 
 bool FlipPanel::receiveOtherMsg(u32 msg, HitSensor* pSender, HitSensor* pReceiver) {

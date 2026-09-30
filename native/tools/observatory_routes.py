@@ -24,7 +24,7 @@ from pathlib import Path
 
 CELL = 50.0
 STEP_UP = 55.0
-JUMP_UP = 185.0  # measured jump peak about 203 units
+JUMP_UP = float(__import__("os").environ.get("JUMP_UP", "320"))  # jump (peak about 203 units) plus an apex spin
 DROP = 450.0
 HEADROOM = 160.0
 DIRS = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
@@ -121,12 +121,21 @@ class StaticWalls:
         return result
 
 
-def load(path, static=None):
+def load(paths, static=None):
+    """Probe hits per column from one or more probes (a full survey plus surveys taken
+    near far structures). A surface seen twice keeps the more restrictive clear bits."""
     columns = collections.defaultdict(list)
-    with open(path) as stream:
-        for row in csv.DictReader(stream):
-            key = (round((float(row["x"]) - CELL / 2) / CELL), round((float(row["z"]) - CELL / 2) / CELL))
-            columns[key].append((float(row["y"]), float(row["ny"]), int(row["clear"]), float(row["x"]), float(row["z"])))
+    for path in ([paths] if isinstance(paths, (str, Path)) else paths):
+        with open(path) as stream:
+            for row in csv.DictReader(stream):
+                key = (round((float(row["x"]) - CELL / 2) / CELL), round((float(row["z"]) - CELL / 2) / CELL))
+                hit = (float(row["y"]), float(row["ny"]), int(row["clear"]), float(row["x"]), float(row["z"]))
+                hits = columns[key]
+                same = next((n for n, h in enumerate(hits) if abs(h[0] - hit[0]) <= 30), None)
+                if same is None:
+                    hits.append(hit)
+                elif hit[2] >= 0 and hits[same][2] >= 0:
+                    hits[same] = hits[same][:2] + (hits[same][2] & hit[2],) + hits[same][3:]
     walls = None
     if static is not None:
         walls = StaticWalls(static)
@@ -255,7 +264,7 @@ def waypoints(nodes, path, spacing=150.0):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("probe", type=Path)
+    parser.add_argument("probe", type=Path, nargs="+", help="probe CSVs (a full survey first, then local ones)")
     parser.add_argument("--static", type=Path, help="placed collision (.npy, observatory_static_collision.py): adds the "
                         "floors and walls a probe missed")
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "app/smoke_domes_routes.cpp")

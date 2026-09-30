@@ -36,6 +36,9 @@ struct World {
     bool promptAt = false;
     unsigned long physicalAt = 0;
     bool noMove = false;
+    // Player control off (a scripted intro) from lockFrom for lockFrames frames (0: never ends).
+    unsigned long lockFrom = 0, lockFrames = 0;
+    bool locked() const { return lockFrom != 0 && frame >= lockFrom && (lockFrames == 0 || frame < lockFrom + lockFrames); }
     // Camera: D-pad left/right turn the view 45 degrees where the camera allows
     // rotation; the game sees the trigger unless presses are lost.
     enum class Camera { Rotates, Fixed, InputLost } camera = Camera::Rotates;
@@ -63,6 +66,7 @@ struct World {
         o.playerDead = dieAt && frame >= dieFrame;
         if (promptAt && frame == loadFrames + 100) o.prompts.push_back({"System_Test", 2});
         if (physicalAt != 0 && frame >= physicalAt) o.physical.gameplay = 1;
+        o.playerOffControl = locked();
         o.camZx = std::sin(yaw);
         o.camZz = std::cos(yaw);
         o.padLeftTrigger = leftTrigger;
@@ -72,7 +76,14 @@ struct World {
         leftTrigger = rightTrigger = false;
         return o;
     }
+    unsigned long warps = 0;
     void apply(const Step& step) {
+        if (step.warp) {
+            ++warps;
+            x = step.warpX;
+            y = step.warpY;
+            z = step.warpZ;
+        }
         for (const Press& p : step.presses) {
             const int b = static_cast<int>(p.button);
             if (b == static_cast<int>(Button::Plus) && p.down && paused) {
@@ -91,7 +102,7 @@ struct World {
             paused = true;
             pending.push_back("PauseMenu.Open");
         }
-        if (paused || noMove) return;
+        if (paused || noMove || locked()) return;
         const float speed = 5.0f;
         if (held[static_cast<int>(Button::StickUp)]) z += speed;
         if (held[static_cast<int>(Button::StickDown)]) z -= speed;
@@ -207,6 +218,33 @@ int main() {
         run(world);
         expect(checkLine("camera_left").find(": warn view turned 0.0 degrees; INPUT: the game never saw") != std::string::npos,
                "lost press: warn, blamed on input (" + checkLine("camera_left") + ")");
+    }
+    {
+        // A race intro takes control away during the walks: the driver waits, then redoes the step.
+        World world;
+        world.lockFrom = 300;
+        world.lockFrames = 600;
+        const StageDriver driver = run(world);
+        expect(driver.result() == Result::Pass && driver.reason().find("walks responsive 4/4") != std::string::npos,
+               "a temporary player lock is waited out: " + driver.reason());
+    }
+    {
+        World world;
+        world.lockFrom = 300;
+        const StageDriver driver = run(world);
+        expect(driver.result() == Result::Fail && driver.reason().find("soft lock") != std::string::npos,
+               "a permanent player lock is a soft lock: " + driver.reason());
+    }
+    {
+        // PETARI_STAGE_WARP: one warp after gameplay is ready, then the checks run from there.
+        World world;
+        StageConfig config{"EggStarGalaxy", 2, 100};
+        config.warp = true;
+        config.warpX = 1000.0f;
+        config.warpZ = -500.0f;
+        const StageDriver driver = run(world, config);
+        expect(driver.result() == Result::Pass, "a warped run passes: " + driver.reason());
+        expect(world.warps == 1, "the warp is requested exactly once: " + std::to_string(world.warps));
     }
     if (gFailures == 0) std::puts("app smoke stage tests passed");
     return gFailures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

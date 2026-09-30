@@ -1,3 +1,17 @@
+#ifdef __APPLE__
+extern "C" void* objc_autoreleasePoolPush(void);
+extern "C" void objc_autoreleasePoolPop(void* pool);
+struct PetariPipelineAutoreleasePool {
+  void* pool = objc_autoreleasePoolPush();
+  PetariPipelineAutoreleasePool() = default;
+  PetariPipelineAutoreleasePool(const PetariPipelineAutoreleasePool&) = delete;
+  PetariPipelineAutoreleasePool& operator=(const PetariPipelineAutoreleasePool&) = delete;
+  ~PetariPipelineAutoreleasePool() { objc_autoreleasePoolPop(pool); }
+};
+#else
+struct PetariPipelineAutoreleasePool {};
+#endif
+
 static void pipeline_worker(unsigned workerIndex = 0) {
 #ifdef TRACY_ENABLE
   tracy::SetThreadName("Pipeline compilation thread");
@@ -24,7 +38,10 @@ static void pipeline_worker(unsigned workerIndex = 0) {
     }
     if (g_hasPipelineThread) PetariPipeline::compilationQoS(background);
     PetariPipeline::stages = {.runtimeKey = pending.hash};
-    auto result = pending.create();
+    auto result = [&] {
+      PetariPipelineAutoreleasePool pool;
+      return pending.create();
+    }();
     const auto finished = PetariPipeline::Clock::now();
     const auto pipelineCount = result.pipeline_count();
     PetariPipelineSample sample;

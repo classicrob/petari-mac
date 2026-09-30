@@ -77,6 +77,19 @@ behavior, corpus/component checks and remaining integration work.
 - skinning (J3DMtxBuffer::calcWeightEnvelopeMtx) mixes C loops with asm, so it
   was checked by hand, lane by lane, not in the interpreter.
 
+## Silent native stubs, 2026-09-30
+
+- Inventory in native/STUBS.md. Every C-linkage SDK symbol in the app link map was
+  classified, along with the Aurora no-ops and short or constant `PETARI_NATIVE`
+  branches. None remain unknown.
+- One new (b), fixed: CPU-rewritten textures kept their first upload, because
+  Aurora caches per texture object and `GXInvalidateTexAll` is a no-op. DC stores
+  are now logged by page, and `GXLoadTexObj` re-hashes a texture whose pages were
+  stored since its last load. `native_texture_store` covers it, including a
+  game-thread/tiny-heap check for the HostAllocationScope class. Live check:
+  SnowCapsuleGalaxy stage smoke PASS, and its SnowFloor textures now reload
+  (build/collision-5.log). Full ctest 93/93.
+
 ## Broader integration coverage
 
 - Story run 6 traversed Peach's Castle Garden, played both full prologue movies,
@@ -309,3 +322,22 @@ Verified live on the current builds (details in the linked worker reports):
 Known open: shader coverage gaps on ~10 stages (e.g. OceanPhantomCave, HellProminence);
 rare menu hitches (~190 ms game work); ~0.3 MB/cycle memory growth; Good Egg star
 and later missions not yet completed end to end; controller hardware untested.
+
+## 2026-09-30 morning checkpoint
+
+- Build + ctest: 96/96 pass (build/lead-checkpoint-0930.log).
+- Render-worker autorelease leak fixed: soak leak1 → leak2 per-cycle growth of the
+  render worker's Metal/Dawn stacks +403 KB → -3 KB (build/soak/leak1, leak2).
+  Per-compile autorelease pools added to the pipeline workers (regression test only).
+- OceanRingGalaxy s4 (Cosmic Mario race) crash found by the sweep: deterministic
+  uncaught std::out_of_range in build_shader_info, root field postMtx=124 (row
+  selector beyond Aurora's 20 matrices). Fix models all 64 post-matrix rows
+  (patch_aurora_pipeline_postmatrix.py); CPU tests + 9,399-config corpus pass;
+  live GPU verification pending. The other Cosmic Mario races are not yet raced.
+- Audio: latency defaults 48 ms ring + 256-frame device buffer (~110 ms heard), 0
+  underruns in live story-4; audio-baseline sweep (17 stages, s1) 0 DSP holds.
+  HeavensDoor DSP holds (~30/s) seen in loaded story runs; priority-aware
+  preemption in os_thread.cpp is included but under review and not yet verified live.
+Known open: Good Egg driver deaths on Peanut/Fruit Peel boulders (runs 23-24;
+driver, not game); texture store-seen map grows to ~80 MB with an O(n) sweep
+on the game thread (fix in progress); StarBall tilt sign under investigation.

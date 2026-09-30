@@ -29,6 +29,15 @@ def patch(text, kind):
   PetariPipeline::stages.moduleMs += PetariPipeline::milliseconds(PetariPipeline::Clock::now() - petariModuleStart);
   return petariModule;''')
     elif kind == 'gx.cpp':
+        replace('  const auto& vtxFmt = g_gxState.vtxFmts[fmt];',
+                '  const auto& vtxFmt = g_gxState.vtxFmts[unsigned(fmt) & 7u];')
+        for count, maximum in [('numTevStages', 'MaxTevStages'), ('numIndStages', 'MaxIndStages'), ('numTexGens', 'MaxTexCoord')]:
+            replace(f'  for (u8 i = 0; i < g_gxState.{count}; ++i) {{',
+                    f'  for (u8 i = 0; i < std::min<unsigned>(g_gxState.{count}, {maximum}); ++i) {{')
+        replace('  config.shaderConfig.tevStageCount = g_gxState.numTevStages;',
+                '  config.shaderConfig.tevStageCount = std::min<unsigned>(g_gxState.numTevStages, MaxTevStages);')
+        replace('  config.shaderConfig.numIndStages = g_gxState.numIndStages;',
+                '  config.shaderConfig.numIndStages = std::min<unsigned>(g_gxState.numIndStages, MaxIndStages);')
         replace('  return g_device.CreateRenderPipeline(&descriptor);', '''  const auto petariPipelineStart = PetariPipeline::Clock::now();
   auto petariPipeline = g_device.CreateRenderPipeline(&descriptor);
   PetariPipeline::stages.pipelineMs += PetariPipeline::milliseconds(PetariPipeline::Clock::now() - petariPipelineStart);

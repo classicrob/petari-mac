@@ -20,7 +20,9 @@ constexpr unsigned long kSpinInterval = 30;     // a spin lasts about this long;
 constexpr unsigned long kVineSpinInterval = 20;
 constexpr unsigned long kTalkTapInterval = 45;
 constexpr unsigned long kTalkStartInterval = 60;
-constexpr unsigned long kMissionLimit = 54000;  // 15 minutes of play
+constexpr unsigned long kMissionLimit = 90000;  // 25 minutes of play (restarts included)
+constexpr int kMaxDeaths = 2;                   // the game's own restart after a death, as a player retries
+constexpr unsigned long kRespawnReadyFrames = 30;
 constexpr unsigned long kPlanetLimit = 14400;   // 4 minutes on one planet
 constexpr unsigned long kStuckFrames = 150;
 constexpr float kProgressStep = 40.0f;
@@ -235,7 +237,13 @@ constexpr float kMarioSpeed = 8.0f;     // running, units per frame
 // fit (observed boulders median 60, at most 235 from the fitted curves) and
 // the 8-way stick and Mario's acceleration from standing.
 constexpr float kRockSafe = 500.0f;
-constexpr float kGroundTolerance = 170.0f;  // predicted positions this near known ground count as on it
+// Predicted positions this near a known-ground sample count as on the
+// ground. Fruit Peel samples are at least 70 from an edge, and 170 let a dodge
+// end at the edge in goodegg-21: 120 there. On the Peanut (samples at least
+// 100 from mud, lobes wide) 120 left too few dodges (goodegg-23: nine hits,
+// against none in goodegg-20 at 170).
+constexpr float kFruitPeelGroundTolerance = 120.0f;
+constexpr float kPeanutGroundTolerance = 170.0f;
 
 struct RailSpot {
     int rail = -1;
@@ -296,6 +304,7 @@ Vec railAhead(const RailSpot& from, int direction, float distance) {
 bool onKnownGround(Planet planet, Vec p) {
     const Point3* begin = nullptr;
     const Point3* end = nullptr;
+    const float tolerance = planet == Planet::FruitPeel ? kFruitPeelGroundTolerance : kPeanutGroundTolerance;
     if (planet == Planet::FruitPeel) {
         begin = std::begin(kFruitPeelGround);
         end = std::end(kFruitPeelGround);
@@ -306,7 +315,7 @@ bool onKnownGround(Planet planet, Vec p) {
         return true;
     }
     for (const Point3* q = begin; q != end; ++q) {
-        if (length(vec(*q) - p) < kGroundTolerance) {
+        if (length(vec(*q) - p) < tolerance) {
             return true;
         }
     }
@@ -317,6 +326,10 @@ const Vec kPeanutLaunchStar{-12216.7f, -15424.5f, -3022.8f};  // l_id 4, SW_APPE
 const Vec kBeanBPiranha{-18416.7f, -15888.5f, -8672.8f};      // PackunPetit l_id 62, SW_DEAD 4
 const Vec kBeanBVine{-18425.0f, -15878.7f, -8666.7f};         // Plant l_id 21, SW_APPEAR 4
 const Vec kHammerHead{-17716.7f, -10726.9f, -9460.3f};       // HammerHeadPackun l_id 3, SW_DEAD 3
+// Where to wait for the Hammer Head's slam: a walkable-ground sample 714 from
+// its base (it notices Mario within 800), 673 from the nearest PunchingKinoko;
+// goodegg-20 was hit 590 from the base, next to a PunchingKinoko.
+const Vec kHammerHeadBait{-18415.0f, -10811.0f, -9581.0f};
 const Vec kFruitVine{-17717.1f, -10743.5f, -9460.3f};        // Plant l_id 30, SW_APPEAR 3
 const Vec kBeanCCage{-18586.7f, -5200.0f, -12112.8f};        // CrystalCageS l_id 69, SW_DEAD 1020
 const Vec kBeanCLaunchStar{-18608.2f, -5031.8f, -12150.0f};  // l_id 9, SW_APPEAR 1020
@@ -388,6 +401,11 @@ const std::vector<Point3>& beanCRoute() {
 
 bool GoodEggDriver::followRoute(const Observation& o, const std::vector<Point3>& route, const char* name, Step& step) {
     const Vec pos = position(o);
+    // A finished route stays finished near its end (the objective beyond it,
+    // a vine or a boss, can be ~1000 away; goodegg-22 oscillated here).
+    if (mWaypointChosen && mWaypoint >= route.size() && length(vec(route.back()) - pos) < 1500.0f) {
+        return true;
+    }
     const Point3& current = route[std::min(mWaypoint, route.size() - 1)];
     if (!mWaypointChosen || length(vec(current) - pos) > 900.0f) {
         const bool first = !mWaypointChosen;
@@ -800,7 +818,40 @@ void GoodEggDriver::mission(const Observation& o, Step& step) {
         mLastLife = o.playerLife;
     }
     if (o.playerDead) {
-        finish(Result::Fail, "Mario died at " + text(pos) + " on " + planetName(mPlanet), step);
+        if (!mDying) {
+            mDying = true;
+            mRespawnFrames = 0;
+            ++mDeaths;
+            note("Mario died at " + text(pos) + " on " + planetName(mPlanet) + " (death " + std::to_string(mDeaths) + ")");
+            if (mDeaths > kMaxDeaths) {
+                finish(Result::Fail, "Mario died " + std::to_string(mDeaths) + " times; the last at " + text(pos) + " on " +
+                                         planetName(mPlanet),
+                       step);
+                return;
+            }
+        }
+        steer({}, step);
+        return;
+    }
+    if (mDying) {
+        // The game restarts the mission after the miss sequence: wait until
+        // Mario stands again, then plan from scratch (the planets reset too).
+        steer({}, step);
+        const bool standing = o.sceneReady && o.playerOnGround && !o.demoActive;
+        mRespawnFrames = standing ? mRespawnFrames + 1 : 0;
+        if (mRespawnFrames < kRespawnReadyFrames) {
+            return;
+        }
+        mDying = false;
+        note("restarted at " + text(pos) + " after death " + std::to_string(mDeaths));
+        mTalked = mLumaAsked = mPeanutToured = mReleased = mWaypointChosen = false;
+        mTalkFrames = 0;
+        mChipsDone.clear();
+        mChipBase = mSeen.size();
+        mLastDinoPhase = -1;
+        mPlanet = Planet::None;
+        mGoal.clear();
+        resetStuck();
         return;
     }
     if (mStarsAtStart < 0 && o.powerStars >= 0) {
@@ -856,9 +907,17 @@ void GoodEggDriver::mission(const Observation& o, Step& step) {
         return;
     }
     // Airborne trace (every 20 frames past the first 20): where flights and
-    // throws go, and in which gravity.
+    // throws go, in which gravity, and the nearest boulder (a shove off a
+    // ledge shows as one close by).
     if (!o.playerOnGround && (mAirTrace++ % 20) == 19) {
-        note("in the air at " + text(pos) + ", up " + text(up(o)) + (o.playerInBind ? ", bound" : ""));
+        float rockDistance = 1e30f;
+        for (const Observation::Actor& actor : o.actors) {
+            if (actor.kind == "Rock") {
+                rockDistance = std::min(rockDistance, length(actorPos(actor) - pos));
+            }
+        }
+        note("in the air at " + text(pos) + ", up " + text(up(o)) + (o.playerInBind ? ", bound" : "") +
+             (rockDistance < 1e29f ? ", nearest boulder " + number(rockDistance) : std::string()));
     } else if (o.playerOnGround) {
         mAirTrace = 0;
     }
@@ -996,29 +1055,43 @@ bool GoodEggDriver::dodgeRocks(const Observation& o, Step& step) {
     Vec best{};
     float bestScore = -1e30f;
     float bestClearance = 0.0f;
-    for (int i = 0; i <= 8; ++i) {
-        Vec dir{};
-        if (i < 8) {
-            const float angle = static_cast< float >(i) * 0.785398f;
-            dir = toGoal * std::cos(angle) + side * std::sin(angle);
+    bool anyGrounded = false;
+    // Two passes: moves that stay on known ground; if none does, the Peanut
+    // allows any move (brushing the mud beats standing in a boulder's way; in
+    // goodegg-23 standing still there cost hits). Off the Fruit Peel is a
+    // fall into its black hole: never.
+    for (int pass = 0; pass < 2 && !anyGrounded; ++pass) {
+        if (pass == 1 && mPlanet == Planet::FruitPeel) {
+            break;
         }
-        // Never off the ground (the peel's edge, the Peanut's mud): checked
-        // at 10, 20 and 40 frames of running; standing still always stays.
-        bool grounded = true;
-        for (int k : {2, 4, 8}) {
-            grounded = grounded && onKnownGround(mPlanet, pos + dir * (kMarioSpeed * static_cast< float >(k * kRockStepFrames)));
+        for (int i = 0; i <= 8; ++i) {
+            Vec dir{};
+            if (i < 8) {
+                const float angle = static_cast< float >(i) * 0.785398f;
+                dir = toGoal * std::cos(angle) + side * std::sin(angle);
+            }
+            // Checked at 10, 20 and 40 frames of running.
+            bool grounded = true;
+            for (int k : {2, 4, 8}) {
+                grounded = grounded &&
+                           onKnownGround(mPlanet, pos + dir * (kMarioSpeed * static_cast< float >(k * kRockStepFrames)));
+            }
+            if (pass == 0 && !grounded) {
+                continue;
+            }
+            anyGrounded = anyGrounded || pass == 0;
+            const float c = clearance(dir);
+            // Safe moves win, the nearer the goal's direction the better; else
+            // the move that stays farthest from every boulder.
+            const float score = c >= kRockSafe ? 10000.0f + (i < 8 ? dot(dir, toGoal) : -0.5f) : c;
+            if (score > bestScore) {
+                bestScore = score;
+                best = dir;
+                bestClearance = c;
+            }
         }
-        if (!grounded) {
-            continue;
-        }
-        const float c = clearance(dir);
-        // Safe moves win, the nearer the goal's direction the better; else the
-        // move that stays farthest from every boulder.
-        const float score = c >= kRockSafe ? 10000.0f + (i < 8 ? dot(dir, toGoal) : -0.5f) : c;
-        if (score > bestScore) {
-            bestScore = score;
-            best = dir;
-            bestClearance = c;
+        if (pass == 1) {
+            anyGrounded = true;  // (ends the loop)
         }
     }
     if (mFrame >= mRockLogAt) {
@@ -1091,8 +1164,8 @@ void GoodEggDriver::peanut(const Observation& o, Step& step) {
     const Vec pos = position(o);
     const Vec u = up(o);
     int got = 0;
-    for (const std::string& m : mSeen) {
-        got += m == "StarChip.Got";
+    for (size_t i = mChipBase; i < mSeen.size(); ++i) {
+        got += mSeen[i] == "StarChip.Got";
     }
     // The tour first (it passes every chip); then any chip it missed, directly.
     if (got < kPeanutChipCount && !mPeanutToured) {
@@ -1167,7 +1240,10 @@ void GoodEggDriver::beanB(const Observation& o, Step& step) {
 
 void GoodEggDriver::fruitPeel(const Observation& o, Step& step) {
     // Up the spiral first: straight lines toward the top would leave the peel.
-    if (!followRoute(o, kFruitPeelRoute, "Fruit Peel route", step)) {
+    // The spiral up to its point 27 (1123 from the Hammer Head's base): the
+    // last points pass a PunchingKinoko and end inside the slam's reach.
+    static const std::vector<Point3> kToTop(kFruitPeelRoute.begin(), kFruitPeelRoute.begin() + 28);
+    if (!followRoute(o, kToTop, "Fruit Peel route", step)) {
         return;
     }
     if (nearestActor(o, "Vine", kFruitVine, 1500.0f) != nullptr) {
@@ -1199,16 +1275,12 @@ void GoodEggDriver::fruitPeel(const Observation& o, Step& step) {
     // (HammerHeadPackun::isTargetInRange) and slams toward him; waiting at
     // 620 keeps him out of the slam's reach. Then the head lies still for a
     // 90-frame chance (READY): run in, spin, jump on it.
-    Point3 bait = kFruitPeelRoute.back();
-    float baitError = 1e30f;
-    for (size_t i = kFruitPeelRoute.size() > 8 ? kFruitPeelRoute.size() - 8 : 0; i < kFruitPeelRoute.size(); ++i) {
-        const float error = std::fabs(length(vec(kFruitPeelRoute[i]) - kHammerHead) - 620.0f);
-        if (error < baitError) {
-            baitError = error;
-            bait = kFruitPeelRoute[i];
-        }
+    if (head != nullptr && mFrame >= mLogAt) {
+        mLogAt = mFrame + 30;
+        note("Hammer Head's head " + number(length(actorPos(*head) - kHammerHead)) + " from its base, Mario " +
+             number(length(position(o) - kHammerHead)));
     }
-    goTo(o, bait, 80.0f, "the Hammer Head's baiting spot", step);
+    goTo(o, {kHammerHeadBait.x, kHammerHeadBait.y, kHammerHeadBait.z}, 60.0f, "the Hammer Head's baiting spot", step);
 }
 
 void GoodEggDriver::beanC(const Observation& o, Step& step) {
@@ -1381,7 +1453,8 @@ void GoodEggDriver::returnToDome(const Observation& o, Step& step) {
                    step);
         } else {
             finish(Result::Pass,
-                   "Good Egg mission 1: Dino Piranha defeated (" + std::to_string(mDinoHits) + " tail hits seen), " +
+                   "Good Egg mission 1: Dino Piranha defeated (" + std::to_string(mDinoHits) + " tail hits seen, " +
+                       std::to_string(mDeaths) + " death" + (mDeaths == 1 ? "" : "s") + " and restarts), " +
                        "Power Star collected, returned to " + o.stage + ", saved (System_Save00 yes, System_Save02), " +
                        "file records the star (" + std::to_string(o.powerStars) + " stars, was " +
                        std::to_string(mStarsAtStart) + ")",

@@ -340,7 +340,35 @@ void testAllocationSiteDetector(JKRHeap* heap) {
     check(on - off < 250.0, "the site check costs well under a microsecond per allocation");
 }
 
+// The site check's executable symbol table (instead of dladdr): same verdict
+// inputs for every symbol, and first-seen lookups far cheaper (the 190 ms
+// startup frame was ~2000 first-seen chains symbolized with dladdr).
+void testSymbolLookup() {
+    PetariNative::prepareAllocationSymbols();
+    const auto check1 = PetariNative::checkSymbolLookup(1, 0);
+    std::printf("symbol lookup: %zu symbols, %zu checked against dladdr, %zu aliases, %zu mismatches%s%s\n", check1.symbols,
+                check1.checked, check1.aliases, check1.mismatches, check1.firstMismatch.empty() ? "" : "; first: ",
+                check1.firstMismatch.c_str());
+    check(check1.symbols > 1000 && check1.checked > 1000, "the executable's symbols, locals included, are in the table");
+    check(check1.mismatches == 0, "every symbol resolves to the same function start and classification as with dladdr");
+    const auto timing = PetariNative::checkSymbolLookup(0, 10000);
+    std::printf("symbol lookup: %zu first-seen addresses in %.1f ms (dladdr: %.1f ms)\n", timing.timed, timing.fastMs,
+                timing.dladdrMs);
+    // This test binary is small (dladdr is cheap here); the 22 MB app is where
+    // dladdr cost ~0.1 ms per address. Bound the absolute cost per address.
+    check(timing.timed >= std::min<std::size_t>(1000, timing.symbols) && timing.fastMs / timing.timed < 0.02,
+          "first-seen addresses resolve in under 20 us each (10k in < 200 ms), demangling included");
+    check(timing.fastMs < timing.dladdrMs, "and faster than dladdr");
+    // The routing shapes classify as before through the table.
+    using PetariNative::CodeKind;
+    check(PetariNative::classifyCode(reinterpret_cast<std::uintptr_t>(&ZZTestStoreRange) + 5) == CodeKind::Host,
+          "an unlisted C entry point (os_cache DCStoreRange shape) is host code");
+    check(PetariNative::classifyCode(reinterpret_cast<std::uintptr_t>(&petari_test_entry_without_scope) + 5) == CodeKind::Host,
+          "a petari_* C entry point is host code");
+}
+
 int main() {
+    testSymbolLookup();
     const fs::path disc = makeDisc();
     const fs::path nandRoot = tempDir("nand");
 

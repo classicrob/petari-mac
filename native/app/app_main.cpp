@@ -21,6 +21,7 @@
 #include <petari/pipeline_startup.hpp>
 
 #include "host.hpp"
+#include <petari/host_allocation.hpp>
 
 extern "C" void petari_gx_pipeline_background_begin();
 
@@ -176,6 +177,9 @@ bool prepareKnownPipelines(SDL_Window* window) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // The allocation-site check's symbol table, before any game thread runs
+    // (building it on a first game allocation would be a startup hitch).
+    PetariNative::prepareAllocationSymbols();
     App::Paths paths;
     if (!resolvePaths(argc, argv, &paths)) {
         usage();

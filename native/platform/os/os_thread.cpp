@@ -93,10 +93,16 @@ bool gPreemptPending;
 // When gPreemptPending last became true (steady-clock ticks), 0 while clear.
 // For the baton monitor's forced preemption (lock-free read).
 std::atomic<std::int64_t> gPreemptSince{0};
+// Wakes the baton monitor when a preemption becomes pending, so a forced
+// preemption follows gPreemptAfterMs later instead of at its next 2 ms poll.
+std::atomic<semaphore_t> gMonitorWake{MACH_PORT_NULL};
 std::int64_t nowTicks();
 void setPreemptPending(bool pending) {
     if (pending && !gPreemptPending) {
         gPreemptSince.store(nowTicks(), std::memory_order_relaxed);
+        if (const semaphore_t wake = gMonitorWake.load(std::memory_order_relaxed); wake != MACH_PORT_NULL) {
+            semaphore_signal(wake);
+        }
     } else if (!pending) {
         gPreemptSince.store(0, std::memory_order_relaxed);
     }
@@ -801,6 +807,10 @@ struct BlockStats {
     int logged = 0;
     // Forced preemptions (busy-waits without OS calls) and refusals.
     std::uint64_t forced = 0, unsafe = 0;
+    // Their cost and latency: every attempt (the holder is suspended while its
+    // stack is checked) and the pending time at each forced preemption.
+    std::uint64_t attempts = 0;
+    double attemptUs = 0, maxAttemptUs = 0, forcedPendingMs = 0, maxForcedPendingMs = 0;
     std::vector<std::pair<std::string, std::uint64_t>> forcedSites;  // at most kMaxBlockSites
     std::string lastUnsafe;
     // A stretch in progress past the threshold (a hang is one that never ends).
@@ -933,7 +943,7 @@ bool sampleHolder(Stretch& stretch, mach_port_t port, const void* mainImage) {
 // (GameScene::init's wait for scenario wave data) never does, so the thread
 // that would end the wait (a DVD/ARAM stream thread made ready by an
 // interrupt) never runs: the Wii would have preempted the loop at the
-// interrupt. When a preemption has been pending for kPreemptAfterMs while the
+// interrupt. When a preemption has been pending for gPreemptAfterMs while the
 // holder executes, the monitor suspends the holder's host thread and takes
 // the CPU from it only at a safe point: every frame (PC, LR and the frame
 // chain up to the thread's start) lies in the executable and is game code or
@@ -942,9 +952,21 @@ bool sampleHolder(Stretch& stretch, mach_port_t port, const void* mainImage) {
 // thread then waits, suspended, in the ready queue like any preempted thread;
 // giveCpu resumes it. Elsewhere it is resumed and retried at the next poll,
 // and the refusal is reported.
+//
+// A preemption is pending only while a strictly higher-priority thread is
+// ready, and the Wii would have switched to it at once. The delay only lets a
+// holder that is about to make an OS call take the preemption itself.
+// JAudio2's audio thread (priority 2) needs about 8 handoffs per 17.5 ms DSP
+// block: at 4 ms each, stages with long OS-call-free game code (collision,
+// binder) held the DSP for about 30 blocks a second (choppy music). The
+// monitor sleeps until the deadline (setPreemptPending wakes it) rather than
+// polling, and backs off while the holder stays at unsafe points.
+// PETARI_PREEMPT_AFTER_MS overrides the delay.
 
 std::atomic<bool> gForcePreemption{true};
-std::atomic<double> gPreemptAfterMs{4.0};
+std::atomic<double> gPreemptAfterMs{0.5};
+constexpr double kMonitorPollMs = 2.0;
+constexpr double kFirstRetryMs = 0.25;  // after a refusal; doubles up to kMonitorPollMs
 
 struct TextRange {
     std::uintptr_t low = 0, high = 0;
@@ -1078,15 +1100,24 @@ void learnCode(const PreemptAttempt& attempt) {
 // library call, a renderer entry point) end at its next OS call by themselves.
 constexpr double kReportRefusalAfterMs = 100.0;
 
-void noteForcedPreemption(ForceResult result, const PreemptAttempt& attempt, double pendingMs) {
+void noteForcedPreemption(ForceResult result, const PreemptAttempt& attempt, double pendingMs, double attemptUs) {
+    BlockStats& st = blockStats();
+    std::unique_lock<std::mutex> guard(st.lock);
+    if (result != ForceResult::NotNeeded) {
+        ++st.attempts;
+        st.attemptUs += attemptUs;
+        st.maxAttemptUs = std::max(st.maxAttemptUs, attemptUs);
+    }
     if (result != ForceResult::Preempted && (result != ForceResult::Unsafe || pendingMs < kReportRefusalAfterMs)) {
         return;
     }
+    guard.unlock();
     std::string site = attempt.site != nullptr && !attempt.site->name.empty() ? attempt.site->name : "(unknown function)";
-    BlockStats& st = blockStats();
-    std::lock_guard<std::mutex> guard(st.lock);
+    guard.lock();
     if (result == ForceResult::Preempted) {
         ++st.forced;
+        st.forcedPendingMs += pendingMs;
+        st.maxForcedPendingMs = std::max(st.maxForcedPendingMs, pendingMs);
         std::uint64_t* seen = nullptr;
         for (auto& entry : st.forcedSites) {
             if (entry.first == site) {
@@ -1125,8 +1156,16 @@ void* batonMonitor(void*) {
     Dl_info self{};
     dladdr(reinterpret_cast<void*>(&publishHolder), &self);
     Stretch stretch;
+    double waitMs = kMonitorPollMs, retryMs = kFirstRetryMs;
+    std::int64_t retrySince = 0;  // the pending preemption the backoff belongs to
     while (true) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (const semaphore_t wake = gMonitorWake.load(std::memory_order_relaxed); wake != MACH_PORT_NULL) {
+            const auto ns = static_cast<long long>(waitMs * 1e6);
+            semaphore_timedwait(wake, mach_timespec_t{static_cast<unsigned>(ns / 1000000000), static_cast<clock_res_t>(ns % 1000000000)});
+        } else {
+            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(waitMs));
+        }
+        waitMs = kMonitorPollMs;
         std::lock_guard<std::mutex> quiesce(monitorQuiesce());
         const std::uint64_t poll = gMonitorPolls.fetch_add(1, std::memory_order_relaxed) + 1;
         if (std::FILE* chatter = gMonitorChatter.load(std::memory_order_acquire)) {
@@ -1150,14 +1189,29 @@ void* batonMonitor(void*) {
         if (!blocked) {
             const std::int64_t since = gPreemptSince.load(std::memory_order_relaxed);
             const double pendingMs = since != 0 ? ticksToMs(now - since) : 0.0;
-            if (running && since != 0 && gForcePreemption.load(std::memory_order_relaxed) &&
-                pendingMs >= gPreemptAfterMs.load(std::memory_order_relaxed)) {
+            const double afterMs = gPreemptAfterMs.load(std::memory_order_relaxed);
+            if (since != retrySince) {
+                retrySince = since;
+                retryMs = kFirstRetryMs;
+            }
+            if (running && since != 0 && gForcePreemption.load(std::memory_order_relaxed)) {
+                if (pendingMs < afterMs) {
+                    waitMs = afterMs - pendingMs;  // wake at the deadline
+                    continue;
+                }
                 PreemptAttempt attempt;
                 const ForceResult result = tryForcePreempt(attempt);
+                const double attemptUs = ticksToMs(nowTicks() - now) * 1000.0;
                 if (attempt.unknownCount != 0) {
-                    learnCode(attempt);  // retried at the next poll
+                    learnCode(attempt);  // then retried at once
                 }
-                noteForcedPreemption(result, attempt, pendingMs);
+                noteForcedPreemption(result, attempt, pendingMs, attemptUs);
+                if (result == ForceResult::NeedNames) {
+                    waitMs = 0;
+                } else if (result == ForceResult::Busy || result == ForceResult::Unsafe) {
+                    waitMs = retryMs;
+                    retryMs = std::min(retryMs * 2, kMonitorPollMs);
+                }
             }
             continue;
         }
@@ -1193,6 +1247,13 @@ void startBatonMonitor() {
     if (const char* force = std::getenv("PETARI_FORCED_PREEMPTION"); force != nullptr && force[0] == '0') {
         gForcePreemption.store(false);
     }
+    if (const char* ms = std::getenv("PETARI_PREEMPT_AFTER_MS"); ms != nullptr && std::atof(ms) >= 0) {
+        gPreemptAfterMs.store(std::atof(ms));
+    }
+    semaphore_t wake = MACH_PORT_NULL;
+    if (semaphore_create(mach_task_self(), &wake, SYNC_POLICY_FIFO, 0) == KERN_SUCCESS) {
+        gMonitorWake.store(wake);
+    }
     mainText();
     knownCode();
     PetariNative::HostAllocationScope hostAllocations;
@@ -1210,6 +1271,7 @@ void startBatonMonitor() {
             monitorQuiesce().unlock();
         },
         [] {
+            gMonitorWake.store(MACH_PORT_NULL);  // the child has no monitor, nor the semaphore
             blockStats().lock.unlock();
             monitorQuiesce().unlock();
         });
@@ -1517,11 +1579,16 @@ void dumpBatonBlocks(std::FILE* out) {
         std::fprintf(out, "[baton]   %llu more at other sites\n", static_cast<unsigned long long>(st.unattributed));
     }
     std::fprintf(out,
-                 "[baton] summary: %llu forced preemptions of game code running without OS calls (pending over %.0f ms)%s, %llu "
+                 "[baton] summary: %llu forced preemptions of game code running without OS calls (pending over %.2f ms)%s, %llu "
                  "refusals at unsafe points after %.0f ms pending\n",
                  static_cast<unsigned long long>(st.forced), gPreemptAfterMs.load(),
                  gForcePreemption.load() ? "" : " (forcing disabled: reported only)", static_cast<unsigned long long>(st.unsafe),
                  kReportRefusalAfterMs);
+    if (st.attempts != 0) {
+        std::fprintf(out, "[baton]   %llu attempts, %.1f us each on average (longest %.1f us); pending at a forced preemption %.2f ms on average, longest %.1f ms\n",
+                     static_cast<unsigned long long>(st.attempts), st.attemptUs / static_cast<double>(st.attempts), st.maxAttemptUs,
+                     st.forced != 0 ? st.forcedPendingMs / static_cast<double>(st.forced) : 0.0, st.maxForcedPendingMs);
+    }
     for (const auto& [site, count] : st.forcedSites) {
         std::fprintf(out, "[baton]   %llu x preempted in %s\n", static_cast<unsigned long long>(count), site.c_str());
     }

@@ -156,6 +156,24 @@ int main(int argc, char** argv) {
     setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "1", 1);
     aurora::gfx::require(PetariPipeline::globalPrecompile(), "explicit full preparation ignored");
     unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
+    for (const auto cores : {0u, 1u, 2u, 4u, 6u, 8u, 9u})
+        aurora::gfx::require(PetariPipeline::defaultStartupWorkerCount(cores) == 4,
+                             "small-core startup default must remain four");
+    for (const auto cores : {10u, 11u})
+        aurora::gfx::require(PetariPipeline::defaultStartupWorkerCount(cores) == 5,
+                             "startup default must use half the performance cores");
+    for (const auto cores : {12u, 14u, 24u, 128u})
+        aurora::gfx::require(PetariPipeline::defaultStartupWorkerCount(cores) == 6,
+                             "startup default must cap at six");
+    unsetenv("PETARI_PIPELINE_STARTUP_THREADS");
+    const auto automatic = PetariPipeline::defaultStartupWorkerCount(PetariPipeline::performanceCores());
+    aurora::gfx::require(PetariPipeline::startupWorkerCount() == automatic,
+                         "startup default did not use performance core count");
+    for (const auto value : {"", "0", "33", "invalid", "6junk"}) {
+        setenv("PETARI_PIPELINE_STARTUP_THREADS", value, 1);
+        aurora::gfx::require(PetariPipeline::startupWorkerCount() == automatic,
+                             "invalid startup override did not fall back to automatic");
+    }
     setenv("PETARI_PIPELINE_STARTUP_THREADS", "10", 1);
     aurora::gfx::require(PetariPipeline::startupWorkerCount() == 10, "startup tuning override ignored");
     setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "background", 1);

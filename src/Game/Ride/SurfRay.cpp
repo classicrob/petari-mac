@@ -26,6 +26,9 @@
 #include "Game/Util/SequenceUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
+#ifdef PETARI_NATIVE
+#include "Game/Util/NativeActorObserve.hpp"
+#endif
 
 void SurfRay_FORCE_MATCH_SDATA2() {
     (void)1.0f;
@@ -468,6 +471,11 @@ void SurfRay::control() {
     f32 rate = MR::min(mSurfSpeed * ::sBtkSpeedRate + ::sBtkSpeedMin, ::sBtkSpeedMax);
     MR::setBtkRate(this, rate);
     mActorJointCtrl->update();
+#ifdef PETARI_NATIVE
+    // state: 1 ridden, plus 2 on the water.
+    MR::Native::publishActor("Ray", mPosition, mFront, (mRider != nullptr ? 1 : 0) | (mInWater ? 2 : 0),
+                             mRider != nullptr ? PETARI_ACTOR_BOUND : PETARI_ACTOR_READY);
+#endif
 }
 
 void SurfRay::calcAndSetBaseMtx() {

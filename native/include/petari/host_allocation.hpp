@@ -76,4 +76,19 @@ enum class CodeKind {
     Unknown,      // no symbol
 };
 CodeKind classifyCode(std::uintptr_t returnAddress, std::string* name = nullptr);
+
+// Builds the executable's symbol table the site check and classifyCode use
+// (instead of slow dladdr). Call once at startup on a host thread, before the
+// game starts; until then lookups use dladdr. Safe to call again.
+void prepareAllocationSymbols();
+
+// Test hook: the executable symbol-table lookup the site check uses, checked
+// against dladdr (every `stride`-th symbol) and timed for `timed` distinct
+// first-seen addresses both ways.
+struct SymbolLookupCheck {
+    std::size_t symbols = 0, checked = 0, aliases = 0, mismatches = 0, timed = 0;
+    double fastMs = 0.0, dladdrMs = 0.0;
+    std::string firstMismatch;
+};
+SymbolLookupCheck checkSymbolLookup(std::size_t stride, std::size_t timed);
 }  // namespace PetariNative

@@ -21,28 +21,22 @@ let data = try Data(contentsOf: recordURL)
 guard let record = try JSONSerialization.jsonObject(with: data) as? [String: Any],
       let rawPid = record["pid"] as? Int, let appPath = record["app"] as? String,
       let app = NSRunningApplication(processIdentifier: pid_t(rawPid)),
-      app.bundleURL?.standardizedFileURL.path == URL(fileURLWithPath: appPath).standardizedFileURL.path,
-      NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
-    let front = NSWorkspace.shared.frontmostApplication
-    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-       let pid = json["pid"] as? Int {
-        let target = NSRunningApplication(processIdentifier: pid_t(pid))
-        FileHandle.standardError.write(Data(("target PID=\(pid) bundle=\(target?.bundleURL?.path ?? "nil") front PID=\(front?.processIdentifier ?? -1) bundle=\(front?.bundleURL?.path ?? "nil")\n").utf8))
-    }
-    fail("The recorded playtest app must be alive and frontmost")
+      app.bundleURL?.standardizedFileURL.path == URL(fileURLWithPath: appPath).standardizedFileURL.path else {
+    fail("The recorded playtest app must be alive with the expected bundle path")
 }
 let root = recordURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-for name in [".petari-app.lock", ".petari-sweep-lane.lock"] {
+for name in [".petari-app.lock"] {
     let owner = try String(contentsOf: root.appendingPathComponent("build/" + name + "/owner"), encoding: .utf8)
-    guard owner.trimmingCharacters(in: .whitespacesAndNewlines) == "cu-playtest" else { fail("Playtest must own app and sweep locks") }
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines) == "cu-playtest" else { fail("Playtest must own app lock") }
 }
 guard CGPreflightPostEventAccess() else { fail("macOS event-post permission is not available; no permission prompt was opened") }
 let source = CGEventSource(stateID: .hidSystemState)
 let eventLock = NSRecursiveLock()
 var held: [CGKeyCode] = []
-func log(_ action: String, key: CGKeyCode? = nil) {
+func log(_ action: String, key: CGKeyCode? = nil, details: [String: Any] = [:]) {
     var item: [String: Any] = ["utc":ISO8601DateFormatter().string(from: Date()), "action":action,
                                "pid":rawPid,"keys":names,"seconds":duration,"mechanism":"CGEvent"]
+    item.merge(details) { _, new in new }
     if let key = key { item["keycode"] = Int(key) }
     do {
         var bytes = try JSONSerialization.data(withJSONObject:item, options:[.sortedKeys]); bytes.append(10)
@@ -54,14 +48,36 @@ func sameApp() -> Bool {
     guard let current = NSRunningApplication(processIdentifier: pid_t(rawPid)) else { return false }
     return current.bundleURL?.standardizedFileURL.path == URL(fileURLWithPath: appPath).standardizedFileURL.path
 }
+func frontDetails() -> [String: Any] {
+    let front = NSWorkspace.shared.frontmostApplication
+    return ["front_pid": Int(front?.processIdentifier ?? -1),
+            "front_bundle_id": front?.bundleIdentifier ?? "nil",
+            "front_bundle_path": front?.bundleURL?.path ?? "nil"]
+}
 func focused() -> Bool {
-    return sameApp() && NSWorkspace.shared.frontmostApplication?.processIdentifier == pid_t(rawPid)
+    guard sameApp() else {
+        log("os-focus-target-invalid", details: frontDetails())
+        return false
+    }
+    let first = frontDetails()
+    if first["front_pid"] as? Int == rawPid { return true }
+    log("os-focus-mismatch-first", details: first)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+    let second = frontDetails()
+    guard sameApp(), second["front_pid"] as? Int == rawPid else {
+        log("os-focus-failure", details: second)
+        FileHandle.standardError.write(Data(("Focus failure: first=\(first), second=\(second)\n").utf8))
+        return false
+    }
+    log("os-focus-transient-recovered", details: second)
+    return true
 }
 func release() {
     eventLock.lock(); defer { eventLock.unlock() }
     for key in held.reversed() {
-        let frontmost = focused()
-        log(frontmost ? "os-key-up" : "os-key-up-focus-lost-cleanup", key:key)
+        let front = frontDetails()
+        let frontmost = sameApp() && front["front_pid"] as? Int == rawPid
+        log(frontmost ? "os-key-up" : "os-key-up-focus-lost-cleanup", key:key, details: front)
         // Cleanup goes only to the original process even if another app gained focus.
         if sameApp() { CGEvent(keyboardEventSource:source, virtualKey:key, keyDown:false)?.postToPid(pid_t(rawPid)) }
     }
@@ -75,6 +91,7 @@ for number in [SIGTERM, SIGINT, SIGHUP] {
     handler.setEventHandler { release(); log("os-key-hold-signal-\(number)"); exit(128 + number) }
     handler.resume(); signalSources.append(handler)
 }
+guard focused() else { fail("The recorded playtest app must be frontmost") }
 log("os-key-hold-start")
 defer { release() }
 for name in names {

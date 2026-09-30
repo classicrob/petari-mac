@@ -48,18 +48,31 @@ text = text.replace(old, '''extern "C" __attribute__((weak)) std::uint64_t petar
 extern "C" __attribute__((weak)) int petari_dc_stored_since(const void*, std::size_t, std::uint64_t) { return 0; }
 
 namespace {
+// Direct-mapped, fixed storage: one lookup/replacement per load, no allocations,
+// rehashes or sweeps. IDs remain the key: sharing a data pointer must not consume
+// another object's store notification, and freed addresses can be reused.
 struct PetariTexStoreSeen {
   std::uint64_t generation = 0;
-  std::chrono::steady_clock::time_point lastLoad;
+  u32 id = 0;
+  bool loaded = false;
 };
-std::unordered_map<u32, PetariTexStoreSeen> sPetariTexStoreSeen;
-std::uint64_t sPetariTexLoads = 0;
-// Aurora drops an object's cached upload after ObjectCacheIdleFrames (600) frames
-// unused. Remembering objects for longer than that at any frame rate above 1 fps
-// means a texture object seen for the first time has no cached upload that could
-// be stale, so it never needs a bump.
-constexpr auto kPetariTexForgetAfter = std::chrono::minutes(10);
+constexpr std::size_t kPetariTexStoreCapacity = 65536;
+PetariTexStoreSeen sPetariTexStoreSeen[kPetariTexStoreCapacity] = {};
+std::size_t sPetariTexStoreEntries = 0;
+PetariTexStoreSeen& petariTexStoreSlot(u32 id) {
+  auto& slot = sPetariTexStoreSeen[id % kPetariTexStoreCapacity];
+  if (slot.id == 0) ++sPetariTexStoreEntries;
+  return slot;
+}
 }  // namespace
+
+extern "C" void petari_gx_track_new_texobj(u32 id) {
+  PetariNative::HostAllocationScope petariHostAllocations;
+  petariTexStoreSlot(id) = PetariTexStoreSeen{0, id, false};
+}
+extern "C" std::size_t petari_gx_tex_store_entries() { return sPetariTexStoreEntries; }
+extern "C" std::size_t petari_gx_tex_store_capacity() { return kPetariTexStoreCapacity; }
+extern "C" std::size_t petari_gx_tex_store_bytes() { return sizeof(sPetariTexStoreSeen); }
 
 // Petari: returns true (and bumps texDataVersion) when the texture's bytes were stored
 // since this texture object was last loaded.
@@ -72,24 +85,19 @@ extern "C" bool petari_gx_revalidate_texobj(GXTexObj* obj_) {
     return false;
   }
   const std::uint64_t now = petari_dc_store_generation();
-  const std::uint64_t load = ++sPetariTexLoads;
-  const auto clock = std::chrono::steady_clock::now();
+  auto& slot = petariTexStoreSlot(obj->texObjId);
+  const bool remembered = slot.id == obj->texObjId;
+  // A remembered first load has no cached upload. An evicted object may still
+  // have one: query from generation zero, conservatively forcing a rehash if
+  // its pages were ever stored. Never silently accept an unknown baseline.
+  const std::uint64_t since = remembered ? slot.generation : 0;
   bool stale = false;
-  auto it = sPetariTexStoreSeen.find(obj->texObjId);
-  if (it == sPetariTexStoreSeen.end()) {
-    it = sPetariTexStoreSeen.emplace(obj->texObjId, PetariTexStoreSeen{now, clock}).first;
-  } else if (it->second.generation != now) {
+  if ((!remembered || slot.loaded) && since != now) {
     const u32 size = GXGetTexBufferSize(static_cast<u16>(obj->width()), static_cast<u16>(obj->height()), obj->format(),
                                         obj->has_mips(), obj->has_mips() ? 11 : 0);
-    stale = petari_dc_stored_since(obj->data, size, it->second.generation) != 0;
+    stale = petari_dc_stored_since(obj->data, size, since) != 0;
   }
-  it->second.generation = now;
-  it->second.lastLoad = clock;
-  if ((load & 0x3FFF) == 0) {
-    for (auto sweep = sPetariTexStoreSeen.begin(); sweep != sPetariTexStoreSeen.end();) {
-      sweep = clock - sweep->second.lastLoad > kPetariTexForgetAfter ? sPetariTexStoreSeen.erase(sweep) : std::next(sweep);
-    }
-  }
+  slot = PetariTexStoreSeen{now, obj->texObjId, true};
   if (stale) {
     ++obj->texDataVersion;
     static int sLogged = 0;
@@ -107,8 +115,11 @@ void GXLoadTexObj(GXTexObj* obj_, GXTexMapID id) {
 ''')
 if '#include <petari/host_allocation.hpp>' not in text:
     text = '#include <petari/host_allocation.hpp>\n' + text
-if '#include <unordered_map>' not in text:
-    text = text.replace('#include <algorithm>\n', '#include <algorithm>\n#include <chrono>\n#include <cstddef>\n#include <cstdint>\n#include <unordered_map>\n', 1)
+text = '#include <cstddef>\n#include <cstdint>\nextern \"C\" void petari_gx_track_new_texobj(unsigned int);\n' + text
+old = '  obj.texObjId = next_tex_obj_id();\n'
+if text.count(old) != 1:
+    raise SystemExit('Aurora texture initialization patch anchor mismatch')
+text = text.replace(old, old + '  petari_gx_track_new_texobj(obj.texObjId);\n')
 
 if '#include <cstdio>' not in text:
     text = text.replace('#include <algorithm>\n', '#include <algorithm>\n#include <cstdio>\n', 1)

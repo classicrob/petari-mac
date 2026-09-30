@@ -205,6 +205,19 @@ void MoviePlayerSimple::exePlaying() {
         s32 result = mPlayerWrapper->decode(0);
 #ifdef PETARI_NATIVE
         mPlayerWrapper->nativeNoteDecode(result);
+        // Video decodes on the game frame, audio is mixed as the DMA engine consumes it. The Wii's
+        // VI and DMA clocks are locked; natively they are independent, and the game can run
+        // below 59.94 fps for seconds (host load): video then falls behind the audio, which
+        // uses up the audio decoded ahead (THPSimplePlayerWrapper::nativeDecodeAudioAhead) and
+        // then mixes silence (story runs build/heap-headroom/story-1.log, story-4.log). When
+        // a decode leaves half the read-ahead or less queued, video is behind: decode the next
+        // frame now as well (its video frame is skipped), so video catches up with the audio
+        // and the audio stays fed. At full rate the queue stays near the read-ahead depth.
+        if (result == 0 &&
+            mPlayerWrapper->nativeQueuedAudioFrames() <= THPSimplePlayerWrapper::cNativeAudioAheadFrames / 2 &&
+            mMovie->mCurrentFrame + 2 < mPlayerWrapper->getTotalFrame()) {
+            mPlayerWrapper->nativeNoteDecode(mPlayerWrapper->decode(0));
+        }
 #endif
 
         switch (result) {

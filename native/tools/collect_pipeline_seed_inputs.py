@@ -12,6 +12,7 @@ import json
 import re
 import struct
 from pathlib import Path
+from pipeline_archive_dependencies import DependencyIndex
 
 LIMIT = 256 * 1024 * 1024
 
@@ -209,6 +210,7 @@ def collect(files, repo, stages, shared):
     source = (repo / 'src/Game/NameObj/NameObjFactory.cpp').read_text()
     aliases = dict(re.findall(r'\{\s*"([^"\n]+)"\s*,[^{}]*?,\s*"([^"\n]+)"\s*,?\s*\}', source))
     archive_cache = {}
+    dependencies = DependencyIndex(files, repo)
 
     def read(path):
         if path not in archive_cache:
@@ -228,7 +230,7 @@ def collect(files, repo, stages, shared):
 
     result = {'schema': 1, 'kind': 'pipeline-replay-inputs', 'files_root': str(files.resolve()),
               'config_seed_emitted': False, 'stages': {},
-              'limitations': ['Static aliases and conservative shared models only; dynamic actor dependencies may be absent.',
+              'limitations': ['Factory needs tables, planet dependencies and conservative actor/callback literal closure; constructed names and indirect calls may be absent.',
                               'All scenario layers included; this is broader than mission 1.',
                               'Particle/layout/procedural draws and runtime material mutations need additional emitters.',
                               'Manifest pairs must still be replayed through native J3D/GX config builder before producing a seed DB.']}
@@ -237,6 +239,7 @@ def collect(files, repo, stages, shared):
         require(scenario.is_file(), 'scenario archive missing: ' + stage)
         queue = [scenario] + ([stage_paths[stage]] if stage in stage_paths else [])
         selected, reasons, objects, unresolved = set(), {}, set(), set()
+        unresolved_callbacks = set()
 
         def add(path, reason):
             reasons.setdefault(str(path.relative_to(files)), set()).add(reason)
@@ -248,6 +251,9 @@ def collect(files, repo, stages, shared):
             for path in matches:
                 add(path, reason)
             return bool(matches)
+
+        for path, reason in dependencies.shared:
+            add(path, reason)
 
         for path in sorted(object_paths.values()):
             name = path.stem
@@ -275,7 +281,7 @@ def collect(files, repo, stages, shared):
                 continue
             selected.add(path)
             for entry, name, kind, payload in read(path):
-                if kind == 'table':
+                if kind == 'table' and path.relative_to(files).parts[0] == 'StageData':
                     rows = payload
                     for row in rows:
                         for value in row.values():
@@ -286,6 +292,11 @@ def collect(files, repo, stages, shared):
                         actor = row.get(field_hash('name'))
                         if actor:
                             objects.add(actor)
+                            extra, missing = dependencies.resolve(actor)
+                            unresolved_callbacks.update(missing)
+                            for child, evidence in extra:
+                                for reason in evidence:
+                                    add(child, reason)
                             if not add_object(actor, 'placement: ' + actor):
                                 unresolved.add(actor)
                 elif kind == 'model':
@@ -296,7 +307,9 @@ def collect(files, repo, stages, shared):
             'archives': [{'path': str(p.relative_to(files)), 'reasons': sorted(reasons.get(str(p.relative_to(files)), {'stage root'}))}
                          for p in sorted(selected)],
             'placed_names': sorted(objects), 'unresolved_placed_names': sorted(unresolved),
+            'unresolved_archive_callbacks': sorted(unresolved_callbacks),
             'nonmodel_emitters_needed': sorted(nonmodels), 'models': sorted(models, key=lambda m: (m['archive'], m['entry']))}
+    result['dependency_source_sha256'] = dict(sorted(dependencies.sources.items()))
     return result
 
 

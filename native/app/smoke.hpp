@@ -209,6 +209,17 @@ struct Observation {
     // Mario itself uses this frame (Mario::getGravityVec), for landing traces.
     float shadowX = 0.0f, shadowY = 0.0f, shadowZ = 0.0f;
     float marioGravityX = 0.0f, marioGravityY = 0.0f, marioGravityZ = 0.0f;
+    // For the mechanics checks (smoke_mechanics.cpp), with playerValid: MarioActor::mPlayerMode
+    // (0 normal, 1 invincible, 3 ice, 4 bee, 5 spring, 6 boo, 7 red star), Mario's current
+    // status (MarioState.hpp: 6 swim, 31 skate, ...), and a bee stuck to a honeycomb wall.
+    int playerMode = -1;
+    int marioStatus = -1;
+    bool beeWallWalk = false;
+    // Player locks, with playerValid (the stage script's lock-up probe): MR::isOffPlayerControl,
+    // MR::isPlayerInRush (bound to an actor: rides, cannons, race starts) and that actor's name.
+    bool playerOffControl = false;
+    bool playerInRush = false;
+    std::string rushActor;
 };
 
 // Actor flags (petari/actor_observe.hpp).
@@ -253,6 +264,11 @@ struct Step {
     float pointerU = 0.0f;
     float pointerV = 0.0f;
     bool requestQuit = false;  // press the power button (once, when the result is decided)
+    // Test-only player warp (stage script, PETARI_STAGE_WARP): to warpName (a GeneralPos, via
+    // MR::setPlayerPos) when not empty, else to (warpX, warpY, warpZ) via MR::setPlayerPosAndWait.
+    bool warp = false;
+    std::string warpName;
+    float warpX = 0.0f, warpY = 0.0f, warpZ = 0.0f;
 };
 
 // Assisted: the script's goal was reached, but with physical gameplay input
@@ -430,8 +446,12 @@ namespace PetariNative::App::Smoke {
 // recorded since the previous call. Main thread, at the seam, while it holds
 // the CPU (before the seam releases it).
 Observation observeGame(bool wantPlayer);
+// Applies a Step's warp (SDK side, main thread at the seam while it holds the CPU). False when
+// there is no Mario to move.
+bool warpPlayer(const Step& step);
 // collision_probe.cpp (SDK side): PETARI_COLLISION_PROBE, a read-only map
 // collision survey for offline route planning; stepped by observeGame.
 bool collisionProbeActive();
-void stepCollisionProbe(const std::string& stage, bool sceneReady);
+// PETARI_COLLISION_PROBE_NEAR="x,z,r": start only once Mario (playerValid) is within r of (x, z).
+void stepCollisionProbe(const std::string& stage, bool sceneReady, bool playerValid, float playerX, float playerZ);
 }  // namespace PetariNative::App::Smoke

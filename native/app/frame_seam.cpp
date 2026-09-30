@@ -329,6 +329,9 @@ void runSmoke(Driver* driver) {
     for (const Smoke::Press& press : step.presses) {
         Events::pressButton(static_cast<int>(press.button), press.down);
     }
+    if (step.warp && !Smoke::warpPlayer(step)) {
+        std::fprintf(stderr, "PETARI SMOKE: warp requested with no player to move\n");
+    }
     Smoke::heartbeat(driver->frame(), driver->phase());
     if (step.requestQuit) {
         // A route that passed while looking up layout panes/animations or sounds that do

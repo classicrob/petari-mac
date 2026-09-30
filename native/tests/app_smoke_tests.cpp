@@ -2003,10 +2003,17 @@ void testGoodEggMission() {
     died.frames(egg(-3265, -13081, -15332), 5);
     Observation dead = egg(-3265, -13081, -15332);
     dead.playerDead = true;
+    died.frames(dead, 20);
+    check(died.driver.result() == Result::Running && died.logged("death 1"), "a first death waits for the restart");
+    Observation respawn = egg(-3265, -13081, -15332);
+    died.frames(respawn, 31);
+    check(died.logged("restarted at") && died.driver.result() == Result::Running, "the restart is noticed, the plan starts over");
     died.frame(dead);
-    check(died.driver.result() == Result::Fail && died.driver.reason().find("Mario died") != std::string::npos &&
+    died.frames(respawn, 31);
+    died.frame(dead);
+    check(died.driver.result() == Result::Fail && died.driver.reason().find("Mario died 3 times") != std::string::npos &&
               died.driver.reason().find("synthetic stage-fixture entry") != std::string::npos,
-          "death FAILs and the synthetic entry is named");
+          "a third death FAILs and the synthetic entry is named");
 
     // Not moving at all: recoveries (jumps and sidesteps), then FAIL.
     EggRun stuck;
@@ -2161,14 +2168,14 @@ void testGoodEggObjectives() {
     // Fruit Peel: the head down (READY) and close: spin, then jump onto it.
     EggRun hammer;
     toGoodEgg(hammer);
-    // (At the Fruit Peel route's end: the spiral comes first.)
-    Observation down = actor(egg(-17710, -10818, -9431), "HammerHead", -17600, -10800, -9440, 0,
+    // (At the Fruit Peel route's point 27, where it stops: the spiral comes first.)
+    Observation down = actor(egg(-18240, -10822, -10449), "HammerHead", -18140, -10800, -10420, 0,
                              Smoke::kActorReady | Smoke::kActorHostile);
     hammer.frames(down, 2);
     check(hammer.count(Button::Spin, true) == 1 && hammer.logged("jump onto the Hammer Head"),
           "Hammer Head's head down: spin and jump onto it");
     // Up again (not READY): stand off near its base, no jumping at it.
-    Observation up = actor(egg(-17710, -10818, -9431), "HammerHead", -17716, -10500, -9460, 0, Smoke::kActorHostile);
+    Observation up = actor(egg(-18240, -10822, -10449), "HammerHead", -17716, -10500, -9460, 0, Smoke::kActorHostile);
     const int jumps = hammer.count(Button::A, true);
     hammer.frames(up, 60);
     check(hammer.count(Button::A, true) == jumps && hammer.logged("going to the Hammer Head's baiting spot"),

@@ -5,6 +5,10 @@
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_error.h>
+#include <SDL3/SDL_hints.h>
+#include <CoreAudio/CoreAudio.h>
+#include <cmath>
+#include <string>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -35,7 +39,38 @@ std::atomic<bool> failed{false};
 // block. The producer owns AI::pull and keeps the ring at a target level; the
 // realtime SDL callback only drains it. See paced_ring.hpp for why pacing is
 // level-driven (locked to the device clock) rather than wall-clock-driven.
-constexpr std::uint64_t prebuffer = 2048;
+// Latency settings. The ring's base level (prebuffer, the lowest target) is the
+// cushion for elastic DMA waits and host stalls; the device adds SDL's
+// AudioQueue buffers (sample frames x buffer count) and CoreAudio's own latency.
+// Measured (PETARI_AUDIO_DIAG "[audio] latency", this Mac): with 64 ms of ring and
+// SDL's default 1024-frame device buffer, heard audio trailed AI DMA by about
+// 75 ms (ring) + up to 70 ms (3 AudioQueue buffers at 44.1 kHz) + 27 ms
+// (CoreAudio) = ~160-170 ms. Defaults now: 48 ms of ring and 256-frame device
+// buffers (6 x 5.8 ms = 35 ms of AudioQueue), ~110 ms in all. Kept only because
+// it passed the real-time pacing scenarios (40 ms producer stall, the game
+// answering 10 ms late, 40 ms game stalls) quiet and under 16 CPU spinners with
+// no underrun or replay, as the old setting did (native_audio_pacing,
+// PACING_PREBUFFER/PACING_BURST; build/heap-headroom/latency-matrix*). A smaller
+// ring (32 ms) failed them. PETARI_AUDIO_BUFFER_MS and PETARI_AUDIO_DEVICE_FRAMES
+// override these (PETARI_AUDIO_BUFFER_MS=64 PETARI_AUDIO_DEVICE_FRAMES=1024 is
+// the previous setting). The elastic wait limit is what the ring can cover: its
+// base less one device request and a 3 ms margin, at most 40 ms.
+struct LatencyConfig {
+    double bufferMs = 48.0;
+    int deviceFrames = 256;
+};
+LatencyConfig latencyConfig() {
+    LatencyConfig config;
+    if (const char* value = std::getenv("PETARI_AUDIO_BUFFER_MS"); value != nullptr && std::atof(value) >= 8.0) {
+        config.bufferMs = std::atof(value);
+    }
+    if (const char* value = std::getenv("PETARI_AUDIO_DEVICE_FRAMES"); value != nullptr && std::atoi(value) > 0) {
+        config.deviceFrames = std::atoi(value);
+    }
+    return config;
+}
+std::uint64_t prebuffer = 1536;  // set by start() from latencyConfig()
+double waitLimitMs = 0.0;       // set by start()
 PetariNative::AudioSDL::Detail::PacedRing ring;
 std::atomic<bool> stopProducer{false};
 std::thread producer;
@@ -249,6 +284,67 @@ void stop(void*) {
     initialized = false;
     if (failed.exchange(false)) std::fprintf(stderr, "SDL audio failed to queue samples\n");
 }
+// CoreAudio's own output latency for the default device, in device frames.
+struct HalLatency {
+    bool known = false;
+    double rate = 0.0;
+    UInt32 deviceLatency = 0, safetyOffset = 0, streamLatency = 0, ioBuffer = 0;
+};
+HalLatency queryHalLatency() {
+    HalLatency hal;
+    AudioObjectPropertyAddress address{kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal,
+                                       kAudioObjectPropertyElementMain};
+    AudioDeviceID deviceId = 0;
+    UInt32 size = sizeof(deviceId);
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, nullptr, &size, &deviceId) != noErr || deviceId == 0) {
+        return hal;
+    }
+    const auto get = [&](AudioObjectPropertySelector selector, AudioObjectPropertyScope scope, void* out, UInt32 bytes) {
+        AudioObjectPropertyAddress a{selector, scope, kAudioObjectPropertyElementMain};
+        UInt32 n = bytes;
+        return AudioObjectGetPropertyData(deviceId, &a, 0, nullptr, &n, out) == noErr;
+    };
+    Float64 rate = 0.0;
+    hal.known = get(kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, &rate, sizeof(rate));
+    hal.rate = rate;
+    get(kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput, &hal.deviceLatency, sizeof(UInt32));
+    get(kAudioDevicePropertySafetyOffset, kAudioObjectPropertyScopeOutput, &hal.safetyOffset, sizeof(UInt32));
+    get(kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal, &hal.ioBuffer, sizeof(UInt32));
+    AudioStreamID streams[8];
+    AudioObjectPropertyAddress streamsAddress{kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain};
+    UInt32 streamBytes = sizeof(streams);
+    if (AudioObjectGetPropertyData(deviceId, &streamsAddress, 0, nullptr, &streamBytes, streams) == noErr && streamBytes >= sizeof(AudioStreamID)) {
+        AudioObjectPropertyAddress latencyAddress{kAudioStreamPropertyLatency, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+        UInt32 n = sizeof(UInt32);
+        AudioObjectGetPropertyData(streams[0], &latencyAddress, 0, nullptr, &n, &hal.streamLatency);
+    }
+    return hal;
+}
+
+// One line at start (PETARI_AUDIO_DIAG): every stage between AI DMA and the
+// speaker. The ring's live level is in the [audio] reports; its base and the
+// largest device request bound it.
+void reportLatency(std::uint32_t rate, const LatencyConfig& latency) {
+    SDL_AudioSpec deviceSpec{};
+    int sampleFrames = 0;
+    SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(device), &deviceSpec, &sampleFrames);
+    // SDL_coreaudio.m: 3 AudioQueue buffers, or ceil(15 ms / buffer) * 2 for buffers under 15 ms.
+    const double bufferMs = deviceSpec.freq > 0 ? sampleFrames * 1000.0 / deviceSpec.freq : 0.0;
+    const int queueBuffers = bufferMs <= 0.0 ? 0 : bufferMs < 15.0 ? static_cast<int>(std::ceil(15.0 / bufferMs)) * 2 : 3;
+    const HalLatency hal = queryHalLatency();
+    const double halMs = hal.known && hal.rate > 0.0
+                             ? (hal.deviceLatency + hal.safetyOffset + hal.streamLatency + hal.ioBuffer) * 1000.0 / hal.rate
+                             : -1.0;
+    const double ringBaseMs = prebuffer * 1000.0 / rate;
+    std::fprintf(stderr,
+                 "[audio] latency: ring base %llu frames (%.1f ms) + device requests; SDL device %d Hz, %d frames x %d AudioQueue buffers "
+                 "= %.1f ms; CoreAudio device latency %u + safety %u + stream %u + IO buffer %u frames at %.0f Hz = %.1f ms; "
+                 "elastic wait limit %.1f ms (PETARI_AUDIO_BUFFER_MS %.0f, PETARI_AUDIO_DEVICE_FRAMES %d)\n",
+                 static_cast<unsigned long long>(prebuffer), ringBaseMs, deviceSpec.freq, sampleFrames, queueBuffers, bufferMs * queueBuffers,
+                 hal.deviceLatency, hal.safetyOffset, hal.streamLatency, hal.ioBuffer, hal.rate, halMs, waitLimitMs,
+                 latency.bufferMs, latency.deviceFrames);
+}
+
 void start(std::uint32_t rate, void*) {
     PetariNative::HostAllocationScope host;
     // Opening the CoreAudio device waits ~75 ms on SDL's device thread: do it
@@ -265,6 +361,12 @@ void start(std::uint32_t rate, void*) {
         std::abort();
     }
     initialized = true;
+    const LatencyConfig latency = latencyConfig();
+    prebuffer = static_cast<std::uint64_t>(latency.bufferMs * rate / 1000.0 + 0.5);
+    {
+        // Read when SDL opens the physical device (SDL_GetDefaultSampleFramesFromFreq).
+        SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, std::to_string(latency.deviceFrames).c_str());
+    }
     ring.reset(prebuffer);
     stopProducer.store(false);
     const char* diagValue = std::getenv("PETARI_AUDIO_DIAG");  // unset, empty, or leading '0' = off
@@ -273,7 +375,17 @@ void start(std::uint32_t rate, void*) {
     lastCallbackUs = 0;
     SDL_AudioSpec spec{SDL_AUDIO_S16, 2, static_cast<int>(rate)};
     device = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, fill, nullptr);
-    if (device) producer = std::thread(produce, rate);
+    if (device) {
+        // The elastic wait limit from the device's actual request size.
+        SDL_AudioSpec deviceSpec{};
+        int sampleFrames = 0;
+        SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(device), &deviceSpec, &sampleFrames);
+        const double requestMs = deviceSpec.freq > 0 ? sampleFrames * 1000.0 / deviceSpec.freq : 25.0;
+        const double waitMs = std::clamp(latency.bufferMs - requestMs - 3.0, 0.0, 40.0);
+        PetariNative::Platform::Audio::setRegistrationWaitLimit(static_cast<std::uint32_t>(waitMs * 1000.0));
+        waitLimitMs = waitMs;
+        producer = std::thread(produce, rate);
+    }
     if (device && diagnostics) {
         reporterStop = false;
         reporter = new std::thread(report);
@@ -284,6 +396,9 @@ void start(std::uint32_t rate, void*) {
         std::abort();
     }
     running.store(true);
+    if (diagnostics) {
+        reportLatency(rate, latency);
+    }
 }
 }
 

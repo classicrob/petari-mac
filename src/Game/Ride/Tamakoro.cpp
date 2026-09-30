@@ -19,6 +19,9 @@
 #include "Game/Util/SceneUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
 #include <revolution/mtx.h>
+#ifdef PETARI_NATIVE
+#include "Game/Util/NativeActorObserve.hpp"
+#endif
 #include <revolution/wpad.h>
 
 void Tamakoro_FORCE_MATCH_SDATA2() {
@@ -190,6 +193,13 @@ void Tamakoro::control() {
     }
     mBgmCtrl->control(speed, mControlDisabled, ::sBgmStateChangeFrames);
     mControlDisabled = false;
+#ifdef PETARI_NATIVE
+    {
+        const bool riding = !isNerve(GET_NERVE(Tamakoro, TamakoroNrvStandByBind)) && !isNerve(GET_NERVE(Tamakoro, TamakoroNrvStandByTutorial)) &&
+                            !isNerve(GET_NERVE(Tamakoro, TamakoroNrvBindEnd));
+        MR::Native::publishActor("StarBall", mPosition, -mGravity, riding ? 1 : 0, riding ? PETARI_ACTOR_BOUND : PETARI_ACTOR_READY);
+    }
+#endif
 }
 
 void Tamakoro::calcAndSetBaseMtx() {

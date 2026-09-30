@@ -126,6 +126,9 @@ THPSimplePlayerWrapper::THPSimplePlayerWrapper(const char* pName) : NerveExecuto
     mRampCount = 0;
     mAudioDecodeIndex = 0;
     mAudioOutputIndex = 0;
+#ifdef PETARI_NATIVE
+    mNativeAudioAhead = 0;
+#endif
     _2F0 = 0;
     _2F4 = 1.0f;
     _2F8 = 0.0f;
@@ -366,6 +369,9 @@ bool THPSimplePlayerWrapper::loadStop() {
         mNextDecodeIndex = 0;
         mAudioDecodeIndex = 0;
         mAudioOutputIndex = 0;
+#ifdef PETARI_NATIVE
+        mNativeAudioAhead = 0;
+#endif
         mCurrentVolume = mTargetVolume;
         mRampCount = 0;
         _310 = 0;
@@ -386,6 +392,24 @@ s32 THPSimplePlayerWrapper::decode(s32 audio) {
 #endif
     if (isValid) {
 #ifdef PETARI_NATIVE
+        nativeDecodeAudioAhead(audio);
+        if (mAudioExist && mNativeAudioAhead > 0) {
+            // This frame's audio is already queued: decode its video only.
+            u32 compSizes[PetariNative::Movie::kThpMaxComponents];
+            nativeValidateFrameAt(mNextDecodeIndex, audio, compSizes, false);  // video validated ahead
+            u8* ptr = mReadBuffer[mNextDecodeIndex].ptr + mFrameComp.numComponents * 4 + 8;
+            for (s32 i = 0; i < mFrameComp.numComponents; i++) {
+                if (mFrameComp.frameComp[i] == 0 && !videoDecode(ptr)) {
+                    return 1;
+                }
+                ptr += compSizes[i];
+            }
+            mNativeAudioAhead--;
+            mReadBuffer[mNextDecodeIndex].isValid = 0;
+            mNextDecodeIndex = getNextBuffer(mNextDecodeIndex);
+            checkPrefetch();
+            return 0;
+        }
         // Same early returns as below, taken before validation so a frame waiting
         // for audio buffer space is not re-validated on every call.
         if (mAudioExist) {
@@ -1110,6 +1134,9 @@ void THPSimplePlayerWrapper::mixAudio(s16* pDest, u32 sample) {
 void THPSimplePlayerWrapper::resetAudioParams() {
     mAudioDecodeIndex = 0;
     mAudioOutputIndex = 0;
+#ifdef PETARI_NATIVE
+    mNativeAudioAhead = 0;
+#endif
     MR::zeroMemory(mAudioBuffer, sizeof(mAudioBuffer));
 
     for (s32 i = 0; i < 20; i++) {
@@ -1201,10 +1228,16 @@ void THPSimplePlayerWrapper::nativeCheckFrameRead(u32 offset, s32 size) const {
 }
 
 void THPSimplePlayerWrapper::nativeValidateFrame(const u8* pFrame, s32 audio, u32* pCompSizes) {
+    (void)pFrame;  // the frame in mReadBuffer[mNextDecodeIndex]
+    nativeValidateFrameAt(mNextDecodeIndex, audio, pCompSizes, true);
+}
+
+void THPSimplePlayerWrapper::nativeValidateFrameAt(s32 bufferIndex, s32 audio, u32* pCompSizes, bool validateVideo) {
     const PetariNative::Movie::ThpComponents& components = mNativeComponents;
-    const s32 frame = mReadBuffer[mNextDecodeIndex].frameNumber;
+    const u8* pFrame = mReadBuffer[bufferIndex].ptr;
+    const s32 frame = mReadBuffer[bufferIndex].frameNumber;
     PetariNative::Movie::ThpFrame layout;
-    if (const char* pError = PetariNative::Movie::parseThpFrame(pFrame, mNativeReadSize[mNextDecodeIndex], components,
+    if (const char* pError = PetariNative::Movie::parseThpFrame(pFrame, mNativeReadSize[bufferIndex], components,
                                                                 &layout)) {
         nativeFail(pError, frame);
     }
@@ -1216,6 +1249,9 @@ void THPSimplePlayerWrapper::nativeValidateFrame(const u8* pFrame, s32 audio, u3
         pCompSizes[i] = size;
 
         if (components.kinds[i] == PetariNative::Movie::kThpComponentVideo) {
+            if (!validateVideo) {
+                continue;
+            }
             HostDecodeScope scope;
             pError = PetariNative::Movie::validateThpVideoComponent(pComp, size, components.video.xSize,
                                                                     components.video.ySize);
@@ -1279,6 +1315,52 @@ void THPSimplePlayerWrapper::nativeNoteDecode(s32 result) {
     }
 }
 
+void THPSimplePlayerWrapper::nativeDecodeAudioAhead(s32 audio) {
+    if (!mAudioExist || audio < 0 || audio >= static_cast< s32 >(mAudioInfo.sndNumTracks)) {
+        return;
+    }
+    while (mNativeAudioAhead < cNativeAudioAheadFrames) {
+        s32 index = mNextDecodeIndex;
+        for (s32 i = 0; i < mNativeAudioAhead; i++) {
+            index = getNextBuffer(index);
+        }
+        // The drive thread publishes read buffers under the interrupt lock; frames are read and
+        // decoded in the same ring order, so the ahead frames are the next ones to play.
+        BOOL level = OSDisableInterrupts();
+        const bool isRead = mReadBuffer[index].isValid == true;
+        OSRestoreInterrupts(level);
+        if (!isRead || mAudioBuffer[mAudioDecodeIndex].validSample != 0) {
+            return;  // not read yet, or no free audio slot
+        }
+        u32 compSizes[PetariNative::Movie::kThpMaxComponents];
+        nativeValidateFrameAt(index, audio, compSizes, true);  // the whole frame, as decode() did, video first
+        const u8* ptr = mReadBuffer[index].ptr + mFrameComp.numComponents * 4 + 8;
+        for (s32 i = 0; i < mFrameComp.numComponents; i++) {
+            if (mFrameComp.frameComp[i] == 1) {
+                const u32 sample = THPAudioDecode(mAudioBuffer[mAudioDecodeIndex].buffer, const_cast< u8* >(ptr) + compSizes[i] * audio, 0);
+                level = OSDisableInterrupts();
+                mAudioBuffer[mAudioDecodeIndex].validSample = sample;
+                mAudioBuffer[mAudioDecodeIndex].curPtr = mAudioBuffer[mAudioDecodeIndex].buffer;
+                OSRestoreInterrupts(level);
+                mAudioDecodeIndex = mAudioDecodeIndex + 1 >= 20 ? 0 : mAudioDecodeIndex + 1;
+            }
+            ptr += compSizes[i];
+        }
+        mNativeAudioAhead++;
+    }
+}
+
+s32 THPSimplePlayerWrapper::nativeQueuedAudioFrames() const {
+    if (!mAudioExist) {
+        return 20;  // no audio to keep fed
+    }
+    s32 queued = 0;
+    for (s32 i = 0; i < 20; i++) {
+        queued += mAudioBuffer[i].validSample != 0;
+    }
+    return queued;
+}
+
 void THPSimplePlayerWrapper::nativeReportAv(bool final) {
     if (!isAudioDiag() || !mNativeAvActive || mNativeAvStart == 0) {
         return;
@@ -1288,10 +1370,7 @@ void THPSimplePlayerWrapper::nativeReportAv(bool final) {
     const f64 videoSeconds = frameRate > 0.0f ? mNativeAvVideoFrames / static_cast< f64 >(frameRate) : 0.0;
     const u32 rate = mAudioExist ? mAudioInfo.sndFrequency : 0;
     const f64 audioSeconds = rate != 0 ? mNativeAvAudioSamples / static_cast< f64 >(rate) : 0.0;
-    s32 queued = 0;
-    for (s32 i = 0; i < 20; i++) {
-        queued += mAudioBuffer[i].validSample != 0;
-    }
+    const s32 queued = nativeQueuedAudioFrames();
     OSReport("[movie-av] %s %s at %.2f s: video %u frames (+%u) = %.3f s; audio %u samples (+%u) = %.3f s; drift %+.1f ms; "
              "queued audio %d frames; decode waits for audio +%u; silence +%u samples\n",
              mNativeName != nullptr ? mNativeName : "?", final ? "end" : "play", OSTicksToMilliseconds(now - mNativeAvStart) / 1000.0,

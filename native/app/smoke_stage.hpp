@@ -38,6 +38,8 @@
 #include <vector>
 
 #include "smoke.hpp"
+#include "smoke_mechanics.hpp"
+#include <memory>
 
 namespace PetariNative::App::Smoke {
 
@@ -45,6 +47,16 @@ struct StageConfig {
     std::string stage;
     int scenario = 0;
     unsigned long tailFrames = 600;
+    // PETARI_MECHANIC: check this mechanic (smoke_mechanics.hpp) instead of the generic exercise.
+    std::string mechanic;
+    // PETARI_STAGE_PROBE=1: after the pause checks, a lock-up probe (idle 20 s logging the player's
+    // lock state, three spaced A taps, B, Plus twice, then the stick) before the idle tail.
+    bool probe = false;
+    // PETARI_STAGE_WARP: once gameplay is ready, warp Mario (test-only) to "x,y,z" or to
+    // "name:<GeneralPos>" (e.g. a race start), then wait for gameplay to be ready again.
+    bool warp = false;
+    std::string warpName;
+    float warpX = 0.0f, warpY = 0.0f, warpZ = 0.0f;
 };
 
 // PETARI_SMOKE=stage: reads PETARI_STAGE, PETARI_SCENARIO and
@@ -67,7 +79,7 @@ public:
     bool wantsPlayer() const { return mPhase != Phase::Boot || mBoot.wantsPlayer(); }
 
 private:
-    enum class Phase { Boot, Load, Ready, Idle, Walk, Jump, Spin, Camera, PauseOpen, Paused, PauseClose, Tail, Done };
+    enum class Phase { Boot, Load, Ready, Warp, Idle, Walk, Jump, Spin, Camera, PauseOpen, Paused, PauseClose, Probe, Tail, Done };
     struct Check {
         std::string name;
         const char* status;  // "ok", "warn" or "fail"
@@ -103,6 +115,8 @@ private:
     unsigned long mReadyFrames = 0;
     unsigned long mTalkTapAt = 0;
     unsigned long mTalkFrames = 0;
+    unsigned long mLockFrames = 0;
+    bool mWarped = false;             // the warp was requested (once per run)   // consecutive exercise frames with player control off
     unsigned long mLoadStartFrame = 0, mReadyFrame = 0;
     int mStep = 0;                   // walk direction / camera direction index
     float mStartX = 0, mStartY = 0, mStartZ = 0;
@@ -116,6 +130,7 @@ private:
     unsigned long mPauseOpenCount = 0, mPauseCloseCount = 0;
     unsigned long mPhysicalBase = 0;  // physical gameplay inputs when the stage was entered
     unsigned long mPhysicalSeen = 0;
+    std::unique_ptr<MechanicRun> mMechanic;  // with StageConfig::mechanic, after Ready
 };
 
 }  // namespace PetariNative::App::Smoke

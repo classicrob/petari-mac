@@ -5,7 +5,16 @@ into Aurora's existing skip-draw path while a pipeline is pending. This can
 hide geometry or effects for an unbounded number of frames under load; it is
 an experiment requiring visual review, not a correctness-preserving default.
 `PETARI_PIPELINE_THREADS=1..4` sets the compile pool. The automatic size is performance cores minus four,
-clamped to 1–4 workers (four on the measurement M4 Max). Requested jobs
+clamped to 1–4 workers (four on the measurement M4 Max). Full startup preparation
+uses `clamp(performance_cores / 2, 4, 6)` workers: six on the 12-performance-core
+M4 Max. `PETARI_PIPELINE_STARTUP_THREADS` overrides that startup count (from the
+normal pool size through 32); invalid values use the automatic startup count.
+After preparation or skip, extra workers finish their current job and retire to
+the normal pool. Background-only and stage-only modes use the normal pool.
+The isolated 4/6/8/10-worker comparison found six and eight effectively tied at
+160 seconds, versus 197 seconds for four, with better progress p99 at six.
+These are single trials with differing host loads, not a universal scaling law.
+Requested jobs
 precede background preparation; Blocking draws also move ahead of speculative
 stage jobs already in the requested queue. An in-flight compile is not cancelled.
 The pool overlaps known work, but cannot parallelize serial discovery of new
@@ -615,3 +624,71 @@ stage-gate expiries or pipeline resolves logged at 10 ms or longer. Gameplay
 p99 was 18.0–18.4 ms, and progress-loop outliers remained: this is not locked 60.
 See `VALIDATION.md` in that artifact directory for exact metrics, cache caveats,
 screenshots, and the earlier run named `skip` that did not exercise skipping.
+
+### Factory dependency closure and PASS-only coverage repair
+
+The collector follows NameObjFactory's one-to-many extra-archive table and
+callback registrations, PlanetMapCreator's unique-child table, conservative
+literal dependencies in selected actor/callback source units, recursively
+constructed child classes, and StationedFileInfo shared resources. Source
+file/line reasons and SHA-256 provenance are retained. Names resolve to canonical
+disc spelling. Only StageData scenario/zone tables act as placement data; shared
+registries must not pull every listed planet into every stage. Conditional
+branches are unioned. Constructed names, indirect calls and arbitrary runtime
+material mutations remain explicit gaps.
+
+close_pipeline_seed_gaps.py creates an unpublished candidate from that input
+manifest and a coverage-audit snapshot. Observed additions require retained
+unassisted PASS smoke results, exit 0, no timeout or renderer/crash/heap errors,
+and an unchanged source log. PASS_WARN with a clean renderer is eligible; failed
+and NON_GAMEPLAY entries are not. The helper retains per-run validation and
+cache/log/result hashes rather than labeling observations as offline replay.
+
+The closure-4 candidate repaired all ten previously sub-95% stages to 100% of
+recorded stage/global observations using 108 eligible runs. It adds 484 globally
+missing observed configs (8,713 → 9,197 GX configs). Three other hashes occur only
+in the excluded NON_GAMEPLAY Epilogue run and remain unseeded. All 45,985 legal
+WGSL output variants generated successfully; database integrity and global/stage
+byte equality passed. This is sampled corpus coverage, not whole-game rendering
+or Metal compilation proof. The manifests are larger and cold stage-only prep
+may cost more. Evidence and publication state:
+build/pipeline-prep-measure/closure-4/REPORT.md and publish-result.json.
+Frozen tuning app copies retain their older seeds for a fair worker comparison.
+
+Final regeneration is under build/pipeline-prep-measure/closure-5/. The StageData
+scope includes nested scenario archives as well as zone archives; a regression
+requires scenario → child-zone traversal while rejecting shared-registry
+expansion. That correction adds static dependencies to eight stages without
+changing the global set or importing additional observations. The same 9,197
+configs / 45,985 variants pass generation again; final publication and bundle
+verification are recorded in closure-5/publish-result.json.
+
+`collect_pipeline_observations.py` snapshots completed telemetry-survey and
+extra-scenario sweep evidence for subsequent observed merges. It reparses logs
+with the sweep analyzer, requires a clean unassisted PASS, checks provenance
+files did not change, and backs up retained SQLite caches. Telemetry runs must
+have a frozen executable matching both the recorded launch SHA-1 prefix and its
+full SHA-256; prefix-only historical runs are explicitly excluded. Source paths,
+hashes, manifest entries, command/environment metadata and original results stay
+attached to the snapshot. No source runs are modified or relaunched.
+
+The closure-6 snapshot accepts five such surveys and 43 extra-scenario runs.
+It adds 174 global configs (9,197 → 9,371), closing all observed stage/global gaps
+in its 18-stage corpus. All 46,855 legal WGSL output variants generate without
+invalid configs. This includes HeavenlyBeach: its survey had 210 total first uses
+(139 covered, 71 uncovered), while the combined survey/extra-scenario set has
+256 keys. Against closure-5 seeds that union had 92 stage and 26 global gaps;
+the candidate closes both. Later sweep completions require a new validated
+snapshot. Publication/bundle status and the complete before/after table live in
+build/pipeline-prep-measure/closure-6/. The final startup comparison stays frozen
+with 9,197 GX configs; it does not measure this expansion's preparation cost.
+
+Closure-7 completes the extra-scenario sweep: 52 retained clean PASS sweep runs
+plus the same five full-identity surveys. Its nine later sweep runs add 28 global
+configs and 87 stage rows (ReverseKingdom 17, SandClock 62, StarDust 8), bringing
+the global set to 9,399. All 20 stages observed in that snapshot have full
+stage/global membership; all 46,995 WGSL variants pass source generation.
+Earlier provenance exclusions remain unchanged. See closure-7/REPORT.md and
+publish-result.json under build/pipeline-prep-measure for the completed-sweep
+coverage table and publication status. No additional live run measures this
+delta; the startup timing corpus remains frozen.

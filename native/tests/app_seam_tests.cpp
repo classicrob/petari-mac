@@ -168,6 +168,10 @@ Observation observeGame(bool wantPlayer) {
     hostCall("observe");
     return smokeObservation;
 }
+bool warpPlayer(const Step&) {
+    hostCall("warp");
+    return true;
+}
 }  // namespace PetariNative::App::Smoke
 
 // The soak telemetry is off in these tests.

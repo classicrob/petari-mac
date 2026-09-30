@@ -19,6 +19,10 @@ constexpr unsigned long kReadyFrames = 60;
 constexpr unsigned long kReadyLimit = 5400;
 constexpr unsigned long kTalkTapInterval = 45;
 constexpr unsigned long kTalkLimit = 1800;
+// Scripted player locks during the exercise (race intros such as the Cosmic Mario race's
+// "レース準備" demo, cannons, cutscenes): the step waits and restarts when control returns.
+// Control off this long is a soft lock.
+constexpr unsigned long kLockLimit = 1800;
 constexpr unsigned long kIdleFrames = 120;
 constexpr float kIdleDrift = 5.0f;
 constexpr unsigned long kSettle = 20;
@@ -62,6 +66,14 @@ std::string number(float value) {
     return text;
 }
 std::string text(Vec a) { return "(" + number(a.x) + ", " + number(a.y) + ", " + number(a.z) + ")"; }
+// What may hold the player: logged with movement warnings and by the lock-up probe.
+std::string lockState(const Observation& o) {
+    return std::string("[status ") + std::to_string(o.marioStatus) + ", mode " + std::to_string(o.playerMode) +
+           (o.playerOffControl ? ", player control OFF" : ", player control on") +
+           (o.playerInRush ? ", bound to " + (o.rushActor.empty() ? std::string("an actor") : o.rushActor) : "") +
+           (o.demoActive ? ", demo" : "") + (o.talkActive ? ", talk" : "") +
+           (o.pausePermitted ? "" : ", pause not permitted") + (o.playerOnGround ? ", on the ground" : ", airborne") + "]";
+}
 
 struct Walk {
     Button button;
@@ -94,6 +106,27 @@ bool stageEnabledFromEnvironment(StageConfig* config) {
     config->stage = stage;
     config->scenario = static_cast<int>(number);
     config->tailFrames = environmentNumber("PETARI_STAGE_IDLE_FRAMES", 600);
+    config->probe = environmentNumber("PETARI_STAGE_PROBE", 0) != 0;
+    if (const char* warp = std::getenv("PETARI_STAGE_WARP"); warp != nullptr && warp[0] != '\0') {
+        if (std::strncmp(warp, "name:", 5) == 0 && warp[5] != '\0') {
+            config->warp = true;
+            config->warpName = warp + 5;
+        } else if (std::sscanf(warp, "%f,%f,%f", &config->warpX, &config->warpY, &config->warpZ) == 3) {
+            config->warp = true;
+        } else {
+            std::fprintf(stderr, "PETARI SMOKE: PETARI_STAGE_WARP \"%s\" is neither x,y,z nor name:<GeneralPos>; not running\n", warp);
+            return false;
+        }
+    }
+    if (const char* mechanic = std::getenv("PETARI_MECHANIC"); mechanic != nullptr && mechanic[0] != '\0') {
+        const MechanicPlan* plan = findMechanic(mechanic);
+        if (plan == nullptr || config->stage != plan->stage || config->scenario != plan->scenario) {
+            std::fprintf(stderr, "PETARI SMOKE: mechanic %s needs its own stage (%s scenario %d); not running\n", mechanic,
+                         plan != nullptr ? plan->stage : "unknown mechanic", plan != nullptr ? plan->scenario : 0);
+            return false;
+        }
+        config->mechanic = mechanic;
+    }
     return true;
 }
 
@@ -105,6 +138,7 @@ const char* StageDriver::phase() const {
     case Phase::Boot: return mBoot.phase();
     case Phase::Load: return "stage: loading";
     case Phase::Ready: return "stage: waiting for gameplay";
+    case Phase::Warp: return "stage: warping (test-only)";
     case Phase::Idle: return "stage: idle";
     case Phase::Walk: return "stage: walking";
     case Phase::Jump: return "stage: jumping";
@@ -113,6 +147,7 @@ const char* StageDriver::phase() const {
     case Phase::PauseOpen: return "stage: opening the pause menu";
     case Phase::Paused: return "stage: paused";
     case Phase::PauseClose: return "stage: closing the pause menu";
+    case Phase::Probe: return "stage: lock-up probe";
     case Phase::Tail: return "stage: idling after the checks";
     case Phase::Done: return "done";
     }
@@ -137,6 +172,9 @@ void StageDriver::check(const std::string& name, const char* status, const std::
 }
 
 void StageDriver::finish(Result result, const std::string& reason, Step& step) {
+    if (mMechanic) {
+        mMechanic->releaseAll(step);
+    }
     for (const Release& release : mReleases) {
         step.presses.push_back({release.button, false});
     }
@@ -276,13 +314,34 @@ Step StageDriver::step(const Observation& o) {
     for (const Observation::Target& target : o.targets) {
         if (target.id == "Talk.Advance" && (target.flags & kTargetSelectable)) talkTarget = true;
     }
-    if (o.talkActive || talkTarget) {
-        if (++mTalkFrames == 1) note(std::string("talk open while ") + phase() + "; tapping A through it");
+    // A talk's yes/no choice (YesNoController's Prompt.Yes/Prompt.No) needs the pointer on
+    // a button: the mechanics checks decline (Prompt.No), as offers such as a race would
+    // take Mario away from the mechanic.
+    const Observation::Target* choiceNo = nullptr;
+    for (const Observation::Target& target : o.targets) {
+        if (target.id == "Prompt.No") choiceNo = &target;
+    }
+    if (o.talkActive || talkTarget || (choiceNo != nullptr && mMechanic)) {
+        if (++mTalkFrames == 1) {
+            std::string ids;
+            for (const Observation::Target& target : o.targets) ids += (ids.empty() ? "" : ", ") + target.id;
+            note(std::string("talk open while ") + phase() + "; tapping A through it (targets: " + (ids.empty() ? "none" : ids) + ")");
+            if (mMechanic) mMechanic->releaseAll(step);
+        }
         if (mTalkFrames > kTalkLimit) {
             finish(Result::Fail, "not ready: a talk stayed open for " + std::to_string(kTalkLimit) + " frames", step);
             return step;
         }
-        if (mFrame >= mTalkTapAt) {
+        if (choiceNo != nullptr && mMechanic) {
+            step.pointer = true;
+            step.pointerU = choiceNo->u;
+            step.pointerV = choiceNo->v;
+            if ((choiceNo->flags & kTargetPointing) && (choiceNo->flags & kTargetSelectable) && mFrame >= mTalkTapAt) {
+                note("talk choice: pointing at Prompt.No, pressing A");
+                tap(Button::A, kTapFrames, step);
+                mTalkTapAt = mFrame + kTalkTapInterval;
+            }
+        } else if (mFrame >= mTalkTapAt) {
             tap(Button::A, kTapFrames, step);
             mTalkTapAt = mFrame + kTalkTapInterval;
         }
@@ -294,6 +353,29 @@ Step StageDriver::step(const Observation& o) {
         note("talk closed after " + std::to_string(mTalkFrames) + " frames");
         mTalkFrames = 0;
     }
+    const bool exercising = mPhase > Phase::Ready && mPhase != Phase::PauseOpen && mPhase != Phase::Paused &&
+                            mPhase != Phase::PauseClose && mPhase != Phase::Probe;
+    if (exercising && o.playerValid && o.playerOffControl) {
+        if (++mLockFrames == 1) {
+            note(std::string("player control off while ") + phase() + " at " + text(position(o)) + " " + lockState(o) +
+                 "; waiting (scripted intro or ride)");
+        }
+        if (mLockFrames >= kLockLimit) {
+            finish(Result::Fail, "soft lock: player control stayed off for " + std::to_string(kLockLimit) + " frames " +
+                                     lockState(o),
+                   step);
+            return step;
+        }
+        for (const Release& release : mReleases) step.presses.push_back({release.button, false});
+        mReleases.clear();
+        mPhaseFrames = 0;
+        return step;
+    }
+    if (mLockFrames > 0) {
+        note("player control back after " + std::to_string(mLockFrames) + " frames, at " + text(position(o)) +
+             "; restarting " + phase());
+        mLockFrames = 0;
+    }
 
     if (mPhase == Phase::Ready) {
         const bool ready = o.sceneReady && o.playerValid && !o.demoActive && o.pausePermitted;
@@ -302,7 +384,7 @@ Step StageDriver::step(const Observation& o) {
             mReadyFrame = mFrame;
             note("stage ready: frame " + std::to_string(mFrame) + ", Mario at " + text(position(o)) +
                  (o.playerOnGround ? ", on the ground" : ", in the air"));
-            next(Phase::Idle);
+            next(mConfig.warp && !mWarped ? Phase::Warp : Phase::Idle);
         } else if (mPhaseFrames >= kReadyLimit) {
             finish(Result::Fail, std::string("not ready: gameplay never became ready (player ") +
                                      (o.playerValid ? "present" : "missing") + ", demo " +
@@ -316,7 +398,20 @@ Step StageDriver::step(const Observation& o) {
         finish(Result::Fail, std::string("the player vanished while ") + phase(), step);
         return step;
     }
-    exercise(o, step);
+    if (!mConfig.mechanic.empty()) {
+        if (!mMechanic) {
+            mMechanic = std::make_unique<MechanicRun>(*findMechanic(mConfig.mechanic));
+            note("mechanic " + mConfig.mechanic + ": starting at " + text(position(o)));
+        }
+        const Result result = mMechanic->step(o, mFrame, step);
+        for (const std::string& line : mMechanic->log()) note(line);
+        mMechanic->clearLog();
+        if (result != Result::Running) {
+            finish(result, "mechanic " + mMechanic->reason(), step);
+        }
+    } else {
+        exercise(o, step);
+    }
     if (mResult == Result::Pass && o.physical.gameplay > mPhysicalBase) {
         mResult = Result::Assisted;
         mReason += "; ASSISTED: " + std::to_string(o.physical.gameplay - mPhysicalBase) + " physical gameplay input(s)";
@@ -338,8 +433,10 @@ void StageDriver::exercise(const Observation& o, Step& step) {
         if (mPhaseFrames == 1) setStart();
         if (mPhaseFrames >= kIdleFrames) {
             const float drift = length(sub(pos, start));
-            check("idle", drift <= kIdleDrift && o.playerOnGround ? "ok" : "warn",
-                  "drift " + number(drift) + (o.playerOnGround ? ", on the ground" : ", not on the ground"));
+            const bool still = drift <= kIdleDrift && o.playerOnGround;
+            check("idle", still ? "ok" : "warn",
+                  "drift " + number(drift) + (o.playerOnGround ? ", on the ground" : ", not on the ground") +
+                      (still ? "" : " " + lockState(o)));
             next(Phase::Walk);
         }
         break;
@@ -351,7 +448,8 @@ void StageDriver::exercise(const Observation& o, Step& step) {
         } else if (mPhaseFrames == kSettle + kWalkHold + kWalkAfter) {
             const float moved = acrossGround(sub(pos, start), up(o));
             check(std::string("walk_") + walk.name, moved >= kWalkMinimum ? "ok" : "warn",
-                  number(moved) + " units across the ground, " + text(start) + " -> " + text(pos));
+                  number(moved) + " units across the ground, " + text(start) + " -> " + text(pos) +
+                      (moved >= kWalkMinimum ? "" : " " + lockState(o)));
             if (moved >= kWalkMinimum) ++mWalksOk;
             mPhaseFrames = 0;
             if (++mStep == 4) next(Phase::Jump);
@@ -369,7 +467,8 @@ void StageDriver::exercise(const Observation& o, Step& step) {
             mMaxRise = std::max(mMaxRise, dot(sub(pos, start), up(o)));
             if (!o.playerOnGround) mLeftGround = true;
             if (!mLeftGround && since > kJumpLeaveLimit) {
-                check("jump", "warn", "did not leave the ground within " + std::to_string(kJumpLeaveLimit) + " frames");
+                check("jump", "warn", "did not leave the ground within " + std::to_string(kJumpLeaveLimit) + " frames " +
+                                          lockState(o));
                 next(Phase::Spin);
             } else if (mLeftGround && o.playerOnGround) {
                 check("jump", mMaxRise >= kJumpMinimumRise ? "ok" : "warn",
@@ -468,11 +567,75 @@ void StageDriver::exercise(const Observation& o, Step& step) {
     case Phase::PauseClose:
         if (static_cast<unsigned long>(std::count(mSeen.begin(), mSeen.end(), "PauseMenu.Close")) > mPauseCloseCount) {
             check("pause_close", "ok", "PauseMenu.Close " + std::to_string(mPhaseFrames) + " frames after Plus");
-            next(Phase::Tail);
+            next(mConfig.probe ? Phase::Probe : Phase::Tail);
         } else if (mPhaseFrames >= kPauseMenuLimit) {
             finish(Result::Fail, "no PauseMenu.Close within " + std::to_string(kPauseMenuLimit) + " frames of Plus", step);
         }
         break;
+    case Phase::Warp: {
+        constexpr unsigned long kWarpSettle = 90;
+        if (!mWarped) {
+            mWarped = true;
+            step.warp = true;
+            step.warpName = mConfig.warpName;
+            step.warpX = mConfig.warpX;
+            step.warpY = mConfig.warpY;
+            step.warpZ = mConfig.warpZ;
+            note("TEST WARP (not gameplay) from " + text(pos) + " to " +
+                 (mConfig.warpName.empty() ? text({mConfig.warpX, mConfig.warpY, mConfig.warpZ})
+                                           : "GeneralPos " + mConfig.warpName));
+            mPhaseFrames = 0;
+        } else if (mPhaseFrames >= kWarpSettle) {
+            const std::string distance = mConfig.warpName.empty()
+                ? ", " + number(length(sub(pos, Vec{mConfig.warpX, mConfig.warpY, mConfig.warpZ}))) + " units from the target"
+                : "";
+            note("after the warp: at " + text(pos) + distance + " " + lockState(o));
+            next(Phase::Ready);
+            mReadyFrames = 0;
+        }
+        break;
+    }
+    case Phase::Probe: {
+        // Lock-up probe: 20 s with no input (state every 2 s), then A three times 90 frames
+        // apart, B, Plus (pause) and Plus (resume), then the stick; positions and lock state
+        // are logged after each input, so a hold that releases by itself or on a press shows.
+        constexpr unsigned long kProbeIdle = 1200, kProbeGap = 90;
+        const unsigned long f = mPhaseFrames;
+        if (f == 1) setStart();
+        if (f <= kProbeIdle && f % 120 == 0) {
+            note("probe idle " + std::to_string(f) + ": at " + text(pos) + ", moved " + number(length(sub(pos, start))) +
+                 " since the probe began " + lockState(o));
+        }
+        const unsigned long a0 = kProbeIdle, b = a0 + 3 * kProbeGap, p1 = b + kProbeGap, p2 = p1 + kProbeGap + 30,
+                            stick = p2 + kProbeGap, end = stick + kWalkHold + kWalkAfter;
+        for (unsigned long i = 0; i < 3; ++i) {
+            if (f == a0 + i * kProbeGap) {
+                note("probe: tap A (" + std::to_string(i + 1) + "/3) at " + text(pos) + " " + lockState(o));
+                tap(Button::A, kTapFrames, step);
+            } else if (f == a0 + i * kProbeGap + 60) {
+                note("probe: 60 frames after A: at " + text(pos) + " " + lockState(o));
+            }
+        }
+        if (f == b) {
+            note("probe: tap B at " + text(pos) + " " + lockState(o));
+            tap(Button::B, kTapFrames, step);
+        } else if (f == p1) {
+            note("probe: hold Plus at " + text(pos) + " " + lockState(o));
+            tap(Button::Plus, kPauseHold, step);
+        } else if (f == p2) {
+            note("probe: tap Plus at " + text(pos) + " " + lockState(o));
+            tap(Button::Plus, kTapFrames, step);
+        } else if (f == stick) {
+            setStart();
+            tap(Button::StickUp, kWalkHold, step);
+        } else if (f == end) {
+            const float moved = acrossGround(sub(pos, start), up(o));
+            check("probe_move", moved >= kWalkMinimum ? "ok" : "warn",
+                  "stick up after the probe: " + number(moved) + " units " + lockState(o));
+            next(Phase::Tail);
+        }
+        break;
+    }
     case Phase::Tail:
         if (mPhaseFrames >= mConfig.tailFrames) {
             finish(Result::Pass,

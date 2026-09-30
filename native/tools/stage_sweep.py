@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Whole-game stage sweep: crash/hang/heap/shader/perf coverage per galaxy and mission.
 
-Each run launches the app once (through the sweep app lane, build/locked-sweep-lane.sh)
+Each run launches the app once (through the single app lock, build/locked-app.sh)
 with --test-fixture stage and PETARI_SMOKE=stage (native/app/smoke_stage.hpp):
 the saved file loads, the game's own after-loading galaxy move enters the stage
 and scenario, and the driver idles, walks, jumps, spins, turns the camera and
@@ -46,7 +46,8 @@ from collect_pipeline_seed_inputs import archive_files, decompress, field_hash, 
 
 DOME_NAMES = {1: "Terrace", 2: "Fountain", 3: "Kitchen", 4: "Bedroom", 5: "Engine Room", 6: "Garage"}
 NON_GAMEPLAY_STAGES = {"EpilogueDemoStage"}  # the ending movie stage: no controllable gameplay
-HEAP_WARN_PCT = 10.0  # a heap with less free at any report after the stage entry is a WARN
+HEAP_WARN_PCT = 10.0
+AUDIO_CHOPPY_HOLDS_PER_S = 1.0  # sustained DSP holds above this, over the stage window, is AUDIO-CHOPPY  # a heap with less free at any report after the stage entry is a WARN
 LATE_MS = 1000.0 / 60.0 * 1.25  # the frame-stats "late" threshold (1.25 VI fields)
 FIELDS = ["ScenarioNo", "ScenarioName", "PowerStarId", "AppearPowerStarObj", "Comet", "IsHidden", "ZoneName"]
 HASHES = {field_hash(name): name for name in FIELDS}
@@ -268,7 +269,8 @@ def load_seconds(csv_path, first, last):
 
 
 BACKTRACE = re.compile(r"^\d+\s+(\S+)\s+0x[0-9a-f]+\s+(.*?)(?:\s+\+\s+\d+)?$")
-NOISE_FRAMES = ("libsystem_", "libdyld", "Crash::", "crashHandler", "signalHandler", "_sigtramp", "abort", "__pthread")
+NOISE_FRAMES = ("libsystem_", "libdyld", "Crash::", "crashHandler", "signalHandler", "_sigtramp", "abort", "__pthread",
+                "libc++abi", "libobjc", "libc++.", "terminate")
 
 
 def normalize(text):
@@ -316,7 +318,9 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
             m = BACKTRACE.match(line.strip())
             if m and not any(n in m.group(1) + m.group(2) for n in NOISE_FRAMES):
                 frames_seen.append(m.group(2))
-        result["crash"] = {"signal": signal_line, "panic": panic, "top_frames": frames_seen[:8]}
+        uncaught = re.findall(r"terminating due to uncaught exception of type (\S+?)(?:: |$)", text, re.M)
+        result["crash"] = {"signal": signal_line, "panic": panic, "top_frames": frames_seen[:8],
+                           "uncaught_exception": uncaught[-1] if uncaught else None}
     result["heap_failure"] = "Native heap allocation failed" in text
     result["os_fatal"] = [l for l in lines if l.startswith("OSFatal:")][:5]
     hang_samples = sorted(str(p) for p in (user / "Crashes").glob("petari-hang-*.sample.txt")) if user.is_dir() else []
@@ -384,6 +388,24 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
     result["missing_assets"] = sorted({f"{area} {kind} {layout}/{name}" for area, kind, layout, name in re.findall(
         r'^\[(layout|sound)\] missing (\w+) layout="([^"]*)" name="([^"]*)"', text, re.M)} | {
         f"{area} {rest.strip()}" for area, rest in re.findall(r'^\[(layout|sound)\] missing (?!\w+ layout=)(.*)', text, re.M)})
+    # Audio (PETARI_AUDIO_DIAG): per-second reports after the stage entry. A DSP hold is a
+    # mix frame the DSP could not finish in time (audible as a stutter).
+    audio_text = text[after:] if after >= 0 else ""
+    levels = re.findall(r"^\[audio\] level .*?underrun (\d+) frames, AI replayed (\d+) blocks \(since previous report, ([\d.]+) s",
+                        audio_text, re.M)
+    holds = [int(h) for h in re.findall(r"^\[audio-dma\] .*DSP holds (\d+)", audio_text, re.M)]
+    if levels or holds:
+        seconds = sum(float(l[2]) for l in levels) or float(len(holds))
+        rate = sum(holds) / seconds if seconds else 0.0
+        result["audio"] = {"reports": len(levels), "seconds": round(seconds, 1),
+                           "underrun_frames": sum(int(l[0]) for l in levels),
+                           "replayed_blocks": sum(int(l[1]) for l in levels),
+                           "dsp_holds": sum(holds), "dsp_holds_per_s": round(rate, 2),
+                           "max_dsp_holds_in_a_report": max(holds, default=0),
+                           "reports_with_holds": sum(1 for h in holds if h > 0),
+                           "choppy": rate > AUDIO_CHOPPY_HOLDS_PER_S}
+    else:
+        result["audio"] = None
     result["assisted_inputs"] = len(re.findall(r"physical input while", text))
     result["fixture_lines"] = [l for l in lines if l.startswith("PETARI FIXTURE")]
     traced = re.findall(r"^Petari trace: frame \d+.*? at ([\d.]+) s", text, re.M)
@@ -402,7 +424,11 @@ def classify(r):
         if r["heap_failure"]:
             return "HEAP", "heap: " + normalize(r["crash"]["panic"])
         key = r["crash"]["panic"] or (r["crash"]["top_frames"][0] if r["crash"]["top_frames"] else r["crash"]["signal"])
-        return "CRASH", "crash: " + normalize(key)
+        if not r["crash"]["panic"] and r["crash"].get("uncaught_exception"):
+            key = "uncaught " + r["crash"]["uncaught_exception"] + " in " + key
+        # Keep symbol names readable: strip only addresses and "+ offset" suffixes.
+        key = re.sub(r"0x[0-9a-fA-F]+", "0x?", key)
+        return "CRASH", "crash: " + key.strip()
     if r["heap_failure"]:
         return "HEAP", "heap failure (no crash report)"
     if r["timed_out"]:
@@ -422,7 +448,8 @@ def classify(r):
             return "EXIT_MISMATCH", f"PASS but exit {status}"
         if r["shaders"]["compile_failures"] or r["renderer_error_count"]:
             return "PASS_RENDER_ERRORS", "renderer errors during a passing run"
-        warned = any(c["status"] == "warn" for c in r["checks"]) or r.get("heap_warnings")
+        warned = (any(c["status"] == "warn" for c in r["checks"]) or r.get("heap_warnings")
+                  or (r.get("audio") or {}).get("choppy"))
         return ("PASS_WARN" if warned else "PASS"), ""
     if result == "ASSISTED":
         return "ASSISTED", "physical input"
@@ -453,6 +480,8 @@ def app_command(args, user, stage, scenario):
         "PETARI_SMOKE": "stage", "PETARI_STAGE": stage, "PETARI_SCENARIO": str(scenario),
         "PETARI_SMOKE_FRAMES": str(args.frames), "PETARI_STAGE_IDLE_FRAMES": str(args.idle_frames),
         "PETARI_TRACE_BOOT": "1",
+        # Per-second audio reports ([audio] underruns/replays, [audio-dma] DSP holds): audio coverage.
+        "PETARI_AUDIO_DIAG": "1",
         # The global shader precompile (default on when __global__.db exists)
         # can block startup for ~20 min on a cold cache and competes with the
         # measured gameplay; off until the pipeline worker has evaluated it.
@@ -665,7 +694,8 @@ def summarize(out):
                "load_to_ready_seconds", "p50_ms", "p95_ms", "p99_ms", "max_ms", "late", "over_100ms",
                "stage_first_use_configs", "stage_first_use_uncovered", "compiles", "compile_failures",
                "blocking_resolves", "blocking_resolve_max_ms", "min_heap_free_pct", "file_cache_archives", "file_cache_archive_bytes", "file_cache_other_use",
-               "spilled_to_scene_gddr", "warn_checks", "wall_seconds", "app_sha256", "log"]
+               "spilled_to_scene_gddr", "audio_seconds", "audio_underrun_frames", "audio_replayed_blocks",
+               "dsp_holds", "dsp_holds_per_s", "audio_choppy", "warn_checks", "wall_seconds", "app_sha256", "log"]
     with (out / "results.csv").open("w", newline="") as handle:
         heap_names = sorted({name for r in results for name in (r.get("heaps") or {})})
         columns = columns + [f"heap_min_free[{n}]" for n in heap_names] + [f"heap_min_free_pct[{n}]" for n in heap_names]
@@ -684,6 +714,12 @@ def summarize(out):
                 "file_cache_archives": (r.get("file_cache_archives") or {}).get("resident"),
                 "file_cache_archive_bytes": (r.get("file_cache_archives") or {}).get("bytes"),
                 "file_cache_other_use": (r.get("file_cache_archives") or {}).get("other_use"),
+                "audio_seconds": (r.get("audio") or {}).get("seconds"),
+                "audio_underrun_frames": (r.get("audio") or {}).get("underrun_frames"),
+                "audio_replayed_blocks": (r.get("audio") or {}).get("replayed_blocks"),
+                "dsp_holds": (r.get("audio") or {}).get("dsp_holds"),
+                "dsp_holds_per_s": (r.get("audio") or {}).get("dsp_holds_per_s"),
+                "audio_choppy": (r.get("audio") or {}).get("choppy"),
                 "spilled_to_scene_gddr": len((r.get("archive_mounts") or {}).get("scene_gddr", [])),
                 "min_heap_free_pct": min((h.get("min_free_pct", h["free_pct"]) for h in heaps.values()), default=None),
                 **{f"heap_min_free[{name}]": h.get("min_free", h["free"]) for name, h in heaps.items()},
@@ -720,8 +756,10 @@ def summarize(out):
         heapcell = "<br>".join(f"{n} {h.get('min_free_pct', h['free_pct'])}% ({h.get('min_free', h['free']) // 1024} KiB)"
                                + (" **WARN**" if h.get("min_free_pct", h["free_pct"]) < HEAP_WARN_PCT else "")
                                for n, h in heaps.items())
+        audio = r.get("audio") or {}
         warns = ", ".join([c["name"] for c in r.get("checks", []) if c["status"] == "warn"] +
-                          ["heap " + w for w in r.get("heap_warnings", [])])
+                          ["heap " + w for w in r.get("heap_warnings", [])] +
+                          ([f"**AUDIO-CHOPPY** ({audio['dsp_holds_per_s']} DSP holds/s)"] if audio.get("choppy") else []))
         perf = f"{ft.get('p50_ms')}/{ft.get('p95_ms')}/{ft.get('p99_ms')}/{ft.get('max_ms')}" if ft else ""
         if ft and (r.get("concurrent_apps") or {}).get("seen"):
             perf += " (concurrent run — not performance evidence)"
@@ -781,9 +819,8 @@ def main():
                      help="PETARI_PIPELINE_SEED_DIR, snapshotted once per sweep (default: the frozen app's own "
                           "Resources/pipeline-seeds; shared seed directories are regenerated by other workers)")
     run.add_argument("--owner", default="stage-sweep")
-    run.add_argument("--lock-script", default="build/locked-sweep-lane.sh",
-                     help="per-run app lock: the sweep lane (one sweep app beside one other app); "
-                          "build/locked-app.sh for the single app lock")
+    run.add_argument("--lock-script", default="build/locked-app.sh",
+                     help="per-run app lock (default: build/locked-app.sh, one live app at a time)")
     run.add_argument("--timeout", type=int, default=600, help="seconds per app run, counted inside the app lock")
     run.add_argument("--lock-wait", type=int, default=7200, help="extra seconds allowed for waiting on the app lock")
     run.add_argument("--frames", type=int, default=12000, help="PETARI_SMOKE_FRAMES")

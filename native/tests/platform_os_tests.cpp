@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -1174,6 +1175,85 @@ void testForcedPreemption() {
     check(refused.unsafePreemptions > after.unsafePreemptions, "and the refusal is counted");
 }
 
+// ---- Handoff latency to a higher-priority thread (HeavensDoor choppy music) ----
+// JAudio2's audio thread (priority 2) is made ready by the DSP/AI interrupts
+// about 8 times per 17.5 ms audio block. While a lower-priority game thread
+// runs collision code without OS calls, each handoff waits for the baton
+// monitor's forced preemption; at 4 ms each the DSP missed about half its
+// blocks. On the Wii the interrupt preempts at once.
+constexpr int kHandoffs = 40;
+std::atomic<bool> gCollisionDone{false};
+std::atomic<bool> gCollisionSpinning{false};
+std::atomic<int> gHandoffsReceived{0};
+std::atomic<std::int64_t> gHandoffSentNs{0};
+double gHandoffMs[kHandoffs];
+OSMessageQueue gDspQueue;
+OSMessage gDspSlot;
+
+std::int64_t steadyNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void* GameStyleCollisionCheck(void*) {
+    volatile float strike = 0;
+    gCollisionSpinning = true;
+    while (!gCollisionDone.load(std::memory_order_relaxed)) {
+        strike = strike + 1.0f;
+    }
+    return nullptr;
+}
+
+void* GameStyleAudioThread(void*) {
+    for (int i = 0; i < kHandoffs; ++i) {
+        OSMessage msg;
+        OSReceiveMessage(&gDspQueue, &msg, OS_MESSAGE_BLOCK);
+        gHandoffMs[i] = static_cast<double>(steadyNs() - gHandoffSentNs.load()) / 1e6;
+        gHandoffsReceived.store(i + 1);
+    }
+    return nullptr;
+}
+
+void testPriorityHandoffLatency() {
+    namespace OSI = PetariNative::Platform::OS;
+    const auto before = OSI::batonBlockStats();
+    OSInitMessageQueue(&gDspQueue, &gDspSlot, 1);
+    static OSThread audio, game;
+    alignas(32) static u8 audioStack[0x4000], gameStack[0x4000];
+    OSCreateThread(&audio, GameStyleAudioThread, nullptr, audioStack + sizeof(audioStack), sizeof(audioStack), 2, 0);
+    OSResumeThread(&audio);  // runs at once and waits for its first DSP message
+    OSCreateThread(&game, GameStyleCollisionCheck, nullptr, gameStack + sizeof(gameStack), sizeof(gameStack), 16, 0);
+    OSResumeThread(&game);
+    petari_os_begin_host_blocking();  // the game thread takes the CPU and computes
+    check(waitReleased([] { return gCollisionSpinning.load(); }, 3000), "the game thread computes without OS calls");
+    std::thread dsp([] {
+        for (int i = 0; i < kHandoffs; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(3));  // the game thread runs meanwhile
+            gHandoffSentNs.store(steadyNs());
+            OSSendMessage(&gDspQueue, nullptr, OS_MESSAGE_NOBLOCK);
+            for (int w = 0; w < 3000 && gHandoffsReceived.load() <= i; ++w) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+    });
+    dsp.join();
+    const bool all = gHandoffsReceived.load() == kHandoffs;
+    gCollisionDone = true;
+    petari_os_end_host_blocking();
+    OSJoinThread(&audio, nullptr);
+    OSJoinThread(&game, nullptr);
+    check(all, "every DSP message reached the audio thread");
+    std::vector<double> ms(gHandoffMs, gHandoffMs + kHandoffs);
+    std::sort(ms.begin(), ms.end());
+    const double median = ms[kHandoffs / 2], p90 = ms[kHandoffs * 9 / 10];
+    const auto after = OSI::batonBlockStats();
+    std::printf("priority handoff: %d handoffs from a computing priority-16 thread to priority 2: median %.2f ms, 90th %.2f ms, "
+                "longest %.2f ms; %llu forced preemptions\n",
+                kHandoffs, median, p90, ms.back(), static_cast<unsigned long long>(after.forcedPreemptions - before.forcedPreemptions));
+    check(after.forcedPreemptions == before.forcedPreemptions + kHandoffs, "each handoff was a forced preemption (no OS calls)");
+    // 8 handoffs per 17.5 ms DSP block need well under 2 ms each (was over 4 ms).
+    check(median <= 1.5, "a higher-priority thread made ready by an interrupt runs within 1.5 ms (median)");
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     __OSThreadInit();
@@ -1194,6 +1274,7 @@ int main() {
     testBatonMonitor();
     testMonitorForkSafety();
     testForcedPreemption();
+    testPriorityHandoffLatency();
     testDispatchBeforeWake();
     testHolderQosOverride();
     OSReport("platform OS tests passed (%d checks)\n", checks);

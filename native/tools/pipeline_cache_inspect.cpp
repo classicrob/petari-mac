@@ -1,6 +1,8 @@
 // CPU-only inspection of serialized GX configurations; does not initialize a GPU.
 #include "gx/gx.hpp"
 #include "gx/pipeline.hpp"
+#include "gx/shader_info.hpp"
+#include "gfx/resources.hpp"
 #include "gfx/hash.hpp"
 #include <sqlite3.h>
 #include <algorithm>
@@ -21,6 +23,7 @@ struct Row {
 };
 
 int main(int argc, char** argv) {
+    aurora::gfx::detail::resources().limits.minUniformBufferOffsetAlignment = 256;
     if (argc < 2 || argc > 3) {
         std::fprintf(stderr, "usage: petari_pipeline_cache_inspect CACHE.db [WGSL_OUTPUT_DIRECTORY]\n");
         return 2;
@@ -55,6 +58,8 @@ int main(int argc, char** argv) {
         std::memcpy(&config, sqlite3_column_blob(statement, 0), sizeof(config));
         const auto key = aurora::xxh3_hash(config, static_cast<aurora::HashType>(aurora::gfx::ShaderType::GX));
         const auto start = std::chrono::steady_clock::now();
+        const auto info = aurora::gx::build_shader_info(config.shaderConfig);
+        if (!info.uniformSize || info.uniformSize > aurora::gx::MaxUniformSize) ++invalid;
         const auto source = aurora::gx::build_shader_source(config.shaderConfig, aurora::gx::DstAlphaMode::None);
         double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         const auto sourceIt = uniqueSources.insert(source).first;

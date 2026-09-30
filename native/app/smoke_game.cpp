@@ -32,6 +32,25 @@ namespace {
 unsigned long gMilestonesRead = 0;
 }
 
+bool warpPlayer(const Step& step) {
+    GameSystem* pGameSystem = SingletonHolder< GameSystem >::get();
+    if (pGameSystem == nullptr || pGameSystem->mSceneController == nullptr ||
+        !pGameSystem->mSceneController->isSceneInitializeState(SceneInitializeState_End) ||
+        !MR::isExistSceneObj(SceneObj_MarioHolder)) {
+        return false;
+    }
+    const MarioHolder* pHolder = MR::getSceneObj< MarioHolder >(SceneObj_MarioHolder);
+    if (pHolder == nullptr || pHolder->getMarioActor() == nullptr) {
+        return false;
+    }
+    if (!step.warpName.empty()) {
+        MR::setPlayerPos(step.warpName.c_str());
+    } else {
+        MR::setPlayerPosAndWait(TVec3f(step.warpX, step.warpY, step.warpZ));
+    }
+    return true;
+}
+
 Observation observeGame(bool wantPlayer) {
     Observation observation;
 
@@ -116,6 +135,14 @@ Observation observeGame(bool wantPlayer) {
                 observation.marioGravityX = pMarioGravity->x;
                 observation.marioGravityY = pMarioGravity->y;
                 observation.marioGravityZ = pMarioGravity->z;
+                observation.marioStatus = static_cast<int>(pCore->getCurrentStatus());
+            }
+            observation.playerMode = static_cast<int>(pMario->mPlayerMode);
+            observation.beeWallWalk = pMario->isBeeWallWalk();
+            observation.playerOffControl = MR::isOffPlayerControl();
+            observation.playerInRush = MR::isPlayerInRush();
+            if (const LiveActor* pRush = MR::getCurrentRushActor(); pRush != nullptr && pRush->mName != nullptr) {
+                observation.rushActor = pRush->mName;
             }
             observation.demoActive = MR::isDemoActive();
             observation.padA = MR::testCorePadButtonA(WPAD_CHAN0);
@@ -154,7 +181,8 @@ Observation observeGame(bool wantPlayer) {
             }
         }
     }
-    stepCollisionProbe(observation.stage, observation.sceneReady && observation.scene == "Game");
+    stepCollisionProbe(observation.stage, observation.sceneReady && observation.scene == "Game", observation.playerValid,
+                       observation.playerX, observation.playerZ);
     return observation;
 }
 

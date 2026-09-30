@@ -18,6 +18,11 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_regs.py" "${aurora_SOURCE_DIR}/lib/gx/regs.cpp")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_regs.py"
     "${aurora_SOURCE_DIR}/lib/gx/regs.cpp" "${_petari_regs}" COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline_postmatrix.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_postmatrix.hpp")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline_postmatrix.py"
+    "${_petari_regs}" "${_petari_regs}" regs COMMAND_ERROR_IS_FATAL ANY)
 get_target_property(_aurora_gx_sources aurora_gx SOURCES)
 list(REMOVE_ITEM _aurora_gx_sources lib/gx/regs.cpp "${aurora_SOURCE_DIR}/lib/gx/regs.cpp")
 list(APPEND _aurora_gx_sources "${_petari_regs}")
@@ -75,6 +80,10 @@ function(petari_isolate_aurora_allocations target source)
     set_property(TARGET ${target} PROPERTY SOURCES "${_sources}")
     target_include_directories(${target} PRIVATE "${CMAKE_SOURCE_DIR}/native/include")
     target_link_libraries(${target} PUBLIC "$<LINK_ONLY:petari_host_runtime>")
+    if(APPLE)
+        # The patch pops Objective-C autorelease pools on Aurora's render, FIFO and frame paths.
+        target_link_libraries(${target} PUBLIC objc)
+    endif()
 endfunction()
 petari_isolate_aurora_allocations(aurora_core lib/aurora.cpp)
 petari_isolate_aurora_allocations(aurora_gx lib/dolphin/gx/GXManage.cpp)
@@ -193,6 +202,10 @@ if(_petari_build_testing)
     # patch_aurora_sync.py against the pinned Aurora sources (index-buffer reservations).
     add_test(NAME native_aurora_sync_patch COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/native/tests/aurora_sync_patch_tests.py" "${aurora_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    # patch_aurora_allocations.py: autorelease pools on the render worker, FIFO and frame entry points.
+    add_test(NAME native_aurora_allocations_patch COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tests/aurora_allocations_patch_tests.py" "${aurora_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CXX_COMPILER}")
 endif()
 
 file(GLOB PETARI_J3D_SOURCES CONFIGURE_DEPENDS
@@ -357,11 +370,25 @@ endif()
 
 include("${CMAKE_SOURCE_DIR}/native/cmake/GameLibraries.cmake")
 
+set(_petari_ind_api_source "${aurora_SOURCE_DIR}/lib/dolphin/gx/GXBump.cpp")
+set(_petari_ind_api_output "${CMAKE_CURRENT_BINARY_DIR}/pipeline-indirect-api.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline_indirect_api.py" "${_petari_ind_api_source}")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline_indirect_api.py"
+    "${_petari_ind_api_source}" "${_petari_ind_api_output}" COMMAND_ERROR_IS_FATAL ANY)
+get_target_property(_sources aurora_gx SOURCES)
+list(REMOVE_ITEM _sources lib/dolphin/gx/GXBump.cpp "${_petari_ind_api_source}")
+list(APPEND _sources "${_petari_ind_api_output}")
+set_property(TARGET aurora_gx PROPERTY SOURCES "${_sources}")
+set_source_files_properties("${_petari_ind_api_output}" TARGET_DIRECTORY aurora_gx PROPERTIES
+    COMPILE_OPTIONS "-iquote${aurora_SOURCE_DIR}/lib/dolphin/gx")
+
 foreach(_file shader shader_info)
     set(_source "${aurora_SOURCE_DIR}/lib/gx/${_file}.cpp")
     set(_output "${CMAKE_CURRENT_BINARY_DIR}/indirect/${_file}.cpp")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_indirect_texcoord.py" "${_source}")
+        "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_indirect_texcoord.py" "${_source}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/pipeline_shader_indices.hpp")
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_indirect_texcoord.py"
         "${_source}" "${_output}" COMMAND_ERROR_IS_FATAL ANY)
     get_target_property(_sources aurora_gx SOURCES)
@@ -392,7 +419,7 @@ endforeach()
 
 add_executable(petari_gx_shader_tests "${CMAKE_SOURCE_DIR}/native/tests/gx_shader_tests.cpp")
 target_compile_features(petari_gx_shader_tests PRIVATE cxx_std_20)
-target_include_directories(petari_gx_shader_tests PRIVATE "${aurora_SOURCE_DIR}/lib")
+target_include_directories(petari_gx_shader_tests PRIVATE "${aurora_SOURCE_DIR}/lib" "${aurora_SOURCE_DIR}/lib/gx")
 target_link_libraries(petari_gx_shader_tests PRIVATE aurora::gx aurora::core)
 target_link_options(petari_gx_shader_tests PRIVATE -Wl,-dead_strip)
 if(_petari_build_testing)
@@ -457,6 +484,13 @@ if(_petari_build_testing)
         target_include_directories(petari_pipeline_${_kind}_tests PRIVATE "${CMAKE_SOURCE_DIR}/native/include")
         target_link_libraries(petari_pipeline_${_kind}_tests PRIVATE Threads::Threads)
     endforeach()
+    if(APPLE)
+        target_link_libraries(petari_pipeline_worker_tests PRIVATE objc)
+    endif()
+    add_test(NAME native_pipeline_autorelease COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tests/pipeline_autorelease_tests.py" "${CMAKE_CXX_COMPILER}")
+    set_tests_properties(native_pipeline_autorelease PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" TIMEOUT 60)
     target_link_libraries(petari_pipeline_stage_tests PRIVATE SQLite::SQLite3)
     target_link_libraries(petari_pipeline_seed_sort_tests PRIVATE SQLite::SQLite3)
 
@@ -469,6 +503,10 @@ if(_petari_build_testing)
     add_test(NAME native_pipeline_stage COMMAND petari_pipeline_stage_tests)
     add_test(NAME native_pipeline_seed COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/native/tools/pipeline_seed_tests.py" --aurora "${aurora_SOURCE_DIR}")
+    add_test(NAME native_pipeline_dependencies COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tools/pipeline_dependencies_tests.py")
+    add_test(NAME native_pipeline_observations COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tools/pipeline_observations_tests.py")
     add_test(NAME native_pipeline_stage_audit COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/native/tools/pipeline_stage_audit_tests.py")
     add_test(NAME native_pipeline_replay COMMAND "${Python3_EXECUTABLE}"
@@ -477,7 +515,7 @@ if(_petari_build_testing)
         "${CMAKE_SOURCE_DIR}/native/tools/pipeline_seed_sort_tests.py"
         $<TARGET_FILE:petari_pipeline_seed_sort_tests>)
     set_tests_properties(native_pipeline_worker native_pipeline_worker_async native_pipeline_stage
-        native_pipeline_seed native_pipeline_replay native_pipeline_seed_sort native_pipeline_stage_audit PROPERTIES
+        native_pipeline_seed native_pipeline_replay native_pipeline_seed_sort native_pipeline_stage_audit native_pipeline_dependencies native_pipeline_observations PROPERTIES
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" TIMEOUT 60)
 endif()
 

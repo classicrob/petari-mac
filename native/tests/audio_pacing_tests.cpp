@@ -355,7 +355,17 @@ RealResult runRealAi(const Scenario& sc) {
     AIStartDMA();
 
     Detail::PacedRing ring;
-    ring.reset(kPrebuffer);
+    // PACING_PREBUFFER / PACING_BURST (frames) / PACING_WAIT_US: the real-time scenarios for
+    // another ring base, device request size and elastic wait limit (latency measurements).
+    const auto envNumber = [](const char* name, long fallback) {
+        const char* value = std::getenv(name);
+        return value != nullptr && std::atol(value) > 0 ? std::atol(value) : fallback;
+    };
+    // Defaults: the SDL sink's (native/audio/sdl_sink.cpp: 48 ms of ring at 32 kHz, 256-frame
+    // device buffers at 44.1 kHz = 186 frames per request, 40 ms wait limit).
+    const std::uint64_t prebuffer = static_cast<std::uint64_t>(envNumber("PACING_PREBUFFER", 1536));
+    PAudio::setRegistrationWaitLimit(static_cast<std::uint32_t>(envNumber("PACING_WAIT_US", PAudio::kDefaultRegistrationWaitUs)));
+    ring.reset(prebuffer);
     std::atomic<bool> stopProducer{false};
     std::thread producer([&] {
         // Same scheduling as the production producer (sdl_sink.cpp).
@@ -383,11 +393,11 @@ RealResult runRealAi(const Scenario& sc) {
         }
     });
 
-    // Device: 744-frame bursts (the SDL device's request in the app's logs)
-    // on its own clock, 0.5% fast. This (main, OS) thread does host work here,
+    // Device: bursts of the SDL device's request (186 frames by default: the sink's 256-frame
+    // device buffers at 44.1 kHz; 744 with SDL's default) on its own clock, 0.5% fast. This (main, OS) thread does host work here,
     // so it gives up the CPU as the app's frame seam does; otherwise the
     // game's audio thread could never run.
-    constexpr int kDeviceBurst = 744;
+    const int kDeviceBurst = static_cast<int>(envNumber("PACING_BURST", 186));
     petari_os_begin_host_blocking();
     std::vector<std::int16_t> out(kDeviceBurst * 2);
     PAudio::DmaStats startup{};  // the first second's DMA counters

@@ -2,14 +2,19 @@
 
 #include <cxxabi.h>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <mach-o/nlist.h>
 #include <pthread.h>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -109,10 +114,130 @@ std::uint64_t hashFrames(const std::uintptr_t* frames, int n) {
     return h == 0 ? 1 : h;
 }
 
+// The main executable's symbols, sorted by address, from the full in-memory
+// nlist (LC_SYMTAB, local symbols included): dladdr on this large binary
+// costs ~0.1 ms per call, and a burst of first-seen allocation chains (scene
+// initialization) made that a 190 ms frame. Built once at startup on a host
+// thread (prepareAllocationSymbols) and published immutable; until then, and
+// for addresses outside the executable, lookups use dladdr as before.
+// Readers never lock or wait: the baton monitor classifies code while other
+// threads are suspended.
+struct MainSymbols {
+    std::vector<std::uint64_t> addresses;
+    std::vector<const char*> names;  // raw (mangled) symbol, without the leading underscore, as dladdr reports
+    std::unique_ptr<std::atomic<const std::string*>[]> reduced;  // functionName result per symbol, set once
+    std::uint64_t low = 0, high = 0;
+};
+std::atomic<MainSymbols*> gMainSymbols{nullptr};
+
+MainSymbols* buildMainSymbols() {
+    auto* table = new MainSymbols;
+    const auto* header = reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(0));
+    const std::intptr_t slide = _dyld_get_image_vmaddr_slide(0);
+    if (header == nullptr || header->magic != MH_MAGIC_64) {
+        return table;
+    }
+    const segment_command_64* linkedit = nullptr;
+    const symtab_command* symtab = nullptr;
+    const auto* command = reinterpret_cast<const load_command*>(header + 1);
+    for (std::uint32_t i = 0; i < header->ncmds; ++i) {
+        if (command->cmd == LC_SEGMENT_64) {
+            const auto* segment = reinterpret_cast<const segment_command_64*>(command);
+            if (std::strcmp(segment->segname, "__LINKEDIT") == 0) {
+                linkedit = segment;
+            } else if (std::strcmp(segment->segname, "__TEXT") == 0) {
+                table->low = segment->vmaddr + slide;
+                table->high = table->low + segment->vmsize;
+            }
+        } else if (command->cmd == LC_SYMTAB) {
+            symtab = reinterpret_cast<const symtab_command*>(command);
+        }
+        command = reinterpret_cast<const load_command*>(reinterpret_cast<const char*>(command) + command->cmdsize);
+    }
+    if (linkedit == nullptr || symtab == nullptr) {
+        table->low = table->high = 0;
+        return table;
+    }
+    const auto base = static_cast<std::uintptr_t>(linkedit->vmaddr + slide - linkedit->fileoff);
+    const auto* symbols = reinterpret_cast<const nlist_64*>(base + symtab->symoff);
+    const char* strings = reinterpret_cast<const char*>(base + symtab->stroff);
+    std::vector<std::pair<std::uint64_t, const char*>> entries;
+    entries.reserve(symtab->nsyms);
+    for (std::uint32_t i = 0; i < symtab->nsyms; ++i) {
+        const nlist_64& symbol = symbols[i];
+        if ((symbol.n_type & N_STAB) != 0 || (symbol.n_type & N_TYPE) != N_SECT || symbol.n_un.n_strx == 0) {
+            continue;
+        }
+        const char* name = strings + symbol.n_un.n_strx;
+        if (name[0] == '_') {
+            ++name;
+        }
+        if (name[0] == '\0' || std::strncmp(name, "ltmp", 4) == 0 || name[0] == 'l' && name[1] == '_') {
+            continue;  // assembler-local labels, which dladdr does not report
+        }
+        entries.emplace_back(symbol.n_value + slide, name);
+    }
+    std::stable_sort(entries.begin(), entries.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    table->addresses.reserve(entries.size());
+    table->names.reserve(entries.size());
+    for (const auto& [address, name] : entries) {
+        table->addresses.push_back(address);
+        table->names.push_back(name);
+    }
+    table->reduced.reset(new std::atomic<const std::string*>[entries.size()]);
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        table->reduced[i].store(nullptr, std::memory_order_relaxed);
+    }
+    return table;
+}
+
+// The symbol containing `address` in the main executable: its index, or -1
+// (also while the table is not built yet).
+long mainSymbolIndex(const MainSymbols* table, std::uintptr_t address) {
+    if (table == nullptr || address < table->low || address >= table->high || table->addresses.empty()) {
+        return -1;
+    }
+    const auto it = std::upper_bound(table->addresses.begin(), table->addresses.end(), address);
+    if (it == table->addresses.begin()) {
+        return -1;
+    }
+    // Folded functions share an address: take the first symbol in nlist order,
+    // as dladdr does (the sort is stable).
+    const auto first = std::lower_bound(table->addresses.begin(), it, *(it - 1));
+    return static_cast<long>(first - table->addresses.begin());
+}
+
+std::string reduceName(const char* symbol);
+
 // Demangled name reduced to its qualified function name: no return type,
 // parameters or template arguments; "(anonymous namespace)" becomes "{anon}".
 // `cLinkage`: the symbol is not C++-mangled (an extern "C" or C function).
 std::string functionName(std::uintptr_t address, std::uint64_t* start = nullptr, bool* cLinkage = nullptr) {
+    const MainSymbols* table = gMainSymbols.load(std::memory_order_acquire);
+    const long index = mainSymbolIndex(table, address - 1);
+    if (index >= 0) {
+        const char* symbol = table->names[index];
+        if (start != nullptr) {
+            *start = table->addresses[index];
+        }
+        if (cLinkage != nullptr) {
+            *cLinkage = std::strncmp(symbol, "_Z", 2) != 0;
+        }
+        const std::string* cached = table->reduced[index].load(std::memory_order_acquire);
+        if (cached == nullptr) {
+            // Racing threads may both reduce; the loser's copy is dropped.
+            auto* reduced = new std::string(reduceName(symbol));
+            const std::string* expected = nullptr;
+            if (table->reduced[index].compare_exchange_strong(expected, reduced, std::memory_order_acq_rel)) {
+                cached = reduced;
+            } else {
+                delete reduced;
+                cached = expected;
+            }
+        }
+        return *cached;
+    }
     Dl_info info{};
     if (dladdr(reinterpret_cast<void*>(address - 1), &info) == 0 || info.dli_sname == nullptr) {
         return {};
@@ -123,8 +248,12 @@ std::string functionName(std::uintptr_t address, std::uint64_t* start = nullptr,
     if (cLinkage != nullptr) {
         *cLinkage = std::strncmp(info.dli_sname, "_Z", 2) != 0;
     }
-    char* demangled = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, nullptr);
-    std::string name = demangled != nullptr ? demangled : info.dli_sname;
+    return reduceName(info.dli_sname);
+}
+
+std::string reduceName(const char* symbol) {
+    char* demangled = abi::__cxa_demangle(symbol, nullptr, nullptr, nullptr);
+    std::string name = demangled != nullptr ? demangled : symbol;
     std::free(demangled);
     for (std::size_t at; (at = name.find("(anonymous namespace)")) != std::string::npos;) {
         name.replace(at, 21, "{anon}");
@@ -331,6 +460,84 @@ bool isHostAllocationActive() {
     }
     // Host code on a game thread: the host allocator, as if a scope were open.
     return gSiteCheck.load(std::memory_order_relaxed) && classify(false);
+}
+
+void prepareAllocationSymbols() {
+    if (gMainSymbols.load(std::memory_order_acquire) != nullptr) {
+        return;
+    }
+    HostAllocationScope scope;
+    static std::mutex building;  // only preparers wait here, never readers
+    std::lock_guard<std::mutex> guard(building);
+    if (gMainSymbols.load(std::memory_order_acquire) == nullptr) {
+        gMainSymbols.store(buildMainSymbols(), std::memory_order_release);
+    }
+}
+
+// Test hook (platform_allocation_tests): the symbol-table lookup against
+// dladdr for every `stride`-th symbol of the executable, at an address inside
+// each; and the time for `timed` lookups at distinct addresses both ways.
+SymbolLookupCheck checkSymbolLookup(std::size_t stride, std::size_t timed) {
+    HostAllocationScope scope;
+    SymbolLookupCheck result;
+    prepareAllocationSymbols();
+    MainSymbols& table = *gMainSymbols.load(std::memory_order_acquire);
+    result.symbols = table.addresses.size();
+    std::vector<std::uintptr_t> probes;
+    for (std::size_t i = 0; i < table.addresses.size(); i += stride ? stride : 1) {
+        const std::uintptr_t next = i + 1 < table.addresses.size() ? table.addresses[i + 1] : table.high;
+        if (next <= table.addresses[i] + 4) {
+            continue;  // too small to probe inside
+        }
+        probes.push_back(table.addresses[i] + 4);
+    }
+    for (const std::uintptr_t probe : probes) {
+        std::uint64_t start = 0;
+        const std::string fast = functionName(probe + 1, &start);
+        Dl_info info{};
+        if (dladdr(reinterpret_cast<void*>(probe), &info) == 0 || info.dli_sname == nullptr) {
+            continue;
+        }
+        ++result.checked;
+        const std::string slow = reduceName(info.dli_sname);
+        if (start != reinterpret_cast<std::uint64_t>(info.dli_saddr)) {
+            ++result.mismatches;
+        } else if (fast != slow) {
+            ++result.aliases;  // another name for the same address (both classify by it)
+            if (hostCode(fast) != hostCode(slow) || allocatorOrLibrary(fast) != allocatorOrLibrary(slow) ||
+                threadStart(fast) != threadStart(slow)) {
+                ++result.mismatches;
+            }
+        }
+        if (result.mismatches == 1 && result.firstMismatch.empty() && (start != reinterpret_cast<std::uint64_t>(info.dli_saddr) || fast != slow)) {
+            result.firstMismatch = fast + " vs " + slow;
+        }
+    }
+    if (timed > 0 && !table.addresses.empty()) {
+        std::vector<std::uintptr_t> addresses;
+        const std::size_t step = table.addresses.size() / timed ? table.addresses.size() / timed : 1;
+        for (std::size_t i = 0; i < table.addresses.size() && addresses.size() < timed; i += step) {
+            addresses.push_back(table.addresses[i] + 1 + 1);
+        }
+        for (std::size_t i = 0; i < table.addresses.size(); ++i) {
+            delete table.reduced[i].exchange(nullptr, std::memory_order_acq_rel);  // time first sight (test only)
+        }
+        auto begin = std::chrono::steady_clock::now();
+        for (const std::uintptr_t address : addresses) {
+            functionName(address);
+        }
+        result.fastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        begin = std::chrono::steady_clock::now();
+        for (const std::uintptr_t address : addresses) {
+            Dl_info info{};
+            if (dladdr(reinterpret_cast<void*>(address - 1), &info) != 0 && info.dli_sname != nullptr) {
+                reduceName(info.dli_sname);
+            }
+        }
+        result.dladdrMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        result.timed = addresses.size();
+    }
+    return result;
 }
 
 CodeKind classifyCode(std::uintptr_t address, std::string* name) {

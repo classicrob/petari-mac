@@ -252,13 +252,14 @@ struct PlaybackResult {
     bool opened = false;
     std::uint32_t framesChecked = 0;
     std::uint64_t samplesChecked = 0;
+    bool hitchChecked = false;
 };
 
 // Plays up to `frames` frames through the wrapper as MoviePlayerSimple does and
 // compares every decoded frame and mixed sample. `file` may be null (death
 // tests), in which case nothing is compared.
 PlaybackResult play(const char* dvdPath, const std::uint8_t* file, const Reference* ref, std::uint32_t frames,
-                    const std::string& name, bool loop = false) {
+                    const std::string& name, bool loop = false, std::uint32_t hitchAt = 0) {
     PlaybackResult result;
     auto player = std::make_unique<THPSimplePlayerWrapper>("THP test");
     if (!player->init(0)) {
@@ -312,7 +313,18 @@ PlaybackResult play(const char* dvdPath, const std::uint8_t* file, const Referen
     check(player->mTotalReadFrame == expectedReadFrame, "preload read position",
           name + ": " + std::to_string(player->mTotalReadFrame) + " vs " + std::to_string(expectedReadFrame));
 
+    // Expected audio in play order, built frame by frame as mixing consumes it: the native
+    // wrapper decodes audio ahead of video (THPSimplePlayerWrapper::nativeDecodeAudioAhead),
+    // so samples of frames whose video is not decoded yet are mixed, in order.
     std::vector<std::int16_t> expectedPcm;
+    std::uint32_t pcmFrames = 0;
+    const auto needPcm = [&](std::size_t upTo) {
+        while (file != nullptr && expectedPcm.size() < upTo && (loop || pcmFrames < static_cast<std::uint32_t>(player->getTotalFrame()))) {
+            const ExpectedFrame e = expectedFrame(file, *ref, pcmFrames % player->getTotalFrame());
+            expectedPcm.insert(expectedPcm.end(), e.pcm.begin(), e.pcm.end());
+            pcmFrames++;
+        }
+    };
     std::size_t pcmCursor = 0;
     GXRenderModeObj rmode{};
     rmode.fbWidth = 640;
@@ -330,8 +342,9 @@ PlaybackResult play(const char* dvdPath, const std::uint8_t* file, const Referen
         if (file == nullptr) {
             return;
         }
-        bool match = true;
-        for (u32 i = 0; i < 560 * 2; i++) {
+        needPcm(pcmCursor + std::size_t{consumed} * 2);
+        bool match = consumed * 2 <= expectedPcm.size() - pcmCursor;
+        for (u32 i = 0; match && i < 560 * 2; i++) {
             const s16 expected = i < consumed * 2 ? expectedPcm[pcmCursor + i] : 0;
             match = match && out[i] == expected;
         }
@@ -343,6 +356,7 @@ PlaybackResult play(const char* dvdPath, const std::uint8_t* file, const Referen
         result.samplesChecked += consumed;
     };
 
+    std::uint64_t mixedBlocks = 0;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60 + total / 10);
     for (std::uint32_t index = 0; index < total;) {
         if (std::chrono::steady_clock::now() > deadline) {
@@ -364,6 +378,7 @@ PlaybackResult play(const char* dvdPath, const std::uint8_t* file, const Referen
         if (status == 3) {
             // Audio ring full: the audio thread would consume a DAC frame.
             mix();
+            mixedBlocks++;
             continue;
         }
         if (status != 0) {
@@ -373,7 +388,6 @@ PlaybackResult play(const char* dvdPath, const std::uint8_t* file, const Referen
         std::unique_ptr<ExpectedFrame> expected;
         if (file != nullptr) {
             expected = std::make_unique<ExpectedFrame>(expectedFrame(file, *ref, index % movieFrames));
-            expectedPcm.insert(expectedPcm.end(), expected->pcm.begin(), expected->pcm.end());
         }
         const int setups = sDraw.setups;
         const s32 drawn = player->drawCurrentFrame(&rmode, 0, 44, 832, info.ySize);
@@ -389,9 +403,31 @@ PlaybackResult play(const char* dvdPath, const std::uint8_t* file, const Referen
             check(same, "drawn Y/U/V textures equal an independent decode of the same frame",
                   name + " frame " + std::to_string(index));
         }
-        mix();
+        // The DMA engine consumes audio at the movie's sample rate, not per decoded frame: mix
+        // 560-sample blocks up to (frames decoded) x (samples per frame).
+        if (player->mAudioExist) {
+            const double samplesPerFrame = player->mAudioInfo.sndFrequency / static_cast<double>(player->getFrameRate());
+            while (mixedBlocks * 560.0 < (index + 1) * samplesPerFrame) {
+                mix();
+                mixedBlocks++;
+            }
+        } else {
+            mix();
+        }
         result.framesChecked++;
         index++;
+        if (hitchAt != 0 && index == hitchAt && player->mAudioExist) {
+            // A game-frame hitch: no decode for 87.5 ms while the DMA engine keeps mixing
+            // 560-sample blocks. The audio decoded ahead must cover it without silence.
+            for (int block = 0; block < 5; block++) {
+                const u32 before = pendingSamples(*player);
+                mix();
+                mixedBlocks++;
+                check(before - pendingSamples(*player) == 560, "an 87.5 ms decode stall mixes no silence (audio decoded ahead)",
+                      name + " block " + std::to_string(block));
+            }
+            result.hitchChecked = true;
+        }
     }
 
     check(player->loadStop(), "loadStop succeeds", name);
@@ -717,7 +753,8 @@ int main(int argc, char** argv) {
         }
         const std::string dvdPath = "/MovieData/" + name;
         const auto started = std::chrono::steady_clock::now();
-        const PlaybackResult r = play(dvdPath.c_str(), file.data, &ref, frames, name);
+        const PlaybackResult r = play(dvdPath.c_str(), file.data, &ref, frames, name, false, 60);
+        check(r.hitchChecked || !ref.components.hasAudio, "the decode-stall case ran", name);
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         std::printf("  %s: %u frames drawn and compared, %llu stereo samples mixed and compared, %.1f s\n",
                     name.c_str(), r.framesChecked, static_cast<unsigned long long>(r.samplesChecked), seconds);

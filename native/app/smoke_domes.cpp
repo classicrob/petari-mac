@@ -32,6 +32,8 @@ constexpr unsigned long kRouteLimit = 5400;   // per waypoint
 constexpr unsigned long kWarpLimit = 900;
 constexpr float kWarpJump = 800.0f;
 constexpr unsigned long kEnterLimit = 900;
+constexpr unsigned long kJumpHold = 12;
+constexpr unsigned long kJumpSpinDelay = 16;
 constexpr unsigned long kMapSettle = 30;
 constexpr unsigned long kMoveHold = 45;
 constexpr unsigned long kMoveAfter = 15;
@@ -67,12 +69,48 @@ const char* const kDomeNames[] = {"", "Terrace", "Fountain", "Kitchen", "Bedroom
 
 }  // namespace
 
+namespace {
+// PETARI_DOME_ROUTE=<csv of x,y,z,action> (action Walk, Warp or Jump): an
+// experimental route instead of the planned one, for route development.
+std::vector<DomeWaypoint> gRouteOverride;
+bool gRouteOverridden = false;
+
+void loadRouteOverride() {
+    const char* path = std::getenv("PETARI_DOME_ROUTE");
+    if (path == nullptr || path[0] == '\0') return;
+    std::FILE* in = std::fopen(path, "r");
+    if (in == nullptr) {
+        std::fprintf(stderr, "PETARI SMOKE: cannot read PETARI_DOME_ROUTE %s\n", path);
+        return;
+    }
+    char line[256];
+    while (std::fgets(line, sizeof(line), in) != nullptr) {
+        float x, y, z;
+        char action[16] = {};
+        if (std::sscanf(line, "%f,%f,%f,%15s", &x, &y, &z, action) == 4) {
+            const DomeWaypoint::Action kind = std::strncmp(action, "Warp", 4) == 0 ? DomeWaypoint::Warp
+                                              : std::strncmp(action, "Jump", 4) == 0 ? DomeWaypoint::Jump
+                                                                                      : DomeWaypoint::Walk;
+            gRouteOverride.push_back({x, y, z, kind});
+        }
+    }
+    std::fclose(in);
+    gRouteOverridden = true;
+    std::fprintf(stderr, "PETARI SMOKE: dome route from %s (%zu points)\n", path, gRouteOverride.size());
+}
+
+const std::vector<DomeWaypoint>& routeFor(int dome) {
+    return gRouteOverridden ? gRouteOverride : domeRoute(dome);
+}
+}  // namespace
+
 bool domesEnabledFromEnvironment(DomesConfig* config) {
+    loadRouteOverride();
     const char* smoke = std::getenv("PETARI_SMOKE");
     if (smoke == nullptr || std::strcmp(smoke, "domes") != 0) return false;
     const char* dome = std::getenv("PETARI_DOME");
     const long number = dome != nullptr ? std::strtol(dome, nullptr, 10) : 0;
-    if (number < 1 || number > 6 || domeRoute(static_cast<int>(number)).empty()) {
+    if (number < 1 || number > 6 || routeFor(static_cast<int>(number)).empty()) {
         std::fputs("PETARI SMOKE: script domes needs PETARI_DOME (1..6, a dome with a planned route); not running\n", stderr);
         return false;
     }
@@ -261,6 +299,10 @@ Step DomesDriver::step(const Observation& o) {
         }
     }
     if (mResult != Result::Running) return step;
+    if (mSpinAt != 0 && mFrame >= mSpinAt) {
+        tap(Button::Spin, kTapFrames, step);
+        mSpinAt = 0;
+    }
 
     if (mPhase == Phase::Boot) {
         for (const std::string& milestone : o.milestones) {
@@ -339,7 +381,7 @@ Step DomesDriver::step(const Observation& o) {
 }
 
 void DomesDriver::route(const Observation& o, Step& step) {
-    const std::vector<DomeWaypoint>& points = domeRoute(mConfig.dome);
+    const std::vector<DomeWaypoint>& points = routeFor(mConfig.dome);
     if (o.scene == "Game" && o.stage == "AstroDome") {
         steer({}, step);
         if (!o.sceneReady) return;
@@ -439,8 +481,11 @@ void DomesDriver::route(const Observation& o, Step& step) {
     }
     if (distance < (target.action == DomeWaypoint::Warp ? kArriveWarp : kArrive) && height < kArriveHeight) {
         if (target.action == DomeWaypoint::Jump) {
-            note("jump at waypoint " + std::to_string(mWaypoint) + " from " + text(pos));
-            tap(Button::A, 12, step);
+            // A held for full height, then a spin near the apex for the extra lift
+            // the observatory's terrace steps (up to about 310 units) need.
+            note("jump and spin at waypoint " + std::to_string(mWaypoint) + " from " + text(pos));
+            tap(Button::A, kJumpHold, step);
+            mSpinAt = mFrame + kJumpSpinDelay;
         }
         if (target.action == DomeWaypoint::Warp) {
             steer({}, step);
