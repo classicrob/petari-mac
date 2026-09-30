@@ -377,3 +377,41 @@ on the game thread (fix in progress); StarBall tilt sign under investigation.
   System Events saw the user's app frontmost in 175/175 samples.
 - Dome-tour observer crash (getCurrentRushActor during a warp) fixed in the
   harness; warp without a rush sensor is original game behaviour.
+
+## 2026-09-30 afternoon
+
+Integrator notes from commits d4880e97d..f1c878614. Live results are the owning
+workers' reports unless stated; the integrator re-ran only the ctest targets.
+
+- Tests: 106 targets. Full `ctest -j4` on 6c561d066 under machine load ~75
+  (other workers' apps, MTLCompilerService) passed 100/106 (build/integrator-ctest-full.log).
+  **Timing tests need a quiet machine.** Quiet reruns (PETARI_LOCK_CLASS=quiet,
+  repeat until-fail) passed: native_platform_os 3/3, native_audio_pacing 3/3,
+  native_rfl_render 3/3, native_pipeline_worker_async 5/5, native_platform_baton_diag
+  5/5 (it failed 1 of 3 at load ~26, passed 5/5 at load ~12;
+  build/integrator-ctest-quiet{,2}.log). native_gx_sync_backend failed under
+  load and passed a serial rerun; it was not repeated quiet. The flaky
+  native_pipeline_worker bounded-draw test was a test-timing bug and is now
+  deterministic (f1c878614). No single full-ctest run has been clean since
+  these commits; 14/14 pipeline and 8/8 smoke/seam/route targets pass.
+- DemoRabbit runaway velocity / Binder 6M-step fix verified live in loaded
+  story HeavensDoor (d4880e97d); power-up tips keyed by PlayerMode (found in a
+  user playtest) and audit fixes (changeMorphString bound, WarpPod, RingBeam,
+  LavaGalaxyParts, OceanWaveFloater) landed with regressions.
+- Route recorder (PETARI_ROUTE_RECORD, recorded_route.py): Kick/Launch/Warp
+  waypoints (fe2de6ccf); the user's Engine Room route is live-verified 5/5
+  (x3, kick chain first try, resume-24) after the kick-chain reliability
+  changes (7c1214b96). Verified dome routes are split from the generated plan so
+  regenerating cannot drop them (953b7b3eb). Not verified live: the west-ledge
+  kick outcome (unit-tested only).
+- Background isolation: hidden window, muted audio, private caches, 3 app
+  slots that drop to 1 while a person plays. The smoke QoS boost is opt-in
+  (17f724b41): the on/off A/B showed no benefit once load was controlled.
+- Saves verified across all 6 domes for all-missions, grand-finale and
+  complete-luigi; Luigi reload passes (opening demo advanced with A,
+  6c561d066). Evidence in native/SAVES.md. Grand Finale galaxy is still open.
+- Startup UX (e6638d518, 8eac0b157; single quiet runs, see PIPELINE_SEEDING.md):
+  cold3 PASS, pop-in 26 draws / 2 configs / max 203 ms, gameplay p99 49.8 ms;
+  full warm PASS, all 5 gates <0.1 ms, 0 skipped draws, p99 17.4 ms. The first
+  throttle (36cad0550, 1 speculative slot) caused heavy cold pop-in and was
+  retuned to 2 stage + 1 backlog. Pause exemption is not isolated live.
