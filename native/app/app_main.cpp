@@ -31,6 +31,7 @@
 #include <petari/host_allocation.hpp>
 
 extern "C" void petari_gx_pipeline_background_begin();
+extern "C" void petari_gx_pipeline_set_gameplay(bool gameplay);
 
 namespace App = PetariNative::App;
 
@@ -185,6 +186,14 @@ bool prepareKnownPipelines(SDL_Window* window) {
     return App::preparePipelines(window);
 }
 
+// Frame classification also tells the shader pool when speculative compiles
+// must yield to gameplay (menus, file select, loading and pause run them at full speed).
+App::FrameStats::Phase framePhaseForPipelines() {
+    const App::FrameStats::Phase phase = App::Host::framePhase();
+    petari_gx_pipeline_set_gameplay(phase == App::FrameStats::Phase::Gameplay && !App::Host::pauseMenuActive());
+    return phase;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -327,7 +336,7 @@ int main(int argc, char** argv) {
     }
 
     App::Seam::attach(info.window);
-    App::Seam::setPhaseProbe(App::Host::framePhase);
+    App::Seam::setPhaseProbe(framePhaseForPipelines);
     App::Host::startOS();
     App::Seam::openFirstFrame();
     App::Host::runGame();

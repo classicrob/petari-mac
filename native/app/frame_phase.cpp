@@ -4,6 +4,7 @@
 
 #include <cstring>
 
+#include "Game/AudioLib/AudSystem.hpp"
 #include "Game/System/GameSystem.hpp"
 #include "Game/System/GameSystemSceneController.hpp"
 #include "Game/Util/SingletonHolder.hpp"
@@ -25,6 +26,11 @@ FrameStats::Phase framePhase() {
         return FrameStats::Phase::Gameplay;
     }
     return FrameStats::Phase::Menu;
+}
+
+bool pauseMenuActive() {
+    const AudSystem* pAudSystem = AudSystem::get();
+    return pAudSystem != nullptr && pAudSystem->isPauseMenuActive();
 }
 
 }  // namespace PetariNative::App::Host

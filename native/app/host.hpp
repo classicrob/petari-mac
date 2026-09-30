@@ -44,6 +44,8 @@ namespace Host {
 // What the game is doing, for the frame-time statistics. Game thread, while
 // it holds the CPU (the seam calls it before releasing it).
 FrameStats::Phase framePhase();
+// The pause menu is open (the game's own audio pause state). Same thread rules.
+bool pauseMenuActive();
 }  // namespace Host
 
 // --- input_events.cpp ---

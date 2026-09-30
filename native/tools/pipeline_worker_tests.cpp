@@ -156,7 +156,49 @@ void backgroundCapTest() {
     waitReady(3);
     require(startedB && petariBackgroundInFlight == 0, "backlog did not resume after its slot opened");
     stop(workers);
-    petariBackgroundCap = PetariPipeline::backgroundWorkerCap();
+    petariBackgroundCap = ~0u;
+}
+void gameplayThrottleTest() {
+    // During gameplay one speculative compile at a time; a draw-requested job
+    // still starts at once; leaving gameplay releases the parked backlog.
+    petariActiveWorkers = 3;
+    petari_gx_pipeline_set_gameplay(true);
+    std::promise<void> startedA, release;
+    std::atomic<bool> startedB{false}, startedG{false};
+    auto gate = release.get_future().share();
+    enqueue(71, false, [&] { startedA.set_value(); gate.wait(); return CompiledPipeline{true}; });
+    enqueue(72, false, [&] { startedB = true; return CompiledPipeline{true}; });
+    enqueue(73, true, [&] { startedG = true; return CompiledPipeline{true}; });
+    std::vector<std::thread> workers;
+    for (unsigned i = 0; i < 3; ++i) workers.emplace_back(pipeline_worker, i);
+    require(startedA.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready, "stage job did not start");
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    require(!startedB && !startedG, "gameplay ran more than one speculative compile");
+    {
+        std::lock_guard lock(g_pipelineMutex);
+        petariPipelineSamples[74].drawBlocking = true;
+        petariPipelineSamples[74].queued = PetariPipeline::Clock::now();
+        g_pipelineQueue.push_front({74, [] { return CompiledPipeline{true}; }});
+        g_pendingPipelines.insert(74);
+        ++queuedPipelines;
+    }
+    g_pipelineQueueCv.notify_one();
+    {
+        std::unique_lock lock(g_pipelineMutex);
+        require(g_pipelineReadyCv.wait_for(lock, std::chrono::seconds(5), [] { return g_pipelines.count(74) != 0; }),
+                "draw-requested compile was throttled");
+    }
+    require(!startedB && !startedG, "throttle released early");
+    petari_gx_pipeline_set_gameplay(false);
+    {
+        std::unique_lock lock(g_pipelineMutex);
+        require(g_pipelineReadyCv.wait_for(lock, std::chrono::seconds(5), [] { return g_pipelines.count(72) && g_pipelines.count(73); }),
+                "leaving gameplay did not release speculative work");
+    }
+    release.set_value();
+    waitReady(4);
+    require(petariSpeculativeInFlight == 0, "speculative accounting unbalanced");
+    stop(workers);
 }
 void boundedDrawTest() {
     // Nothing compiles: the first wait spends the frame budget, the next one skips at once.
@@ -247,6 +289,7 @@ int main(int argc, char** argv) {
     aurora::gfx::progressTest();
     aurora::gfx::retirementTest();
     aurora::gfx::backgroundCapTest();
+    aurora::gfx::gameplayThrottleTest();
     aurora::gfx::boundedDrawTest();
-    std::puts("Pipeline worker: requested priority, concurrent progress, isolated timing state, backlog cap, bounded draw waits and shutdown pass");
+    std::puts("Pipeline worker: requested priority, concurrent progress, isolated timing state, backlog cap, gameplay throttle, bounded draw waits and shutdown pass");
 }

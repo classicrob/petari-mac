@@ -10,9 +10,13 @@ The game starts at once. Nothing waits for the shader backlog:
   full-preparation screen (six startup workers); `0` disables global work.
 - **Scene first.** A stage/overlay begin moves that scene's manifest ahead of the
   global backlog; a draw that needs a pending pipeline jumps to the front of all
-  queued work. While the game runs, at most `max(1, workers / 2)` global-backlog
-  compiles run at once (utility QoS); stage and draw requests may use every worker
-  (user-initiated QoS). Game threads are user-interactive, VI/audio real-time.
+  queued work and is never throttled (user-initiated QoS). During active gameplay
+  (frame phase Gameplay and the pause menu closed) at most
+  `PETARI_PIPELINE_GAMEPLAY_SPECULATIVE` (default 1) speculative compiles (stage
+  manifest first, then the global backlog) run at once, at utility QoS: Metal
+  compiles in MTLCompilerService, a separate process our thread QoS does not cap,
+  so the in-flight count itself is limited. Menus, file select, loading and pause
+  run the backlog on every worker. Game threads are user-interactive, VI/audio real-time.
 - **Bounded draws.** A GX draw whose pipeline is still compiling waits only within a
   per-frame budget (`PETARI_PIPELINE_DRAW_BUDGET_MS`, default 6, reset each frame),
   then the draw is skipped until the compile lands (pop-in instead of a freeze).

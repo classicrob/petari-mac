@@ -114,10 +114,13 @@ inline bool backgroundGlobalPrecompile() {
     const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     return !value || !*value || std::strcmp(value, "background") == 0;
 }
-// Concurrent global-backlog compiles while the game runs. Stage and draw
-// requests may use every worker; the speculative backlog leaves cores free.
-inline unsigned backgroundWorkerCap() {
-    return std::max(1u, workerCount() / 2);
+// Speculative compiles (stage manifest and global backlog, nothing a draw waits
+// for) allowed in flight during active gameplay. Metal compiles in the separate
+// MTLCompilerService process, which our thread QoS does not cap, so the count
+// itself must be small. Menus, file select and loading screens run at full speed.
+inline unsigned gameplaySpeculativeCap() {
+    static const unsigned cap = millisecondsSetting("PETARI_PIPELINE_GAMEPLAY_SPECULATIVE", 1, 32);
+    return cap;
 }
 // Game, render and audio threads run at user-interactive or real-time priority,
 // above both compile classes: stage/draw requests use user-initiated, the global backlog utility.

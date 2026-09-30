@@ -26,21 +26,24 @@ struct PetariPipelineSample {
   uint64_t skipped = 0;
   bool failed = false;
   bool drawRequested = false;
+  bool drawBlocking = false; // a draw or clear waited for (or skipped) this variant
 };
 static absl::flat_hash_map<PipelineRef, PetariPipelineSample> petariPipelineSamples;
 static std::atomic<unsigned> petariPipelineWaiters{0};
 static std::atomic<uint64_t> petariSkippedDraws{0};
 static uint32_t petariFailedPipelines = 0; // guarded by g_pipelineMutex
 static unsigned petariActiveWorkers = PetariPipeline::workerCount(); // guarded by g_pipelineMutex
-// Global-backlog jobs compiling now, and how many may run at once (guarded by
-// g_pipelineMutex). The blocking full-preparation screen lifts the cap until it ends.
+// Guarded by g_pipelineMutex: global-backlog jobs compiling now and their cap
+// outside gameplay; speculative (not draw-requested) jobs compiling now; and
+// whether the last frame was active gameplay (set from the frame seam).
 static unsigned petariBackgroundInFlight = 0;
+static unsigned petariSpeculativeInFlight = 0;
+static bool petariGameplay = false;
 // Bounded GX draw waits: remaining wait this frame, and draws whose pipeline was
 // still compiling when the budget ran out (encoded as skips until it lands).
 static PetariPipeline::Clock::duration petariDrawBudgetLeft = PetariPipeline::drawWaitBudget();
 static uint64_t petariDeferredDraws = 0;
-static unsigned petariBackgroundCap =
-    PetariPipeline::globalPrecompile() ? ~0u : PetariPipeline::backgroundWorkerCap();
+static unsigned petariBackgroundCap = ~0u;
 
 extern "C" void petari_gx_pipeline_startup_finished() {
   unsigned previous, current;
@@ -48,12 +51,11 @@ extern "C" void petari_gx_pipeline_startup_finished() {
     std::lock_guard lock{g_pipelineMutex};
     previous = petariActiveWorkers;
     current = petariActiveWorkers = PetariPipeline::workerCount();
-    petariBackgroundCap = PetariPipeline::backgroundWorkerCap();
   }
   g_pipelineQueueCv.notify_all();
   std::fprintf(stderr, "[gx pipeline pool] startup_finished=1 previous_workers=%u background_workers=%u "
-               "global_backlog_concurrency=%u extra_inflight=drain\n",
-               previous, current, PetariPipeline::backgroundWorkerCap());
+               "gameplay_speculative_cap=%u extra_inflight=drain\n",
+               previous, current, PetariPipeline::gameplaySpeculativeCap());
 }
 
 
@@ -68,10 +70,21 @@ extern "C" bool petari_gx_pipeline_full_preparation() {
   return PetariPipeline::globalPrecompile();
 }
 
+extern "C" void petari_gx_pipeline_set_gameplay(bool gameplay) {
+  {
+    std::lock_guard lock{g_pipelineMutex};
+    if (petariGameplay == gameplay) return;
+    petariGameplay = gameplay;
+  }
+  // Leaving gameplay lifts the speculative throttle for parked workers.
+  if (!gameplay) g_pipelineQueueCv.notify_all();
+}
+
 static void petari_note_variant(PipelineRef runtimeKey, HashType configKey, ShaderType type,
                                 PipelinePriority priority) {
   std::lock_guard lock{g_pipelineMutex};
   auto& sample = petariPipelineSamples[runtimeKey];
+  sample.drawBlocking |= priority == PipelinePriority::Blocking;
   sample.type = type;
   sample.configKey = configKey;
   if (priority != PipelinePriority::Background && sample.requested == PetariPipeline::Clock::time_point{}) {
@@ -105,6 +118,20 @@ struct PetariPipelineWait {
     }
   }
 };
+
+// Next queue a worker may take from, or null (guarded by g_pipelineMutex).
+// Draw-requested jobs sit at the front of the requested queue and are never
+// throttled; stage speculation precedes the global backlog.
+static std::deque<PendingPipeline>* petari_runnable_queue() {
+  const bool throttled = petariGameplay && petariSpeculativeInFlight >= PetariPipeline::gameplaySpeculativeCap();
+  if (!g_pipelineQueue.empty()) {
+    const auto sample = petariPipelineSamples.find(g_pipelineQueue.front().hash);
+    if (!throttled || (sample != petariPipelineSamples.end() && sample->second.drawBlocking)) return &g_pipelineQueue;
+  }
+  if (!g_backgroundPipelineQueue.empty() && !throttled && petariBackgroundInFlight < petariBackgroundCap)
+    return &g_backgroundPipelineQueue;
+  return nullptr;
+}
 
 template <typename Ready>
 static void petari_bounded_draw_wait(std::unique_lock<std::mutex>& lock, Ready ready) {
