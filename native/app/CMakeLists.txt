@@ -33,7 +33,7 @@ get_filename_component(PETARI_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSO
 add_library(petari_milestone STATIC milestone.cpp actor_observe.cpp)
 target_include_directories(petari_milestone PUBLIC ${PETARI_REPO_ROOT}/native/include)
 target_compile_features(petari_milestone PUBLIC cxx_std_17)
-add_library(petari_app_smoke STATIC smoke.cpp smoke_stage.cpp smoke_mechanics.cpp smoke_goodegg.cpp smoke_soak.cpp smoke_domes.cpp smoke_domes_routes.cpp)
+add_library(petari_app_smoke STATIC smoke.cpp smoke_stage.cpp smoke_mechanics.cpp smoke_goodegg.cpp smoke_soak.cpp smoke_domes.cpp smoke_domes_routes.cpp smoke_domes_verified_routes.cpp)
 target_compile_features(petari_app_smoke PUBLIC cxx_std_17)
 
 if(NOT _petari_app_standalone)

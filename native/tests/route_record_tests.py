@@ -72,4 +72,11 @@ int main(int argc,char** argv) {
         self.assertIn((110.,300.,0.,'Warp'),convert(warp))
         with self.assertRaises(ValueError): convert([])
 
+class RouteTableTests(unittest.TestCase):
+    def test_generator_cannot_overwrite_verified_routes(self):
+        generator=(ROOT/'native/tools/observatory_routes.py').read_text()
+        self.assertIn('plannedDomeRoute(int dome)',generator)
+        self.assertNotIn('verified_routes.cpp"',generator)
+        self.assertNotIn('& domeRoute(int dome)',generator)
+
 if __name__=='__main__':unittest.main()

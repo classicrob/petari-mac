@@ -68,8 +68,12 @@ struct DomeWaypoint {
     float x, y, z;
     Action action;
 };
-// The planned route from the file-load start to dome `dome` (1..6), or empty.
+// The route from the file-load start to dome `dome` (1..6), or empty: the
+// live-verified one (smoke_domes_verified_routes.cpp) when there is one, else
+// the generated plan (smoke_domes_routes.cpp, native/tools/observatory_routes.py).
 const std::vector<DomeWaypoint>& domeRoute(int dome);
+const std::vector<DomeWaypoint>& verifiedDomeRoute(int dome);
+const std::vector<DomeWaypoint>& plannedDomeRoute(int dome);
 
 class DomesDriver {
 public:

@@ -133,6 +133,22 @@ int main() {
         for (int i = 0; i < 30 && jumper.result() == Result::Running; ++i) jumper.step(jumpObs);
     }
     check(jumper.result() == Result::Fail, "repeated missed kicks fail instead of looping");
+    // Live-verified routes (native/SAVES.md evidence): a regenerated plan must
+    // never replace or drop them. Update these only when promoting a new route.
+    const struct { int dome; size_t points; int hops, kicks, launches; } verified[] = {
+        {1, 56, 0, 0, 0}, {2, 103, 0, 0, 0}, {3, 119, 0, 0, 0}, {4, 106, 0, 0, 0}, {5, 304, 3, 2, 1}, {6, 117, 0, 0, 0}};
+    for (const auto& expected : verified) {
+        const auto& route = verifiedDomeRoute(expected.dome);
+        check(route.size() == expected.points, "verified dome route present with its promoted size");
+        check(&domeRoute(expected.dome) == &route, "domeRoute uses the verified route");
+        int hops = 0, kicks = 0, launches = 0;
+        for (const auto& point : route) {
+            hops += point.action == DomeWaypoint::Hop;
+            kicks += point.action == DomeWaypoint::Kick;
+            launches += point.action == DomeWaypoint::Launch;
+        }
+        check(hops == expected.hops && kicks == expected.kicks && launches == expected.launches, "verified route keeps its actions");
+    }
     unlink(routePath);
     std::printf("%d dome/finale checks passed\n", checks);
 }
