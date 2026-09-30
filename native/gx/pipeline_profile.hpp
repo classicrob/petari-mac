@@ -59,6 +59,15 @@ inline bool globalPrecompile() {
     const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     return !value || !*value || std::strcmp(value, "1") == 0;
 }
+inline unsigned startupWorkerCount() {
+    const unsigned normal = workerCount();
+    if (!globalPrecompile()) return normal;
+    const char* value = std::getenv("PETARI_PIPELINE_STARTUP_THREADS");
+    if (!value || !*value) return normal;
+    char* end = nullptr;
+    const auto count = std::strtoul(value, &end, 10);
+    return end && *end == '\0' && count >= normal && count <= 32 ? static_cast<unsigned>(count) : normal;
+}
 inline bool backgroundGlobalPrecompile() {
     const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     return value && std::strcmp(value, "background") == 0;

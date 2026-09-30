@@ -129,7 +129,7 @@ private:
     bool seen(const char* milestone) const;
     // Boulders (rolling along the Peanut's rails): predicts them and Mario's
     // candidate moves 45 frames ahead; when heading for the goal would pass
-    // within 460 of one, steers the safe move nearest the goal's direction
+    // within 500 of one, steers the safe move nearest the goal's direction
     // (or waits, or keeps farthest away); true while doing so.
     bool dodgeRocks(const Observation& observation, Step& step);
 

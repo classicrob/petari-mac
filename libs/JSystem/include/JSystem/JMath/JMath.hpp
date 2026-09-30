@@ -59,11 +59,21 @@ inline f32 JMAHermiteInterpolation(__REGISTER f32 p1, __REGISTER f32 p2, __REGIS
     // clang-format on
     return ff25;
 #elif defined(PETARI_NATIVE)
+    // The same operation sequence as the asm, with its fused multiply-adds as fmaf: the
+    // expanded Hermite polynomial cancels differently for large values and tangents.
+    const f32 elapsed = p1 - p2;
     const f32 duration = p5 - p2;
-    const f32 t = (p1 - p2) / duration;
-    const f32 t2 = t * t, t3 = t2 * t;
-    return (2*t3 - 3*t2 + 1)*p3 + (t3 - 2*t2 + t)*duration*p4
-         + (-2*t3 + 3*t2)*p6 + (t3 - t2)*duration*p7;
+    const f32 t = elapsed / duration;
+    const f32 t2 = t * t;
+    const f32 twoT = t + t;
+    const f32 t2MinusT = t2 - t;
+    const f32 valueDelta = p3 - p6;
+    f32 value = fmaf(twoT, t2MinusT, -t2);
+    f32 tangent = fmaf(p4, t2MinusT, p4);
+    value = fmaf(value, valueDelta, p3);
+    tangent = fmaf(p7, t2MinusT, tangent);
+    tangent = fmaf(t, p4, -tangent);
+    return fmaf(-elapsed, tangent, value);
 #endif
 }
 

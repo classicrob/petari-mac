@@ -599,3 +599,19 @@ draws. The two loading-time clear/intermission entries marked uncovered precede
 manifest membership publication and are already seeded. This is sampled entry
 coverage, not complete-mission or whole-game coverage. Consolidated evidence:
 `build/pipeline-prep-measure/overnight-1/owners-all-summary.json`.
+
+### Corrected-port startup UI validation
+
+The frozen startup UI comparison under `build/pipeline-prep-measure/startup-ui-1/`
+prepared all 8,721 variants in 220.639 seconds with empty app caches, versus
+1.095 seconds on the same fixture's warm rerun (same binary and exact pipeline
+keys). The warm startup wait was 0.972 seconds and the progress screen stayed
+hidden. The OS Metal cache was not cleared; this measures the combined caches.
+A real Return-key retry left 3,025 pipelines pending, continued preparation in
+the background, and passed the mission-entry smoke with zero audio underruns.
+Its remaining work finished during startup/menu, so it does not establish
+sustained gameplay performance while cold compiles run. All three runs had no
+stage-gate expiries or pipeline resolves logged at 10 ms or longer. Gameplay
+p99 was 18.0–18.4 ms, and progress-loop outliers remained: this is not locked 60.
+See `VALIDATION.md` in that artifact directory for exact metrics, cache caveats,
+screenshots, and the earlier run named `skip` that did not exercise skipping.

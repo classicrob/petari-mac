@@ -1,4 +1,4 @@
-static void pipeline_worker() {
+static void pipeline_worker(unsigned workerIndex = 0) {
 #ifdef TRACY_ENABLE
   tracy::SetThreadName("Pipeline compilation thread");
 #endif
@@ -8,13 +8,14 @@ static void pipeline_worker() {
     {
       std::unique_lock lock{g_pipelineMutex};
       if (g_hasPipelineThread) {
-        g_pipelineQueueCv.wait(lock, [] {
-          return !g_pipelineQueue.empty() || !g_backgroundPipelineQueue.empty() || g_pipelineThreadEnd;
+        g_pipelineQueueCv.wait(lock, [workerIndex] {
+          return workerIndex >= petariActiveWorkers || !g_pipelineQueue.empty() ||
+                 !g_backgroundPipelineQueue.empty() || g_pipelineThreadEnd;
         });
       } else if (g_pipelineQueue.empty() && g_backgroundPipelineQueue.empty()) {
         return;
       }
-      if (g_pipelineThreadEnd) break;
+      if (g_pipelineThreadEnd || (g_hasPipelineThread && workerIndex >= petariActiveWorkers)) break;
       background = g_pipelineQueue.empty();
       auto& source = background ? g_backgroundPipelineQueue : g_pipelineQueue;
       pending = std::move(source.front());

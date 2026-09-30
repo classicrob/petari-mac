@@ -78,7 +78,7 @@ void priorityTest() {
     auto gate = release.get_future().share();
     enqueue(1, true, [&] { running.set_value(); gate.wait(); order.push_back(1); return CompiledPipeline{true}; });
     std::vector<std::thread> workers;
-    workers.emplace_back(pipeline_worker);
+    workers.emplace_back(pipeline_worker, static_cast<unsigned>(workers.size()));
     require(running.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready, "worker did not start");
     enqueue(2, true, [&] { order.push_back(2); return CompiledPipeline{true}; });
     enqueue(3, false, [&] { order.push_back(3); return CompiledPipeline{true}; });
@@ -88,13 +88,14 @@ void priorityTest() {
     require(order == std::vector<int>({1, 3, 2}), "requested pipeline must precede queued background work");
 }
 void parallelTest() {
+    petariActiveWorkers = 2;
     std::promise<void> startedA, startedB, release;
     auto gate = release.get_future().share();
     enqueue(11, false, [&] { PetariPipeline::stages.sourceMs = 11; startedA.set_value(); gate.wait(); return CompiledPipeline{true}; });
     enqueue(22, false, [&] { PetariPipeline::stages.sourceMs = 22; startedB.set_value(); gate.wait(); return CompiledPipeline{true}; });
     std::vector<std::thread> workers;
-    workers.emplace_back(pipeline_worker);
-    workers.emplace_back(pipeline_worker);
+    workers.emplace_back(pipeline_worker, static_cast<unsigned>(workers.size()));
+    workers.emplace_back(pipeline_worker, static_cast<unsigned>(workers.size()));
     const auto readyA = startedA.get_future().wait_for(std::chrono::seconds(5));
     const auto readyB = startedB.get_future().wait_for(std::chrono::seconds(5));
     release.set_value();
@@ -110,13 +111,33 @@ void parallelTest() {
     }
     stop(workers);
 }
+void retirementTest() {
+    const auto normal = PetariPipeline::workerCount();
+    petariActiveWorkers = normal + 1;
+    std::promise<void> started, release;
+    auto gate = release.get_future().share();
+    enqueue(41, true, [&] { started.set_value(); gate.wait(); return CompiledPipeline{true}; });
+    std::thread extra(pipeline_worker, normal);
+    const auto entered = started.get_future().wait_for(std::chrono::seconds(5));
+    enqueue(42, true, [] { return CompiledPipeline{true}; });
+    petari_gx_pipeline_startup_finished();
+    release.set_value();
+    extra.join();
+    require(entered == std::future_status::ready, "extra startup worker did not enter");
+    require(g_pipelines.size() == 1 && g_pendingPipelines.count(42),
+            "extra worker took another compile after startup ended");
+    std::vector<std::thread> workers;
+    workers.emplace_back(pipeline_worker, 0);
+    waitReady(2);
+    stop(workers);
+}
 void progressTest() {
     enqueue(31, true, [] { return CompiledPipeline{false}; });
     uint32_t total, pending, failed;
     petari_gx_pipeline_preparation_status(&total, &pending, &failed);
     require(total == 1 && pending == 1 && failed == 0, "queued progress is inconsistent");
     std::vector<std::thread> workers;
-    workers.emplace_back(pipeline_worker);
+    workers.emplace_back(pipeline_worker, static_cast<unsigned>(workers.size()));
     waitReady(1);
     petari_gx_pipeline_preparation_status(&total, &pending, &failed);
     require(total == 1 && pending == 0 && failed == 1, "failed completion was reported as a successful warmup");
@@ -135,8 +156,15 @@ int main(int argc, char** argv) {
     setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "1", 1);
     aurora::gfx::require(PetariPipeline::globalPrecompile(), "explicit full preparation ignored");
     unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
+    setenv("PETARI_PIPELINE_STARTUP_THREADS", "10", 1);
+    aurora::gfx::require(PetariPipeline::startupWorkerCount() == 10, "startup tuning override ignored");
+    setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "background", 1);
+    aurora::gfx::require(PetariPipeline::startupWorkerCount() == PetariPipeline::workerCount(), "background used startup pool");
+    unsetenv("PETARI_PIPELINE_STARTUP_THREADS");
+    unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     aurora::gfx::priorityTest();
     aurora::gfx::parallelTest();
     aurora::gfx::progressTest();
+    aurora::gfx::retirementTest();
     std::puts("Pipeline worker: requested priority, concurrent progress, isolated timing state and shutdown pass");
 }

@@ -532,12 +532,13 @@ const FrameStats::Recorder* frameStats() {
 }
 
 void reportFrameStats() {
+    // Exit can come on a game thread whose plain new/delete use the game heap.
+    HostAllocationScope host;
     SpikeProfiler::writeReport();
     static std::atomic<bool> reported{false};
     if (gTiming.recorder == nullptr || !gTiming.report || reported.exchange(true)) {
         return;
     }
-    HostAllocationScope host;
     gTiming.recorder->writeSummary(stderr);
     if (gTiming.csvPath != nullptr) {
         if (gTiming.recorder->writeCsv(gTiming.csvPath)) {

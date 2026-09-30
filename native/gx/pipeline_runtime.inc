@@ -31,6 +31,20 @@ static absl::flat_hash_map<PipelineRef, PetariPipelineSample> petariPipelineSamp
 static std::atomic<unsigned> petariPipelineWaiters{0};
 static std::atomic<uint64_t> petariSkippedDraws{0};
 static uint32_t petariFailedPipelines = 0; // guarded by g_pipelineMutex
+static unsigned petariActiveWorkers = PetariPipeline::workerCount(); // guarded by g_pipelineMutex
+
+extern "C" void petari_gx_pipeline_startup_finished() {
+  unsigned previous, current;
+  {
+    std::lock_guard lock{g_pipelineMutex};
+    previous = petariActiveWorkers;
+    current = petariActiveWorkers = PetariPipeline::workerCount();
+  }
+  g_pipelineQueueCv.notify_all();
+  std::fprintf(stderr, "[gx pipeline pool] startup_finished=1 previous_workers=%u background_workers=%u extra_inflight=drain\n",
+               previous, current);
+}
+
 
 extern "C" void petari_gx_pipeline_preparation_status(uint32_t* total, uint32_t* pending, uint32_t* failed) {
   std::lock_guard lock{g_pipelineMutex};

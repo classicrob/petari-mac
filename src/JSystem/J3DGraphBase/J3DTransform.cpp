@@ -462,13 +462,15 @@ asm void J3DMtxProjConcat(__REGISTER Mtx mtx1, __REGISTER Mtx mtx2, __REGISTER M
 }
 #else
 void J3DMtxProjConcat(Mtx mtx1, Mtx mtx2, Mtx dst) {
-    // mtx2 is read as a 4x4 projection matrix; mtx1 and dst are 3x4.
+    // mtx2 is read as a 4x4 projection matrix; mtx1 and dst are 3x4. Like the asm, each
+    // row of mtx1 is read before that row of dst is written, so dst may be mtx1.
     for (int row = 0; row < 3; row++) {
+        const f32 a0 = mtx1[row][0], a1 = mtx1[row][1], a2 = mtx1[row][2], a3 = mtx1[row][3];
         for (int col = 0; col < 4; col++) {
-            f32 value = mtx1[row][0] * mtx2[0][col];
-            value = fmaf(mtx1[row][1], mtx2[1][col], value);
-            value = fmaf(mtx1[row][2], mtx2[2][col], value);
-            value = fmaf(mtx1[row][3], mtx2[3][col], value);
+            f32 value = a0 * mtx2[0][col];
+            value = fmaf(a1, mtx2[1][col], value);
+            value = fmaf(a2, mtx2[2][col], value);
+            value = fmaf(a3, mtx2[3][col], value);
             dst[row][col] = value;
         }
     }
@@ -584,8 +586,10 @@ loop:
 }
 #else
 void J3DPSMtxArrayConcat(Mtx mA, Mtx mB, Mtx mAB, u32 count) {
-    // mAB[i] = mA * mB[i], using the same product order as PSMTXConcat.
+    // mAB[i] = mA * mB[i], using the same product order as PSMTXConcat. Like the asm, all
+    // of mA and mB[i] are read before mAB[i] is written, so mAB may be mB (in place).
     for (u32 i = 0; i < count; i++) {
+        f32 result[3][4];
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 4; col++) {
                 f32 value = mB[i * 3 + 0][col] * mA[row][0];
@@ -594,7 +598,12 @@ void J3DPSMtxArrayConcat(Mtx mA, Mtx mB, Mtx mAB, u32 count) {
                 if (col >= 2) {
                     value = fmaf(Unit01[col - 2], mA[row][3], value);
                 }
-                mAB[i * 3 + row][col] = value;
+                result[row][col] = value;
+            }
+        }
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 4; col++) {
+                mAB[i * 3 + row][col] = result[row][col];
             }
         }
     }

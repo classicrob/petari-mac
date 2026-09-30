@@ -633,34 +633,45 @@ void testRegisterContention() {
             AIInitDMA(reinterpret_cast<uintptr_t>(blocks[b]), kFrames[b] * 4);
         }
     });
+    // Runs of equal values heard; the first and last may be partial. Counts the whole ones and
+    // checks each is a whole number of its block's length.
     std::vector<std::int16_t> heard;
-    std::vector<std::int16_t> out(97 * 2);
-    for (int n = 0; n < 2000; ++n) {
-        PAudio::pull(out.data(), 97);
-        for (std::size_t i = 0; i < out.size(); i += 2) {
-            heard.push_back(out[i]);
+    bool whole = true;
+    std::size_t runs = 0;
+    const auto analyse = [&] {
+        whole = true;
+        runs = 0;
+        std::size_t start = 0;
+        for (std::size_t i = 1; i <= heard.size(); ++i) {
+            if (i == heard.size() || heard[i] != heard[start]) {
+                const std::int16_t v = heard[start];
+                const std::size_t length = i - start;
+                if (start != 0 && i != heard.size() && v >= 1 && v <= kBlocks) {
+                    whole = whole && length % kFrames[v - 1] == 0;
+                    ++runs;
+                }
+                start = i;
+            }
         }
-    }
+    };
+    // Pull until the registrar has had enough CPU to cause many latches (a loaded host can starve
+    // it for a while); fail only if that has not happened within a generous wall-clock cap.
+    std::vector<std::int16_t> out(97 * 2);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    do {
+        for (int n = 0; n < 2000; ++n) {
+            PAudio::pull(out.data(), 97);
+            for (std::size_t i = 0; i < out.size(); i += 2) {
+                heard.push_back(out[i]);
+            }
+        }
+        analyse();
+    } while (runs <= 100 && std::chrono::steady_clock::now() < deadline);
     stop = true;
     registrar.join();
     AIStopDMA();
     PAudio::shutdown();
-    // Runs of equal values; the first and last may be partial.
-    bool whole = true;
-    std::size_t runs = 0;
-    std::size_t start = 0;
-    for (std::size_t i = 1; i <= heard.size(); ++i) {
-        if (i == heard.size() || heard[i] != heard[start]) {
-            const std::int16_t v = heard[start];
-            const std::size_t length = i - start;
-            if (start != 0 && i != heard.size() && v >= 1 && v <= kBlocks) {
-                whole = whole && length % kFrames[v - 1] == 0;
-                ++runs;
-            }
-            start = i;
-        }
-    }
-    check(runs > 100, "many block latches under contention");
+    check(runs > 100, "many block latches under contention (within 30 s)");
     check(whole, "every latched block plays whole with its own length: no torn register snapshot");
 }
 

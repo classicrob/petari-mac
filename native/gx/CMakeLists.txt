@@ -318,6 +318,26 @@ if(_petari_build_testing)
     target_link_options(petari_math_util_tests PRIVATE -Wl,-dead_strip)
     add_test(NAME native_math_util COMMAND petari_math_util_tests)
     add_test(NAME native_asm_only_bodies COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/native/tests/asm_only_bodies_tests.py")
+    # Native branches vs the Wii paired-single asm they replace, run in a paired-single
+    # interpreter (native/tests/paired_single.py) on the same inputs.
+    add_executable(petari_wii_asm_equivalence_harness
+        "${CMAKE_SOURCE_DIR}/native/tests/wii_asm_equivalence_harness.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp" legacy_commands.cpp
+        "${CMAKE_SOURCE_DIR}/src/Game/Util/MathUtil.cpp")
+    petari_encode_target_sources(petari_wii_asm_equivalence_harness)
+    target_link_libraries(petari_wii_asm_equivalence_harness PRIVATE petari_j3d)
+    target_link_options(petari_wii_asm_equivalence_harness PRIVATE -Wl,-dead_strip)
+    # CPU-written textures reach the renderer after DCStoreRange (host store log +
+    # patched GXLoadTexObj revalidation).
+    add_executable(petari_texture_store_tests
+        "${CMAKE_SOURCE_DIR}/native/tests/texture_store_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp" legacy_commands.cpp)
+    petari_encode_target_sources(petari_texture_store_tests)
+    target_link_libraries(petari_texture_store_tests PRIVATE petari_j3d)
+    target_link_options(petari_texture_store_tests PRIVATE -Wl,-dead_strip)
+    add_test(NAME native_texture_store COMMAND petari_texture_store_tests)
+    add_test(NAME native_wii_asm_equivalence COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tests/wii_asm_equivalence_tests.py" $<TARGET_FILE:petari_wii_asm_equivalence_harness>)
     if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
         add_test(NAME native_kcl_server_assets COMMAND petari_kcl_server_tests
             --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
@@ -449,13 +469,15 @@ if(_petari_build_testing)
     add_test(NAME native_pipeline_stage COMMAND petari_pipeline_stage_tests)
     add_test(NAME native_pipeline_seed COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/native/tools/pipeline_seed_tests.py" --aurora "${aurora_SOURCE_DIR}")
+    add_test(NAME native_pipeline_stage_audit COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tools/pipeline_stage_audit_tests.py")
     add_test(NAME native_pipeline_replay COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/native/tools/pipeline_replay_tests.py")
     add_test(NAME native_pipeline_seed_sort COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/native/tools/pipeline_seed_sort_tests.py"
         $<TARGET_FILE:petari_pipeline_seed_sort_tests>)
     set_tests_properties(native_pipeline_worker native_pipeline_worker_async native_pipeline_stage
-        native_pipeline_seed native_pipeline_replay native_pipeline_seed_sort PROPERTIES
+        native_pipeline_seed native_pipeline_replay native_pipeline_seed_sort native_pipeline_stage_audit PROPERTIES
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" TIMEOUT 60)
 endif()
 

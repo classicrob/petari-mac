@@ -33,6 +33,7 @@ def distribution(values):
 
 def summarize(events, loads):
     compiles, blocking, stages, essentials, startup_preparation = [], [], [], [], []
+    startup_timing, startup_hitches = [], []
     audio_reports, underrun_frames, replayed_blocks = 0, 0, 0
     pipeline_summary = None
     first_frame = next((index for index, event in enumerate(events)
@@ -56,6 +57,10 @@ def summarize(events, loads):
             essentials.append(dict(fields, elapsed_s=event['elapsed_s']))
         if '[gx startup prep]' in line:
             startup_preparation.append(dict(fields, elapsed_s=event['elapsed_s']))
+        if '[gx startup timing]' in line:
+            startup_timing.append(dict(fields))
+        if '[gx startup hitch]' in line:
+            startup_hitches.append(dict(fields))
         if '[gx pipeline compile]' in line:
             compiles.append(dict(fields, elapsed_s=event['elapsed_s'], stage=stage))
         if '[gx stage prep]' in line or '[gx stage ready]' in line or '[gx warmup]' in line or '[gx global prep]' in line:
@@ -63,7 +68,7 @@ def summarize(events, loads):
         if '[gx pipeline] blocking resolve' in line:
             match = re.search(r'blocking resolve ([\d.]+) ms', line)
             if match: blocking.append({'stage': stage, 'elapsed_s': event['elapsed_s'], 'ms': float(match[1]), 'line': line})
-    return {'stage_events': stages, 'essential_prewarm': essentials, 'startup_preparation': startup_preparation,
+    return {'startup_timing': startup_timing, 'startup_hitches': startup_hitches, 'stage_events': stages, 'essential_prewarm': essentials, 'startup_preparation': startup_preparation,
             'blocking_resolves': blocking,
             'audio': {'reports': audio_reports, 'underrun_frames': underrun_frames,
                       'replayed_blocks': replayed_blocks,

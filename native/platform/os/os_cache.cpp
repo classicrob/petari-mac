@@ -20,21 +20,87 @@
 //   main memory. Natively its "addresses" are host pointers; LCStoreData
 //   copies whole 32-byte blocks synchronously, so the DMA queue is always
 //   empty and LCQueueWait returns at once.
+// - Store log: the Wii GPU reads textures from memory, so after the CPU
+//   rewrites a texture and stores it (DCStoreRange/DCFlushRange, then
+//   GXInvalidateTexAll for the texture cache) the next draw sees the new
+//   texels. Aurora uploads a texture once per texture object and data
+//   version, so every store is logged by 4 KiB page with a generation, and
+//   the texture loader asks whether a texture's bytes were stored since it
+//   last looked (petari_dc_stored_since). SnowFloor, fur density, normal-map
+//   and Mario's dissolve-mask textures depend on this.
 
 #include <revolution/os.h>
+
+#include <petari/host_allocation.hpp>
 
 #include <libkern/OSCacheControl.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 namespace {
 
 constexpr std::uintptr_t kBlock = 32;
 std::atomic<bool> gLockedCacheEnabled{false};
 
+constexpr unsigned kStorePageShift = 12;
+std::atomic<std::uint64_t> gStoreGeneration{0};
+std::mutex gStoreLock;
+// Page -> generation of the last store touching it. Bounded by the pages the game
+// ever stores (its heaps), a few MiB at most.
+std::unordered_map<std::uintptr_t, std::uint64_t>& storePages() {
+    static auto* pPages = new std::unordered_map<std::uintptr_t, std::uint64_t>();
+    return *pPages;
+}
+
+void logStore(const void* addr, std::size_t nBytes) {
+    if (addr == nullptr || nBytes == 0) {
+        return;
+    }
+    const std::uintptr_t first = reinterpret_cast<std::uintptr_t>(addr) >> kStorePageShift;
+    const std::uintptr_t last = (reinterpret_cast<std::uintptr_t>(addr) + nBytes - 1) >> kStorePageShift;
+    // DC stores come from game threads. The page map must never allocate from the game
+    // heap while gStoreLock is held: the heap's mutex and the CPU baton can be held by a
+    // thread that is itself waiting for gStoreLock (startup deadlock).
+    PetariNative::HostAllocationScope hostAllocations;
+    std::lock_guard<std::mutex> guard(gStoreLock);
+    const std::uint64_t generation = gStoreGeneration.load(std::memory_order_relaxed) + 1;
+    auto& pages = storePages();
+    for (std::uintptr_t page = first; page <= last; ++page) {
+        pages[page] = generation;
+    }
+    gStoreGeneration.store(generation, std::memory_order_release);
+}
+
 }  // namespace
+
+// Generation of the latest logged store (0 before any).
+extern "C" std::uint64_t petari_dc_store_generation(void) {
+    return gStoreGeneration.load(std::memory_order_acquire);
+}
+
+// Nonzero when a store logged after generation `since` touched [addr, addr + nBytes).
+extern "C" int petari_dc_stored_since(const void* addr, std::size_t nBytes, std::uint64_t since) {
+    if (addr == nullptr || nBytes == 0 || gStoreGeneration.load(std::memory_order_acquire) <= since) {
+        return 0;
+    }
+    const std::uintptr_t first = reinterpret_cast<std::uintptr_t>(addr) >> kStorePageShift;
+    const std::uintptr_t last = (reinterpret_cast<std::uintptr_t>(addr) + nBytes - 1) >> kStorePageShift;
+    PetariNative::HostAllocationScope hostAllocations;  // storePages() may construct the map
+    std::lock_guard<std::mutex> guard(gStoreLock);
+    const auto& pages = storePages();
+    for (std::uintptr_t page = first; page <= last; ++page) {
+        const auto it = pages.find(page);
+        if (it != pages.end() && it->second > since) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 extern "C" {
 
@@ -48,19 +114,23 @@ void DCInvalidate(void*, u32) {
     std::atomic_thread_fence(std::memory_order_acquire);
 }
 
-void DCFlushRange(void*, u32) {
+void DCFlushRange(void* addr, u32 nBytes) {
+    logStore(addr, nBytes);
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
-void DCStoreRange(void*, u32) {
+void DCStoreRange(void* addr, u32 nBytes) {
+    logStore(addr, nBytes);
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
-void DCFlushRangeNoSync(void*, u32) {
+void DCFlushRangeNoSync(void* addr, u32 nBytes) {
+    logStore(addr, nBytes);
     std::atomic_thread_fence(std::memory_order_release);
 }
 
-void DCStoreRangeNoSync(void*, u32) {
+void DCStoreRangeNoSync(void* addr, u32 nBytes) {
+    logStore(addr, nBytes);
     std::atomic_thread_fence(std::memory_order_release);
 }
 
@@ -71,6 +141,7 @@ void DCZeroRange(void* addr, u32 nBytes) {
     const std::uintptr_t start = reinterpret_cast<std::uintptr_t>(addr) & ~(kBlock - 1);
     const std::uintptr_t end = (reinterpret_cast<std::uintptr_t>(addr) + nBytes + kBlock - 1) & ~(kBlock - 1);
     std::memset(reinterpret_cast<void*>(start), 0, end - start);
+    logStore(reinterpret_cast<void*>(start), end - start);
 }
 
 void ICInvalidateRange(void* addr, u32 nBytes) {
@@ -98,6 +169,7 @@ void LCStoreBlocks(void* pDest, void* pSrc, u32 num) {
         OSPanic(__FILE__, __LINE__, "LCStoreBlocks(): %u blocks exceed one DMA transaction", blocks);
     }
     std::memmove(pDest, pSrc, blocks * kBlock);
+    logStore(pDest, blocks * kBlock);
 }
 
 u32 LCStoreData(void* pDest, void* pSrc, u32 num) {

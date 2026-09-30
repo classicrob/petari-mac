@@ -56,6 +56,27 @@ behavior, corpus/component checks and remaining integration work.
   and gets to the Fruit Peel. That run then lost its last lives to Fruit Peel
   hazards; this is a separate issue, not investigated here. Full ctest 89/89.
 
+## Native branches vs Wii paired-single asm, 2026-09-30
+
+- Audited every asm/native split in src/, libs/ and include/ (48 blocks in 20
+  files) plus native/src/mtx.cpp, jmath.cpp and intrinsics.cpp. The classes checked
+  are listed in native/tests/asm_only_bodies_tests.py.
+- `native_wii_asm_equivalence` runs the Wii asm text from the sources in a
+  paired-single interpreter (native/tests/paired_single.py) and compares it with the
+  native branch on the same inputs: 1331 cases over 34 functions (J3D inverse
+  transpose, normal scaling, projection and array concat, the key-frame Hermites,
+  skinning helpers, JMath/TVec vector ops, MR blends, quantized fast casts).
+  Linked against the pre-fix MathUtil.cpp it fails 40 cases.
+- Fixed: J3DMtxProjConcat and J3DPSMtxArrayConcat were not in-place safe on native
+  (the asm is). No current caller passes aliased matrices, so this was latent.
+  JMAHermiteInterpolation now follows the asm's fused operation order; the
+  expanded polynomial differed by up to ~1.5e-5 relative when terms cancel.
+- Not changed, by design: native fres/frsqrte are exact where the Wii estimates.
+  Refined uses converge to the same values. The unrefined ones only affect joint
+  scale compensation and Y-billboards, and only in precision.
+- skinning (J3DMtxBuffer::calcWeightEnvelopeMtx) mixes C loops with asm, so it
+  was checked by hand, lane by lane, not in the interpreter.
+
 ## Broader integration coverage
 
 - Story run 6 traversed Peach's Castle Garden, played both full prologue movies,
@@ -260,3 +281,31 @@ resolve (under investigation). Audio: 1 replay (startup), 0 underrun frames,
 0 DMA waits, 0 DSP holds, shortest block ~16.0 ms. Host load average ~20 from
 unrelated applications. Seeds were derived from earlier runs of this same
 route, so this does not demonstrate coverage for unvisited stages.
+
+### Overnight 2026-09-29/30 summary (lead)
+
+Verified live on the current builds (details in the linked worker reports):
+- Whole-game stage sweep on the vector-blend fix build (0034df893): all 47
+  enterable stages, missions 1-3, 83/83 runs with 0 crash, hang, heap failure,
+  missing asset reference or renderer error (build/stage-sweep/all-s1-3-blendfix).
+  Comets/hidden stars in progress.
+- Good Egg mission 1: Bean B landing fixed (MR::vecBlend/vecScaleAdd were no-ops
+  natively); driver reaches Piranha Plant, vine and Fruit Peel; star not yet
+  collected. Real keyboard input (computer-use) verified title -> observatory ->
+  Terrace -> Good Egg -> Sling Star -> first Launch Star -> Peanut, save/reload,
+  no dimming, zero audio underruns.
+- First-launch shader preparation (default): cold 3m41s then every stage gate
+  <0.1 ms, gameplay p99 ~18.4 ms, 0 frames >33 ms; warm launch <1 s; Return/
+  controller skip verified live. Quiet-lock perf survey: 7/15 heavy stages at 60
+  (0-0.3% late, p99 17.5-18.9 ms).
+- Soak: 86 cycles / 105 min, no crash/hang/stall/audio fault; ~0.3 MB/cycle host
+  malloc growth under investigation.
+- Fixed tonight: 8 GiB index-reservation wrap (and the ~1.6 s mission-entry stall),
+  Toy Time texture offset crash, file-cache overflow risk (7 stages), Luigi heap
+  switch, startup deadlock in os_cache logStore, logo abort in texture
+  revalidation, busy-wait livelock (forced preemption), screen dimming, audio
+  device-thread starvation, several Wii-asm divergences; host-code allocations on
+  game threads are now routed to the host heap automatically.
+Known open: shader coverage gaps on ~10 stages (e.g. OceanPhantomCave, HellProminence);
+rare menu hitches (~190 ms game work); ~0.3 MB/cycle memory growth; Good Egg star
+and later missions not yet completed end to end; controller hardware untested.

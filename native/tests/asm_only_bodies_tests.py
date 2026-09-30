@@ -6,6 +6,26 @@ compiles to an empty function on the native build. MR::PSvecBlend was one: MR::v
 silently kept its old value everywhere (Mario's binder offset stuck after a launch star, so
 he hovered over Good Egg's Bean B). Every such body needs a native branch, or an entry in
 ALLOWED with the reason it is a host no-op.
+
+This check finds MISSING native branches. Whether existing branches compute the same
+thing as the asm is native_wii_asm_equivalence (wii_asm_equivalence_tests.py): it runs
+the asm text in a paired-single interpreter and compares the native branch on the same
+inputs. Audit of 2026-09-30 (every asm split in src/, libs/, include/ plus
+native/src/mtx.cpp, jmath.cpp, intrinsics.cpp) checked these classes:
+- argument order and which components are touched (x/y lanes vs a separate z);
+- outputs aliasing inputs: in-place calls must read everything they need before
+  writing, as the asm does (J3DMtxProjConcat and J3DPSMtxArrayConcat did not);
+- fused multiply-add order where values cancel (JMAHermiteInterpolation's expanded
+  polynomial drifted from the asm's factored form);
+- quantized loads/stores: GQR2-5 are u8/u16/s8/s16 with scale 0 (J3DSys::drawInit,
+  OSInitFastCast); stores saturate and truncate toward zero; NaN stores 0;
+- fsel (>= 0 including -0, NaN takes the negative operand), __cntlzw(0) = 32;
+- fres/frsqrte: the native versions are exact where the Wii estimates. Every refined
+  use (a Newton step) converges to the same value; the unrefined ones
+  (JMath::fastReciprocal for joint scale compensation, JMAFastSqrt/fastSqrt for
+  Y-billboards) are only more precise on native, a visual-only difference.
+Sources that are not compiled natively (the RVL GX library, whose FAST_FLAG_SET and
+WriteLightObjPS have empty native forms) are out of scope.
 """
 from pathlib import Path
 import re

@@ -2171,8 +2171,8 @@ void testGoodEggObjectives() {
     Observation up = actor(egg(-17710, -10818, -9431), "HammerHead", -17716, -10500, -9460, 0, Smoke::kActorHostile);
     const int jumps = hammer.count(Button::A, true);
     hammer.frames(up, 60);
-    check(hammer.count(Button::A, true) == jumps && !hammer.held(Button::StickUp) && !hammer.held(Button::StickDown),
-          "Hammer Head up: wait near its base");
+    check(hammer.count(Button::A, true) == jumps && hammer.logged("going to the Hammer Head's baiting spot"),
+          "Hammer Head up: back off to the baiting spot ~600 from its base, no jumping at it");
 
     // Dino Piranha: ball ready behind it and within reach: spin; ball flying: move away.
     EggRun dino;

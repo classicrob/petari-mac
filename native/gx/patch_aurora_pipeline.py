@@ -43,7 +43,7 @@ def patch(text):
       petariGlobalActive = true;
       petariGlobalLastLog = {};
       std::fprintf(stderr, "[gx global prep] configs_known=%zu pending_variants=%zu workers=%u performance_cores=%u background_qos=utility\\n",
-                   g_knownPipelines.size(), petariGlobalInitialPending, PetariPipeline::workerCount(), PetariPipeline::performanceCores());
+                   g_knownPipelines.size(), petariGlobalInitialPending, PetariPipeline::startupWorkerCount(), PetariPipeline::performanceCores());
     }
     petari_global_progress();
   }''')
@@ -81,10 +81,11 @@ def patch(text):
     start = text.index('static void pipeline_worker() {')
     end = text.index('\ntemplate <typename PipelineConfig>\nstatic size_t load_pipeline_cache_entries', start)
     text = text[:start] + (here / 'pipeline_worker.inc').read_text() + text[end:]
-    replace('    g_pipelineThread = std::thread(pipeline_worker);', '''    const unsigned count = PetariPipeline::workerCount();
+    replace('    g_pipelineThread = std::thread(pipeline_worker);', '''    const unsigned count = PetariPipeline::startupWorkerCount();
+    petariActiveWorkers = count;
     std::fprintf(stderr, "[gx pipeline] policy=%s compile_workers=%u\\n",
                  PetariPipeline::asynchronous() ? "async" : "blocking", count);
-    for (unsigned i = 0; i < count; ++i) g_pipelineThreads.emplace_back(pipeline_worker);''')
+    for (unsigned i = 0; i < count; ++i) g_pipelineThreads.emplace_back(pipeline_worker, i);''')
     replace('    g_pipelineThread.join();',
             '    for (auto& worker : g_pipelineThreads) worker.join();\n    g_pipelineThreads.clear();')
     replace('  stop_pipeline_cache_writer();',

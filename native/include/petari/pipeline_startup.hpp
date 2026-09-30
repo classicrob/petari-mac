@@ -23,3 +23,5 @@ bool drawPipelinePreparation(const PipelinePreparationView& view, float width, f
 extern "C" void petari_gx_pipeline_preparation_status(std::uint32_t* total, std::uint32_t* pending,
                                                      std::uint32_t* failed);
 extern "C" bool petari_gx_pipeline_full_preparation();
+
+extern "C" void petari_gx_pipeline_startup_finished();

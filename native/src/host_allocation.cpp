@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace PetariNative {
 namespace {
@@ -20,18 +22,20 @@ thread_local bool sCpuReleased;
 thread_local bool sClassifying;
 thread_local std::uintptr_t sStackLow, sStackHigh;
 
-// ---- Allocation-site diagnostics ----
-// A game-heap allocation is one made on a game thread outside any
+// ---- Allocation-site routing ----
+// A game-heap candidate is an allocation on a game thread outside any
 // HostAllocationScope while a JKR heap is current. Its call chain is hashed
-// (frame pointers only, no locks) and looked up in a fixed table of verdicts;
-// a chain seen for the first time is symbolized once and classified by its
-// first frame that is not the allocator, the C++ library or an anonymous
-// namespace helper: renderer/host code (Aurora, Dawn, SDL, fmt, PetariNative,
-// petari_*/aurora_* C entry points, native SDK replacements) is a missing
-// HostAllocationScope. Such allocations still use the game heap (the call site
-// is what needs fixing); allocations while the thread has released the CPU
-// (host work, petari_os_begin_host_blocking) cannot be game code and use the
-// host allocator.
+// (frame pointers only, no locks, no allocation) and looked up in a fixed
+// table of verdicts; a chain seen for the first time is symbolized once and
+// classified by its first frame that is not the allocator, the C++ library or
+// an anonymous-namespace helper. Renderer/host/platform code (Aurora, Dawn,
+// SDL, fmt, PetariNative, any C-linkage function: petari_*/aurora_* ABI,
+// native SDK replacements) is routed to the host allocator, exactly as if a
+// HostAllocationScope were open, and counted per site (logged once): host
+// bookkeeping in the game's current heap crashed, deadlocked or exhausted it
+// three times (petari_gx_pipeline_stage_wait, os_cache logStore,
+// petari_gx_revalidate_texobj). Game code keeps the JKR heap. Allocations
+// while the thread has released the CPU (host work) are always host.
 
 constexpr int kFrames = 16;
 constexpr int kKeyFrames = 8;                // chain identity
@@ -44,6 +48,8 @@ enum Verdict : std::uint8_t { kUnknown = 0, kGame = 1, kHost = 2 };
 std::atomic<std::uint64_t> gKeys[kTableSize];
 std::atomic<std::uint8_t> gVerdicts[kTableSize];
 std::atomic<std::uint64_t> gSiteIds[kTableSize];  // start of the deciding function (reports group by it)
+std::atomic<std::uint32_t> gCounts[kTableSize];   // routed (or CPU-released) allocations per chain
+std::atomic<std::uint64_t> gRouted{0}, gReleasedCount{0}, gEvicted{0};
 std::atomic<bool> gSiteCheck{[] {
     const char* value = std::getenv("PETARI_ALLOC_SITE_CHECK");
     return value == nullptr || value[0] != '0';
@@ -51,10 +57,7 @@ std::atomic<bool> gSiteCheck{[] {
 
 struct Stats {
     std::mutex lock;
-    std::uint64_t hostSiteAllocations = 0;
-    std::uint64_t releasedAllocations = 0;
     std::uint64_t classified = 0;
-    std::uint64_t tableFull = 0;
     struct Site {
         std::string description;
         std::uint64_t key;
@@ -108,13 +111,17 @@ std::uint64_t hashFrames(const std::uintptr_t* frames, int n) {
 
 // Demangled name reduced to its qualified function name: no return type,
 // parameters or template arguments; "(anonymous namespace)" becomes "{anon}".
-std::string functionName(std::uintptr_t address, std::uint64_t* start = nullptr) {
+// `cLinkage`: the symbol is not C++-mangled (an extern "C" or C function).
+std::string functionName(std::uintptr_t address, std::uint64_t* start = nullptr, bool* cLinkage = nullptr) {
     Dl_info info{};
     if (dladdr(reinterpret_cast<void*>(address - 1), &info) == 0 || info.dli_sname == nullptr) {
         return {};
     }
     if (start != nullptr) {
         *start = reinterpret_cast<std::uint64_t>(info.dli_saddr);
+    }
+    if (cLinkage != nullptr) {
+        *cLinkage = std::strncmp(info.dli_sname, "_Z", 2) != 0;
     }
     char* demangled = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, nullptr);
     std::string name = demangled != nullptr ? demangled : info.dli_sname;
@@ -193,11 +200,9 @@ void noteSite(std::uint64_t key, const std::uintptr_t* frames, int n, bool relea
     } done;
     Stats& st = stats();
     std::lock_guard<std::mutex> guard(st.lock);
-    (released ? st.releasedAllocations : st.hostSiteAllocations)++;
     for (int i = 0; i < st.siteCount; ++i) {
         if (st.sites[i].key == key) {
-            ++st.sites[i].count;
-            return;
+            return;  // described and logged at its first chain
         }
     }
     if (st.siteCount == kReportedSites) {
@@ -216,7 +221,7 @@ void noteSite(std::uint64_t key, const std::uintptr_t* frames, int n, bool relea
     st.sites[st.siteCount++] = {chain, key, 1, released};
     std::fprintf(stderr, "[alloc] %s: %s\n",
                  released ? "allocation with the CPU released, moved to the host allocator"
-                          : "game-heap allocation from host code (missing HostAllocationScope)",
+                          : "host code allocating on a game thread without a HostAllocationScope, routed to the host allocator",
                  chain.c_str());
 }
 
@@ -235,7 +240,8 @@ bool classify(bool released) {
                 return false;
             }
             if (verdict != kUnknown) {
-                noteSite(gSiteIds[slot].load(std::memory_order_relaxed), frames, n, released);
+                gCounts[slot].fetch_add(1, std::memory_order_relaxed);
+                (released ? gReleasedCount : gRouted).fetch_add(1, std::memory_order_relaxed);
                 return verdict == kHost;
             }
             break;
@@ -251,35 +257,45 @@ bool classify(bool released) {
     std::uint64_t site = key;
     for (int i = 0; i < n; ++i) {
         std::uint64_t function = 0;
-        const std::string name = functionName(frames[i], &function);
+        bool cLinkage = false;
+        const std::string name = functionName(frames[i], &function, &cLinkage);
         if (threadStart(name)) {
             break;
         }
         if (allocatorOrLibrary(name)) {
             continue;
         }
-        host = hostCode(name);
+        // Game C++ is mangled, and C cannot call operator new: an unmangled
+        // function here is native code behind a C entry point (an SDK
+        // replacement such as DCStoreRange, a petari_* ABI), whatever its name.
+        host = hostCode(name) || cLinkage;
         site = function;
         break;
     }
+    std::size_t slot = start;
     bool stored = false;
     for (int p = 0; p < kProbes && !stored; ++p) {
-        const std::size_t slot = (start + p) & (kTableSize - 1);
+        slot = (start + p) & (kTableSize - 1);
         std::uint64_t expected = 0;
-        if (gKeys[slot].compare_exchange_strong(expected, key, std::memory_order_acq_rel) || expected == key) {
-            gSiteIds[slot].store(site, std::memory_order_relaxed);
-            gVerdicts[slot].store(host ? kHost : kGame, std::memory_order_release);
-            stored = true;
-        }
+        stored = gKeys[slot].compare_exchange_strong(expected, key, std::memory_order_acq_rel) || expected == key;
+    }
+    if (!stored) {
+        // A full cluster evicts its first entry (re-classified if seen again);
+        // never stop checking, which would let host code into the game heap.
+        slot = start;
+        gVerdicts[slot].store(kUnknown, std::memory_order_release);
+        gKeys[slot].store(key, std::memory_order_release);
+        gEvicted.fetch_add(1, std::memory_order_relaxed);
+    }
+    gSiteIds[slot].store(site, std::memory_order_relaxed);
+    gCounts[slot].store(host || released ? 1 : 0, std::memory_order_relaxed);
+    gVerdicts[slot].store(host ? kHost : kGame, std::memory_order_release);
+    if (host || released) {
+        (released ? gReleasedCount : gRouted).fetch_add(1, std::memory_order_relaxed);
     }
     {
         std::lock_guard<std::mutex> guard(stats().lock);
         ++stats().classified;
-        // Chains that cannot be cached would be symbolized on every allocation.
-        if (!stored && ++stats().tableFull == 1000) {
-            gSiteCheck.store(false, std::memory_order_relaxed);
-            std::fprintf(stderr, "[alloc] allocation-site table full; site checks disabled\n");
-        }
     }
     sClassifying = false;
     if (host || released) {
@@ -313,15 +329,14 @@ bool isHostAllocationActive() {
         classify(true);
         return true;
     }
-    if (gSiteCheck.load(std::memory_order_relaxed)) {
-        classify(false);
-    }
-    return false;
+    // Host code on a game thread: the host allocator, as if a scope were open.
+    return gSiteCheck.load(std::memory_order_relaxed) && classify(false);
 }
 
 CodeKind classifyCode(std::uintptr_t address, std::string* name) {
     HostAllocationScope scope;
-    std::string function = functionName(address);
+    bool cLinkage = false;
+    std::string function = functionName(address, nullptr, &cLinkage);
     CodeKind kind;
     if (function.empty()) {
         kind = CodeKind::Unknown;
@@ -332,7 +347,7 @@ CodeKind classifyCode(std::uintptr_t address, std::string* name) {
     } else if (allocatorOrLibrary(function)) {
         kind = CodeKind::Library;
     } else {
-        kind = hostCode(function) ? CodeKind::Host : CodeKind::Game;
+        kind = hostCode(function) || cLinkage ? CodeKind::Host : CodeKind::Game;
     }
     if (name != nullptr) {
         *name = std::move(function);
@@ -351,22 +366,46 @@ void setAllocationSiteCheck(bool enabled) {
 AllocationDiagnostics allocationDiagnostics() {
     Stats& st = stats();
     std::lock_guard<std::mutex> guard(st.lock);
-    return {st.hostSiteAllocations, st.releasedAllocations, st.classified, st.siteCount};
+    return {gRouted.load(), gReleasedCount.load(), st.classified, st.siteCount};
 }
 
 void reportAllocationDiagnostics(std::FILE* out) {
     HostAllocationScope scope;
+    // Routed allocations per deciding function, from the chain table.
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> perSite;
+    for (std::size_t slot = 0; slot < kTableSize; ++slot) {
+        const std::uint32_t count = gCounts[slot].load(std::memory_order_relaxed);
+        if (count == 0) {
+            continue;
+        }
+        const std::uint64_t site = gSiteIds[slot].load(std::memory_order_relaxed);
+        auto it = std::find_if(perSite.begin(), perSite.end(), [&](const auto& e) { return e.first == site; });
+        if (it == perSite.end()) {
+            perSite.emplace_back(site, count);
+        } else {
+            it->second += count;
+        }
+    }
+    std::sort(perSite.begin(), perSite.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
     Stats& st = stats();
     std::lock_guard<std::mutex> guard(st.lock);
     std::fprintf(out,
-                 "[alloc] summary: %llu game-heap allocations from host code, %llu with the CPU released (moved to the "
-                 "host allocator), %d sites, %llu call chains classified%s\n",
-                 static_cast<unsigned long long>(st.hostSiteAllocations), static_cast<unsigned long long>(st.releasedAllocations),
-                 st.siteCount, static_cast<unsigned long long>(st.classified),
-                 gSiteCheck.load() ? "" : " (site checks off)");
-    for (int i = 0; i < st.siteCount; ++i) {
-        std::fprintf(out, "[alloc]   %llu x %s%s\n", static_cast<unsigned long long>(st.sites[i].count),
-                     st.sites[i].description.c_str(), st.sites[i].released ? " (CPU released)" : "");
+                 "[alloc] summary: %llu allocations by host code on game threads routed to the host allocator, %llu with "
+                 "the CPU released, %zu sites, %llu call chains classified (%llu evicted)%s\n",
+                 static_cast<unsigned long long>(gRouted.load()), static_cast<unsigned long long>(gReleasedCount.load()),
+                 perSite.size(), static_cast<unsigned long long>(st.classified),
+                 static_cast<unsigned long long>(gEvicted.load()), gSiteCheck.load() ? "" : " (site routing off)");
+    for (const auto& [site, count] : perSite) {
+        std::string description;
+        for (int i = 0; i < st.siteCount; ++i) {
+            if (st.sites[i].key == site) {
+                description = st.sites[i].description + (st.sites[i].released ? " (CPU released)" : "");
+            }
+        }
+        if (description.empty()) {
+            description = functionName(site + 1);
+        }
+        std::fprintf(out, "[alloc]   %llu x %s\n", static_cast<unsigned long long>(count), description.c_str());
     }
 }
 }  // namespace PetariNative

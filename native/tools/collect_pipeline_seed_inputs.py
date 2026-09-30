@@ -188,8 +188,23 @@ def model_inventory(data):
             'needs_material_generation': 'MDL3' not in blocks}
 
 
+def archive_index(paths):
+    result = {}
+    for path in paths:
+        key = path.stem.casefold()
+        require(key not in result, 'ambiguous case-insensitive archive name: ' + path.stem)
+        result[key] = path
+    return result
+
+
+def object_archives(name, aliases, paths):
+    candidate = aliases.get(name, name)
+    return [paths[key] for suffix in ('', 'Low', 'Middle', 'Bloom', 'Water', 'Indirect')
+            if (key := (candidate + suffix).casefold()) in paths]
+
+
 def collect(files, repo, stages, shared):
-    object_paths = {p.stem: p for p in (files / 'ObjectData').glob('*.arc')}
+    object_paths = archive_index((files / 'ObjectData').glob('*.arc'))
     stage_paths = {p.stem: p for p in (files / 'StageData').glob('*.arc')}
     source = (repo / 'src/Game/NameObj/NameObjFactory.cpp').read_text()
     aliases = dict(re.findall(r'\{\s*"([^"\n]+)"\s*,[^{}]*?,\s*"([^"\n]+)"\s*,?\s*\}', source))
@@ -229,24 +244,23 @@ def collect(files, repo, stages, shared):
                 queue.append(path)
 
         def add_object(name, reason):
-            candidate = aliases.get(name, name)
-            found = False
-            for suffix in ('', 'Low', 'Middle', 'Bloom', 'Water', 'Indirect'):
-                if candidate + suffix in object_paths:
-                    add(object_paths[candidate + suffix], reason)
-                    found = True
-            return found
+            matches = object_archives(name, aliases, object_paths)
+            for path in matches:
+                add(path, reason)
+            return bool(matches)
 
-        for name in sorted(object_paths):
+        for path in sorted(object_paths.values()):
+            name = path.stem
             if name.startswith(('Mario', 'Luigi', 'Kinopio', 'StarPointer', 'StarPiece', 'Coin', 'PowerStar')):
-                add(object_paths[name], 'conservative shared model family')
+                add(path, 'conservative shared model family')
         for name in shared:
             require(add_object(name, 'explicit shared archive'), 'shared archive not found: ' + name)
         if stage == 'AstroGalaxy':
             for name, path in stage_paths.items():
                 if name.startswith('AstroDome'):
                     add(path, 'observatory dome transition')
-            for name in object_paths:
+            for path in object_paths.values():
+                name = path.stem
                 if name.startswith('Astro'):
                     add_object(name, 'observatory shared model family')
 
@@ -267,7 +281,7 @@ def collect(files, repo, stages, shared):
                         for value in row.values():
                             if value in stage_paths:
                                 add(stage_paths[value], str(path.relative_to(files)) + ':' + name)
-                            if value in object_paths or value in aliases:
+                            if value.casefold() in object_paths or value in aliases:
                                 add_object(value, str(path.relative_to(files)) + ':' + name)
                         actor = row.get(field_hash('name'))
                         if actor:

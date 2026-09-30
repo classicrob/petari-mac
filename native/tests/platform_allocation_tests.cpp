@@ -33,6 +33,7 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "petari/host_allocation.hpp"
@@ -205,12 +206,42 @@ __attribute__((noinline)) void hostHelperWithoutScope() {
 }
 }  // namespace PetariNative::AllocationDetectorTest
 
+namespace PetariNative::AllocationDetectorTest {
+__attribute__((noinline)) void hostBigAllocation() {
+    gSink = new std::uint8_t[1024 * 1024];
+}
+}  // namespace PetariNative::AllocationDetectorTest
+
 extern "C" __attribute__((noinline)) void petari_test_entry_without_scope(void) {
     gSink = new std::vector<std::uint32_t>(64);
 }
 
 __attribute__((noinline)) void gameStyleAllocation() {
     gSink = new std::uint32_t[16];
+}
+
+// os_cache.cpp's logStore shape (the startup deadlock): a helper in a
+// top-level anonymous namespace, reached through a natively implemented SDK C
+// function whose name is on no list, building host bookkeeping.
+namespace {
+__attribute__((noinline)) void bookkeepingHelper() {
+    auto* pages = new std::unordered_map<std::uintptr_t, std::uint64_t>;
+    (*pages)[0x1000] = 1;
+    gSink = pages;
+}
+}  // namespace
+extern "C" __attribute__((noinline)) void ZZTestStoreRange(void) {
+    bookkeepingHelper();
+    asm volatile("" ::: "memory");
+}
+
+JKRHeap* gNativeCallerHeap = nullptr;
+std::atomic<int> gNativeCallerResult{-1};  // 1: routed to the host, 0: landed in the game heap
+void* NativeCallerEntry(void*) {
+    PetariNative::AllocationDetectorTest::hostHelperWithoutScope();
+    gNativeCallerResult = inHeap(gNativeCallerHeap, gSink) ? 0 : 1;
+    delete[] static_cast<std::uint32_t*>(gSink);
+    return nullptr;
 }
 
 void testAllocationSiteDetector(JKRHeap* heap) {
@@ -221,19 +252,36 @@ void testAllocationSiteDetector(JKRHeap* heap) {
     check(PetariNative::allocationDiagnostics().hostSiteAllocations == before.hostSiteAllocations,
           "game code is not reported");
 
+    const s32 heapFree = heap->getTotalFreeSize();
     for (int i = 0; i < 3; ++i) {
         PetariNative::AllocationDetectorTest::hostHelperWithoutScope();
-        check(inHeap(heap, gSink), "an unscoped host site still allocates from the game heap (reported, not moved)");
+        check(!inHeap(heap, gSink), "an unscoped host site on a game thread is routed to the host allocator");
         delete[] static_cast<std::uint32_t*>(gSink);
     }
     const auto afterHelper = PetariNative::allocationDiagnostics();
-    check(afterHelper.hostSiteAllocations == before.hostSiteAllocations + 3, "an unscoped PetariNative helper is reported each time");
+    check(afterHelper.hostSiteAllocations == before.hostSiteAllocations + 3, "each routed allocation is counted");
     check(afterHelper.sites == before.sites + 1, "as one site");
 
     petari_test_entry_without_scope();
+    check(!inHeap(heap, gSink), "an unscoped petari_* C entry point's std containers are routed");
     delete static_cast<std::vector<std::uint32_t>*>(gSink);
-    check(PetariNative::allocationDiagnostics().hostSiteAllocations > afterHelper.hostSiteAllocations,
-          "an unscoped petari_* C entry point is reported through std containers");
+    check(PetariNative::allocationDiagnostics().hostSiteAllocations > afterHelper.hostSiteAllocations, "and counted");
+
+    const auto beforeCEntry = PetariNative::allocationDiagnostics();
+    ZZTestStoreRange();
+    check(!inHeap(heap, gSink), "an anonymous-namespace helper behind an unlisted C entry point is routed (os_cache logStore)");
+    delete static_cast<std::unordered_map<std::uintptr_t, std::uint64_t>*>(gSink);
+    check(PetariNative::allocationDiagnostics().hostSiteAllocations > beforeCEntry.hostSiteAllocations, "and counted");
+    check(heap->getTotalFreeSize() == heapFree, "none of the host sites touched the game heap");
+
+    // Another game (OS) thread, no scope anywhere: the native call is routed too.
+    gNativeCallerHeap = heap;
+    static OSThread caller;
+    alignas(32) static u8 callerStack[0x4000];
+    OSCreateThread(&caller, NativeCallerEntry, nullptr, callerStack + sizeof(callerStack), sizeof(callerStack), 16, 0);
+    OSResumeThread(&caller);
+    OSJoinThread(&caller, nullptr);
+    check(gNativeCallerResult.load() == 1, "a game-registered OS thread calling a native function allocates on the host");
 
     {
         PetariNative::HostAllocationScope scope;
@@ -255,6 +303,41 @@ void testAllocationSiteDetector(JKRHeap* heap) {
     delete[] static_cast<std::uint32_t*>(released);
     check(PetariNative::allocationDiagnostics().releasedAllocations == beforeReleased.releasedAllocations + 1,
           "and is reported");
+
+    // petari_gx_revalidate_texobj's logo abort: the current heap is nearly
+    // full and a native function allocates more than it holds.
+    JKRExpHeap* tiny = JKRExpHeap::create(64 * 1024, heap, false);
+    JKRHeap* previous = JKRHeap::getCurrentHeap();
+    tiny->becomeCurrentHeap();
+    const s32 tinyFree = tiny->getTotalFreeSize();
+    PetariNative::AllocationDetectorTest::hostBigAllocation();
+    check(gSink != nullptr && !inHeap(tiny, gSink) && !inHeap(heap, gSink), "a native 1 MiB allocation with a 64 KiB heap current succeeds on the host");
+    delete[] static_cast<std::uint8_t*>(gSink);
+    check(tiny->getTotalFreeSize() == tinyFree, "and leaves the current heap untouched");
+    previous->becomeCurrentHeap();
+    JKRHeap::destroy(tiny);
+
+    // Hot path: a known game chain (table hit) against the check turned off.
+    constexpr int kAllocations = 200000;
+    auto time = [&] {
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < kAllocations; ++i) {
+            gameStyleAllocation();
+            delete[] static_cast<std::uint32_t*>(gSink);
+        }
+        return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / kAllocations;
+    };
+    time();  // classify once
+    double on = 1e9, off = 1e9;
+    for (int round = 0; round < 3; ++round) {
+        on = std::min(on, time());
+        PetariNative::setAllocationSiteCheck(false);
+        off = std::min(off, time());
+        PetariNative::setAllocationSiteCheck(true);
+    }
+    std::printf("allocation site routing: %.1f ns per game-heap new+delete with it, %.1f ns without (%+.1f ns)\n", on, off,
+                on - off);
+    check(on - off < 250.0, "the site check costs well under a microsecond per allocation");
 }
 
 int main() {

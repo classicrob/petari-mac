@@ -33,22 +33,28 @@ public:
 // game-heap candidate, which also runs the allocation-site check below.
 bool isHostAllocationActive();
 
-// ---- Diagnostics (always on; PETARI_ALLOC_SITE_CHECK=0 disables the site check) ----
-// Missing scopes are found at run time instead of by heap corruption:
-// - Site check: each distinct call chain that allocates from the game heap is
-//   symbolized once and classified by its first frame outside the allocator
-//   and the C++ library. Renderer/host code there (Aurora, Dawn, SDL, fmt,
-//   PetariNative, petari_*/aurora_* entry points, natively implemented SDK
-//   functions) is reported as a missing HostAllocationScope; the allocation
-//   still uses the game heap. Later allocations from a known chain cost a
-//   frame-pointer walk and a table lookup.
+// ---- Allocation-site routing (always on; PETARI_ALLOC_SITE_CHECK=0 disables it) ----
+// Host code cannot put its bookkeeping into the game's heaps, scope or not:
+// - Site routing: each distinct call chain that would allocate from the game
+//   heap is symbolized once and classified by its first frame outside the
+//   allocator and the C++ library. Renderer/host/platform code (Aurora, Dawn,
+//   SDL, fmt, PetariNative, any C-linkage function, i.e. petari_*/aurora_*
+//   ABI entry points and natively implemented SDK functions) is routed to the
+//   host allocator as if a HostAllocationScope were open, counted per site and
+//   logged once per site. Game code keeps the current JKR heap. Later
+//   allocations from a known chain cost a frame-pointer walk and a table
+//   lookup; the classifier runs before any heap mutex is taken and allocates
+//   only through the host allocator (reentrant: its own allocations are not
+//   checked). Explicit JKR allocations (new (heap, align) T) are unaffected.
 // - CPU released: a game thread between petari_os_begin_host_blocking and
 //   _end runs host code only, while another game thread may use the JKR
-//   heaps; its unscoped allocations use the host allocator and are reported.
+//   heaps; its unscoped allocations use the host allocator and are counted.
+// HostAllocationScope remains the documented, zero-cost way for host code:
+// a routed site is logged so it can be annotated.
 void setGameCpuReleased(bool released);  // the OS layer, on the calling thread
 void setAllocationSiteCheck(bool enabled);
 struct AllocationDiagnostics {
-    unsigned long long hostSiteAllocations;  // game-heap allocations from host code
+    unsigned long long hostSiteAllocations;  // allocations by host code on game threads, routed to the host allocator
     unsigned long long releasedAllocations;  // unscoped allocations with the CPU released
     unsigned long long classified;           // distinct call chains symbolized
     int sites;                               // distinct reported sites (at most 24 kept)

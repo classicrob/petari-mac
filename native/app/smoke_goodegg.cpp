@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 
 namespace PetariNative::App::Smoke {
 
@@ -105,17 +106,19 @@ const Vec kDiskLuma{-4671.0f, -16693.0f, -16381.0f};
 // path over the collision's walkable triangles (normal within 53 degrees of
 // the point gravity's up), penalised within 180 units of a peel edge and never
 // within 150 of NeedlePlant, PunchingKinoko, Karikari or CollapsePlane
-// placements; sampled every 250 units. Edge clearance along it is at least 157.
+// placements, and penalised within 600 of the boulder rail that runs down the
+// same spiral (SoramameZone rail 3; the narrow peel keeps it 295-600 away in
+// places, where the boulder planner waits); sampled every 250 units. Edge
+// clearance along it is at least 123.
 const std::vector<Point3> kFruitPeelRoute = {
-    {-18323, -13640, -9499}, {-18087, -13695, -9387}, {-17818, -13689, -9315}, {-17477, -13695, -9274},
-    {-17242, -13592, -9056}, {-16950, -13355, -8903}, {-16767, -13153, -8836}, {-16735, -12969, -8630},
-    {-16825, -12783, -8382}, {-17020, -12665, -8198}, {-17273, -12512, -8045}, {-17571, -12324, -7935},
-    {-17835, -12329, -7924}, {-18151, -12317, -7958}, {-18450, -12293, -8041}, {-18717, -12268, -8175},
-    {-18954, -12194, -8361}, {-19148, -12008, -8597}, {-19273, -12026, -8881}, {-19359, -11904, -9246},
-    {-19371, -11906, -9514}, {-19334, -11899, -9834}, {-19243, -11886, -10139}, {-19098, -11873, -10413},
-    {-18886, -11618, -10636}, {-18704, -11449, -10738}, {-18432, -11201, -10780}, {-18343, -10967, -10636},
-    {-18295, -10801, -10389}, {-18336, -10733, -10060}, {-18176, -10775, -9817}, {-17919, -10812, -9578},
-    {-17710, -10818, -9431}};
+    {-18323, -13640, -9499}, {-18046, -13698, -9313}, {-17819, -13694, -9198}, {-17474, -13685, -9152},
+    {-17242, -13592, -9056}, {-17054, -13415, -8870}, {-16825, -13172, -8766}, {-16735, -12969, -8630},
+    {-16922, -12807, -8325}, {-17250, -12837, -8187}, {-17581, -12744, -8069}, {-17884, -12680, -8034},
+    {-18186, -12658, -8069}, {-18434, -12495, -8087}, {-18694, -12459, -8209}, {-18954, -12194, -8361},
+    {-19148, -12008, -8597}, {-19273, -12026, -8881}, {-19353, -11835, -9193}, {-19369, -11838, -9568},
+    {-19323, -11831, -9886}, {-19243, -11886, -10139}, {-19098, -11873, -10413}, {-18886, -11618, -10636},
+    {-18704, -11449, -10738}, {-18432, -11201, -10780}, {-18343, -10967, -10636}, {-18240, -10822, -10449},
+    {-18165, -10750, -10174}, {-18064, -10774, -9942}, {-17898, -10804, -9704}, {-17710, -10818, -9431}};
 // BroadBeanPlanetC from under it (where the Fruit Peel vine throws Mario)
 // around to the crystal on top, the same way (Takobo and Petari placements
 // avoided); a convex bean, so this only keeps the walk on its short side.
@@ -150,12 +153,14 @@ const std::vector<Point3> kPeanutRoute = {
     {-10710, -14920, -2793}, {-10732, -15021, -3010}, {-10729, -15236, -3146}, {-10730, -15456, -3173},
     {-10821, -15641, -3210}, {-11001, -15660, -3300}, {-11156, -15607, -3350}, {-11430, -15747, -3292},
     {-11648, -15679, -3226}, {-11798, -15568, -3128}, {-11923, -15385, -2954}};
-// PeanutZone rails l_id 1-3: closed cubic Bezier loops (point, then the
-// handles pnt2 out and pnt1 in), evaluated every ~120 units. The boulders
-// (RockCreator, default speed 10 units/frame, one boulder each; two creators
-// per rail) roll around them for good once SwitchCube SW 1006 turns on;
-// observed boulders in goodegg-6 were within 182 units of these curves.
-const std::vector<Point3> kPeanutRails[3] = {
+// Boulder rails, cubic Bezier (point, then the handles pnt2 out and pnt1 in),
+// evaluated every ~120 units. PeanutZone rails l_id 1-3 are closed loops: the
+// boulders (RockCreator, default speed 10 units/frame, one boulder each, two
+// creators per rail) roll around them for good once SwitchCube SW 1006 turns
+// on; observed boulders in goodegg-6 were within 182 units of these curves.
+// SoramameZone rail l_id 3 is open, down the Fruit Peel's spiral: RockCreator
+// 36 starts a boulder every 7 s that breaks at the end.
+const std::vector<Point3> kRockRails[4] = {
     // rail l_id 1 (49 points)
     {{-10193, -15290, -1202}, {-10190, -15151, -1220}, {-10185, -15029, -1252}, {-10176, -14894, -1302},
      {-10162, -14754, -1373}, {-10146, -14651, -1441}, {-10126, -14553, -1523}, {-10101, -14463, -1620},
@@ -192,17 +197,45 @@ const std::vector<Point3> kPeanutRails[3] = {
      {-11212, -14368, -2958}, {-11256, -14327, -2824}, {-11304, -14312, -2672}, {-11351, -14325, -2518},
      {-11393, -14361, -2378}, {-11429, -14417, -2251}, {-11460, -14489, -2137}, {-11487, -14574, -2036},
      {-11509, -14667, -1948}, {-11527, -14767, -1872}, {-11541, -14869, -1808}, {-11555, -15002, -1740},
-     {-11564, -15125, -1692}, {-11570, -15250, -1660}, {-11571, -15304, -1654}}};
+     {-11564, -15125, -1692}, {-11570, -15250, -1660}, {-11571, -15304, -1654}},
+    // SoramameZone rail l_id 3 (84 points, open: boulders roll from RockCreator 36 to its end)
+    {{-19088, -10964, -10460}, {-19189, -11046, -10476}, {-19279, -11134, -10482}, {-19358, -11225, -10480},
+     {-19450, -11349, -10462}, {-19525, -11474, -10428}, {-19587, -11597, -10378}, {-19636, -11716, -10310},
+     {-19673, -11827, -10226}, {-19701, -11927, -10124}, {-19720, -12014, -10005}, {-19732, -12084, -9869},
+     {-19738, -12125, -9755}, {-19741, -12153, -9630}, {-19743, -12168, -9496}, {-19743, -12169, -9351},
+     {-19742, -12153, -9196}, {-19742, -12121, -9030}, {-19739, -12079, -8860}, {-19723, -12050, -8701},
+     {-19694, -12036, -8556}, {-19653, -12035, -8423}, {-19602, -12045, -8302}, {-19540, -12065, -8193},
+     {-19469, -12093, -8094}, {-19390, -12127, -8005}, {-19303, -12167, -7926}, {-19210, -12209, -7855},
+     {-19111, -12254, -7793}, {-19008, -12298, -7739}, {-18900, -12341, -7692}, {-18790, -12381, -7652},
+     {-18677, -12417, -7617}, {-18564, -12446, -7588}, {-18412, -12473, -7557}, {-18262, -12483, -7533},
+     {-18115, -12471, -7514}, {-17971, -12444, -7500}, {-17821, -12428, -7491}, {-17669, -12422, -7489},
+     {-17516, -12427, -7496}, {-17365, -12443, -7515}, {-17219, -12471, -7547}, {-17079, -12509, -7595},
+     {-16947, -12558, -7661}, {-16827, -12619, -7747}, {-16746, -12672, -7826}, {-16674, -12731, -7919},
+     {-16611, -12797, -8025}, {-16558, -12869, -8147}, {-16518, -12948, -8285}, {-16490, -13032, -8440},
+     {-16479, -13093, -8553}, {-16474, -13156, -8675}, {-16476, -13221, -8805}, {-16484, -13289, -8941},
+     {-16496, -13353, -9068}, {-16512, -13412, -9184}, {-16531, -13467, -9291}, {-16566, -13540, -9432},
+     {-16608, -13605, -9554}, {-16655, -13660, -9659}, {-16728, -13722, -9777}, {-16811, -13771, -9872},
+     {-16901, -13809, -9952}, {-16999, -13836, -10020}, {-17104, -13856, -10082}, {-17213, -13868, -10144},
+     {-17327, -13875, -10210}, {-17444, -13878, -10286}, {-17564, -13878, -10377}, {-17654, -13877, -10457},
+     {-17744, -13876, -10551}, {-17833, -13876, -10659}, {-17913, -13866, -10754}, {-18000, -13836, -10851},
+     {-18081, -13777, -10928}, {-18145, -13681, -10967}, {-18180, -13547, -10956}, {-18185, -13424, -10912},
+     {-18175, -13305, -10849}, {-18156, -13198, -10781}, {-18129, -13094, -10705}, {-18117, -13054, -10673}}};
+// Closed rails loop; on the open one boulders break at its end.
+constexpr bool kRockRailClosed[4] = {true, true, true, false};
 constexpr float kRockOffRail = 350.0f;  // farther: not rolling on its rail
 constexpr float kRockWatch = 1500.0f;   // boulders this close are predicted
-constexpr int kRockSteps = 9;           // prediction samples...
-constexpr int kRockStepFrames = 5;      // ...5 frames apart: 45 frames ahead
+// Prediction samples 5 frames apart, 45 frames ahead: Mario's straight-line
+// run over longer horizons leaves the Peanut's curved lobes (radius ~700) and
+// overestimated clearance in goodegg-19 (90 frames: three hits).
+constexpr int kRockSteps = 9;
+constexpr int kRockStepFrames = 5;
 constexpr float kMarioSpeed = 8.0f;     // running, units per frame
 // Mario's position is his feet, a boulder's its centre, about a radius above
 // its rail: contact is near 340 feet-to-centre. The margin covers the rail
 // fit (observed boulders median 60, at most 235 from the fitted curves) and
-// the 8-way stick.
-constexpr float kRockSafe = 460.0f;
+// the 8-way stick and Mario's acceleration from standing.
+constexpr float kRockSafe = 500.0f;
+constexpr float kGroundTolerance = 170.0f;  // predicted positions this near known ground count as on it
 
 struct RailSpot {
     int rail = -1;
@@ -212,12 +245,12 @@ struct RailSpot {
 // The nearest rail point (on one rail, or on any when rail < 0).
 RailSpot nearestRail(Vec p, int rail) {
     RailSpot best;
-    for (int r = 0; r < 3; ++r) {
+    for (int r = 0; r < 4; ++r) {
         if (rail >= 0 && r != rail) {
             continue;
         }
-        for (size_t i = 0; i < kPeanutRails[r].size(); ++i) {
-            const float d = length(vec(kPeanutRails[r][i]) - p);
+        for (size_t i = 0; i < kRockRails[r].size(); ++i) {
+            const float d = length(vec(kRockRails[r][i]) - p);
             if (d < best.distance) {
                 best = {r, i, d};
             }
@@ -226,7 +259,10 @@ RailSpot nearestRail(Vec p, int rail) {
     return best;
 }
 Vec railTangent(const RailSpot& spot) {
-    const auto& rail = kPeanutRails[spot.rail];
+    const auto& rail = kRockRails[spot.rail];
+    if (!kRockRailClosed[spot.rail] && spot.index + 1 >= rail.size()) {
+        return normalized(vec(rail[spot.index]) - vec(rail[spot.index - 1]));
+    }
     const size_t next = (spot.index + 1) % rail.size();
     return normalized(vec(rail[next]) - vec(rail[spot.index]));
 }
@@ -236,10 +272,13 @@ int railDirection(const RailSpot& spot, Vec velocity) {
 }
 // The rail point `distance` along the rail from `from`, rolling in `direction`.
 Vec railAhead(const RailSpot& from, int direction, float distance) {
-    const auto& rail = kPeanutRails[from.rail];
+    const auto& rail = kRockRails[from.rail];
     const size_t n = rail.size();
     size_t i = from.index;
     for (size_t steps = 0; steps < n; ++steps) {
+        if (!kRockRailClosed[from.rail] && ((direction > 0 && i + 1 >= n) || (direction < 0 && i == 0))) {
+            break;  // the end of an open rail: the boulder breaks there
+        }
         const size_t next = (i + n + direction) % n;
         const float segment = length(vec(rail[next]) - vec(rail[i]));
         if (distance <= segment) {
@@ -250,6 +289,30 @@ Vec railAhead(const RailSpot& from, int direction, float distance) {
     }
     return vec(rail[i]);
 }
+#include "smoke_goodegg_ground.inc"
+
+// Whether a point is near standing ground on planets with known ground (the
+// boulder planner must not step Mario off the peel or into mud).
+bool onKnownGround(Planet planet, Vec p) {
+    const Point3* begin = nullptr;
+    const Point3* end = nullptr;
+    if (planet == Planet::FruitPeel) {
+        begin = std::begin(kFruitPeelGround);
+        end = std::end(kFruitPeelGround);
+    } else if (planet == Planet::Peanut) {
+        begin = std::begin(kPeanutGround);
+        end = std::end(kPeanutGround);
+    } else {
+        return true;
+    }
+    for (const Point3* q = begin; q != end; ++q) {
+        if (length(vec(*q) - p) < kGroundTolerance) {
+            return true;
+        }
+    }
+    return false;
+}
+
 const Vec kPeanutLaunchStar{-12216.7f, -15424.5f, -3022.8f};  // l_id 4, SW_APPEAR 1007 (the chips)
 const Vec kBeanBPiranha{-18416.7f, -15888.5f, -8672.8f};      // PackunPetit l_id 62, SW_DEAD 4
 const Vec kBeanBVine{-18425.0f, -15878.7f, -8666.7f};         // Plant l_id 21, SW_APPEAR 4
@@ -905,7 +968,7 @@ bool GoodEggDriver::dodgeRocks(const Observation& o, Step& step) {
         for (int k = 0; k <= kRockSteps; ++k) {
             const float t = static_cast< float >(k * kRockStepFrames);
             path[k] = on.rail >= 0 && on.distance < kRockOffRail && speed > 1.0f
-                          ? railAhead(on, railDirection(on, velocity), speed * t) + (rock - vec(kPeanutRails[on.rail][on.index]))
+                          ? railAhead(on, railDirection(on, velocity), speed * t) + (rock - vec(kRockRails[on.rail][on.index]))
                           : rock + velocity * t;
         }
         rocks.push_back(path);
@@ -938,6 +1001,15 @@ bool GoodEggDriver::dodgeRocks(const Observation& o, Step& step) {
         if (i < 8) {
             const float angle = static_cast< float >(i) * 0.785398f;
             dir = toGoal * std::cos(angle) + side * std::sin(angle);
+        }
+        // Never off the ground (the peel's edge, the Peanut's mud): checked
+        // at 10, 20 and 40 frames of running; standing still always stays.
+        bool grounded = true;
+        for (int k : {2, 4, 8}) {
+            grounded = grounded && onKnownGround(mPlanet, pos + dir * (kMarioSpeed * static_cast< float >(k * kRockStepFrames)));
+        }
+        if (!grounded) {
+            continue;
         }
         const float c = clearance(dir);
         // Safe moves win, the nearer the goal's direction the better; else the
@@ -1123,9 +1195,20 @@ void GoodEggDriver::fruitPeel(const Observation& o, Step& step) {
         goTo(o, {target.x, target.y, target.z}, 15.0f, "the Hammer Head's head", step, true);
         return;
     }
-    // Draw its attack: stand near its base (the stem's foot), where it sees
-    // Mario, and let the slam land; then the head lies still (READY).
-    goTo(o, {kHammerHead.x, kHammerHead.y, kHammerHead.z}, 450.0f, "near the Hammer Head", step);
+    // Draw its attack: it notices Mario within 800 of its base
+    // (HammerHeadPackun::isTargetInRange) and slams toward him; waiting at
+    // 620 keeps him out of the slam's reach. Then the head lies still for a
+    // 90-frame chance (READY): run in, spin, jump on it.
+    Point3 bait = kFruitPeelRoute.back();
+    float baitError = 1e30f;
+    for (size_t i = kFruitPeelRoute.size() > 8 ? kFruitPeelRoute.size() - 8 : 0; i < kFruitPeelRoute.size(); ++i) {
+        const float error = std::fabs(length(vec(kFruitPeelRoute[i]) - kHammerHead) - 620.0f);
+        if (error < baitError) {
+            baitError = error;
+            bait = kFruitPeelRoute[i];
+        }
+    }
+    goTo(o, bait, 80.0f, "the Hammer Head's baiting spot", step);
 }
 
 void GoodEggDriver::beanC(const Observation& o, Step& step) {
