@@ -12,11 +12,13 @@ The game starts at once. Nothing waits for the shader backlog:
   global backlog; a draw that needs a pending pipeline jumps to the front of all
   queued work and is never throttled (user-initiated QoS). During active gameplay
   (frame phase Gameplay and the pause menu closed) at most
-  `PETARI_PIPELINE_GAMEPLAY_SPECULATIVE` (default 1) speculative compiles (stage
-  manifest first, then the global backlog) run at once, at utility QoS: Metal
-  compiles in MTLCompilerService, a separate process our thread QoS does not cap,
-  so the in-flight count itself is limited. Menus, file select, loading and pause
-  run the backlog on every worker. Game threads are user-interactive, VI/audio real-time.
+  `PETARI_PIPELINE_GAMEPLAY_STAGE` (default 2) stage-manifest compiles run at once
+  (user-initiated), and the global backlog runs at most
+  `PETARI_PIPELINE_GAMEPLAY_BACKLOG` (default 1) compile (utility), only while no
+  stage work is queued. Metal compiles in MTLCompilerService, a separate process our
+  thread QoS does not cap, so the in-flight counts themselves are limited. Menus,
+  file select, loading and pause run all queues on every worker. Game threads are
+  user-interactive, VI/audio real-time.
 - **Bounded draws.** A GX draw whose pipeline is still compiling waits only within a
   per-frame budget (`PETARI_PIPELINE_DRAW_BUDGET_MS`, default 6, reset each frame),
   then the draw is skipped until the compile lands (pop-in instead of a freeze).
@@ -34,6 +36,35 @@ The game starts at once. Nothing waits for the shader backlog:
   test run (fixtures, `PETARI_SMOKE`, unlocked-save, marked user dirs), keeps the old
   `<user>` location; background smoke runs keep `<user>/cache`. `PETARI_CACHE_DIR`
   overrides all of these. The chosen directory is logged as `[gx pipeline cache]`.
+
+### Measured, 2026-09-30 (galaxy smoke, quiet slot, M4 Max)
+
+Background smoke runs, `build/pipeline/startup-ux/<run>/startup-ux-summary.json`
+(from `analyze.py`; CPU from `<run>-cpu.jsonl`). "Cold" = empty Aurora, Dawn and
+Metal caches (private Metal namespace pre-created empty). Control = observatory
+calibration marker; times from process start. Gameplay window = 7,200 frames from
+control (about 83 s of it is gameplay-phase before the route ends). Skip spans are
+per config (material state), first skip until compiled.
+
+| Run | Build | Control s | Gates (5 stages) | Skipped draws / configs / longest | Gameplay p99 ms / >33 ms |
+|---|---|---:|---|---|---|
+| cold1 | 59ad847 (no gameplay throttle) | 40.5 | all 1.5 s timeout | 52 / 4 / 545 ms | 71.3 / 339 |
+| cold2 | 0d4e925 (1 speculative, utility) | 49.3 | all 1.5 s timeout | 27,974 / 178 / 3,076 ms | 40.1 / 84 |
+| cold3 | 730a684 (stage 2, backlog 1) | 36.1 | all 1.5 s timeout | 26 / 2 / 203 ms | 49.8 / 136 |
+| warm (after cold1) | fb47669 | 28.1 | 3 x 1.5 s, 2 x <0.2 ms | 0 | 24.6 / 18 |
+| copied save (fresh user, warm cache dir) | fb47669 | 26.7 | 1 x 1.5 s, 4 x <0.2 ms | 0 | 29.7 / 32 |
+| full warm (after backlog drained) | 730a684 | 24.5 | all <0.1 ms | 0 | 17.4 / 0 |
+
+cold2 shows that throttling stage speculation starves exactly the configs gameplay
+draws next: pop-in explodes. cold3 keeps cold1's pop-in profile with most of the
+p99 gain. Cold slow frames are game-work and draw-done waits under compile load
+(pipeline waits total only 56–141 ms), not the bounded draw waits.
+Warm and copied-save runs rebuild thousands of pipelines, 93% in <10 ms (cache
+hits); the rest are stage configs earlier short sessions never reached. Once the
+backlog has completed once (`fill`: `PETARI_PIPELINE_GLOBAL_PRECOMPILE=1`, 345 s
+for 9,546 variants), the next default launch rebuilt all 9,546 in 4.8 s of worker
+time with MTLCompilerService CPU +0.1 s, every gate completed, first frame 0.72 s.
+MTLCompilerService CPU during cold runs was 226–244 s per ~130 s run. These are single runs.
 
 Tools that pin `PETARI_PIPELINE_GLOBAL_PRECOMPILE=0` (stage_sweep, soak, cu_playtest)
 still get bounded draws and the short gate; set `PETARI_PIPELINE_POLICY=blocking`

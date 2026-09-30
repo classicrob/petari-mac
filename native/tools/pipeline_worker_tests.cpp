@@ -159,21 +159,26 @@ void backgroundCapTest() {
     petariBackgroundCap = ~0u;
 }
 void gameplayThrottleTest() {
-    // During gameplay one speculative compile at a time; a draw-requested job
-    // still starts at once; leaving gameplay releases the parked backlog.
-    petariActiveWorkers = 3;
+    // During gameplay: two stage-speculative compiles at a time, the global
+    // backlog waits while stage work is queued, a draw-requested job starts at
+    // once, and leaving gameplay releases everything parked.
+    petariActiveWorkers = 4;
     petari_gx_pipeline_set_gameplay(true);
-    std::promise<void> startedA, release;
-    std::atomic<bool> startedB{false}, startedG{false};
+    std::promise<void> startedA, startedB, release;
+    std::atomic<bool> startedC{false}, startedG{false};
     auto gate = release.get_future().share();
     enqueue(71, false, [&] { startedA.set_value(); gate.wait(); return CompiledPipeline{true}; });
-    enqueue(72, false, [&] { startedB = true; return CompiledPipeline{true}; });
+    enqueue(72, false, [&] { startedB.set_value(); gate.wait(); return CompiledPipeline{true}; });
+    enqueue(75, false, [&] { startedC = true; return CompiledPipeline{true}; });
     enqueue(73, true, [&] { startedG = true; return CompiledPipeline{true}; });
     std::vector<std::thread> workers;
-    for (unsigned i = 0; i < 3; ++i) workers.emplace_back(pipeline_worker, i);
-    require(startedA.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready, "stage job did not start");
+    for (unsigned i = 0; i < 4; ++i) workers.emplace_back(pipeline_worker, i);
+    require(startedA.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready &&
+            startedB.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready,
+            "two stage jobs did not start during gameplay");
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    require(!startedB && !startedG, "gameplay ran more than one speculative compile");
+    require(!startedC, "gameplay exceeded the stage speculation cap");
+    require(!startedG, "global backlog ran ahead of queued stage work");
     {
         std::lock_guard lock(g_pipelineMutex);
         petariPipelineSamples[74].drawBlocking = true;
@@ -188,16 +193,16 @@ void gameplayThrottleTest() {
         require(g_pipelineReadyCv.wait_for(lock, std::chrono::seconds(5), [] { return g_pipelines.count(74) != 0; }),
                 "draw-requested compile was throttled");
     }
-    require(!startedB && !startedG, "throttle released early");
+    require(!startedC && !startedG, "throttle released early");
     petari_gx_pipeline_set_gameplay(false);
     {
         std::unique_lock lock(g_pipelineMutex);
-        require(g_pipelineReadyCv.wait_for(lock, std::chrono::seconds(5), [] { return g_pipelines.count(72) && g_pipelines.count(73); }),
+        require(g_pipelineReadyCv.wait_for(lock, std::chrono::seconds(5), [] { return g_pipelines.count(75) && g_pipelines.count(73); }),
                 "leaving gameplay did not release speculative work");
     }
     release.set_value();
-    waitReady(4);
-    require(petariSpeculativeInFlight == 0, "speculative accounting unbalanced");
+    waitReady(5);
+    require(petariStageSpeculativeInFlight == 0 && petariBackgroundInFlight == 0, "speculative accounting unbalanced");
     stop(workers);
 }
 void boundedDrawTest() {

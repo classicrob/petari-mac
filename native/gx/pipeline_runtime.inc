@@ -34,10 +34,10 @@ static std::atomic<uint64_t> petariSkippedDraws{0};
 static uint32_t petariFailedPipelines = 0; // guarded by g_pipelineMutex
 static unsigned petariActiveWorkers = PetariPipeline::workerCount(); // guarded by g_pipelineMutex
 // Guarded by g_pipelineMutex: global-backlog jobs compiling now and their cap
-// outside gameplay; speculative (not draw-requested) jobs compiling now; and
+// outside gameplay; stage jobs no draw requested yet compiling now; and
 // whether the last frame was active gameplay (set from the frame seam).
 static unsigned petariBackgroundInFlight = 0;
-static unsigned petariSpeculativeInFlight = 0;
+static unsigned petariStageSpeculativeInFlight = 0;
 static bool petariGameplay = false;
 // Bounded GX draw waits: remaining wait this frame, and draws whose pipeline was
 // still compiling when the budget ran out (encoded as skips until it lands).
@@ -54,8 +54,8 @@ extern "C" void petari_gx_pipeline_startup_finished() {
   }
   g_pipelineQueueCv.notify_all();
   std::fprintf(stderr, "[gx pipeline pool] startup_finished=1 previous_workers=%u background_workers=%u "
-               "gameplay_speculative_cap=%u extra_inflight=drain\n",
-               previous, current, PetariPipeline::gameplaySpeculativeCap());
+               "gameplay_stage_cap=%u gameplay_backlog_cap=%u extra_inflight=drain\n",
+               previous, current, PetariPipeline::gameplayStageCap(), PetariPipeline::gameplayBacklogCap());
 }
 
 
@@ -121,15 +121,17 @@ struct PetariPipelineWait {
 
 // Next queue a worker may take from, or null (guarded by g_pipelineMutex).
 // Draw-requested jobs sit at the front of the requested queue and are never
-// throttled; stage speculation precedes the global backlog.
+// throttled; stage work precedes the global backlog.
 static std::deque<PendingPipeline>* petari_runnable_queue() {
-  const bool throttled = petariGameplay && petariSpeculativeInFlight >= PetariPipeline::gameplaySpeculativeCap();
   if (!g_pipelineQueue.empty()) {
     const auto sample = petariPipelineSamples.find(g_pipelineQueue.front().hash);
-    if (!throttled || (sample != petariPipelineSamples.end() && sample->second.drawBlocking)) return &g_pipelineQueue;
+    if (!petariGameplay || (sample != petariPipelineSamples.end() && sample->second.drawBlocking) ||
+        petariStageSpeculativeInFlight < PetariPipeline::gameplayStageCap())
+      return &g_pipelineQueue;
+    return nullptr;
   }
-  if (!g_backgroundPipelineQueue.empty() && !throttled && petariBackgroundInFlight < petariBackgroundCap)
-    return &g_backgroundPipelineQueue;
+  const unsigned backlogCap = petariGameplay ? PetariPipeline::gameplayBacklogCap() : petariBackgroundCap;
+  if (!g_backgroundPipelineQueue.empty() && petariBackgroundInFlight < backlogCap) return &g_backgroundPipelineQueue;
   return nullptr;
 }
 

@@ -114,12 +114,17 @@ inline bool backgroundGlobalPrecompile() {
     const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     return !value || !*value || std::strcmp(value, "background") == 0;
 }
-// Speculative compiles (stage manifest and global backlog, nothing a draw waits
-// for) allowed in flight during active gameplay. Metal compiles in the separate
-// MTLCompilerService process, which our thread QoS does not cap, so the count
-// itself must be small. Menus, file select and loading screens run at full speed.
-inline unsigned gameplaySpeculativeCap() {
-    static const unsigned cap = millisecondsSetting("PETARI_PIPELINE_GAMEPLAY_SPECULATIVE", 1, 32);
+// Compiles nothing waits for yet, allowed in flight during active gameplay: the
+// current stage's manifest (likely drawn soon) and the global backlog, which only
+// runs when no stage work is queued. Metal compiles in the separate
+// MTLCompilerService process, which our thread QoS does not cap, so the counts
+// themselves must be small. Menus, file select, loading and pause run at full speed.
+inline unsigned gameplayStageCap() {
+    static const unsigned cap = millisecondsSetting("PETARI_PIPELINE_GAMEPLAY_STAGE", 2, 32);
+    return cap;
+}
+inline unsigned gameplayBacklogCap() {
+    static const unsigned cap = millisecondsSetting("PETARI_PIPELINE_GAMEPLAY_BACKLOG", 1, 32);
     return cap;
 }
 // Game, render and audio threads run at user-interactive or real-time priority,

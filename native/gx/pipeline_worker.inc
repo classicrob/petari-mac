@@ -18,7 +18,7 @@ static void pipeline_worker(unsigned workerIndex = 0) {
 #endif
   while (g_hasPipelineThread || g_pipelinesPerFrame < BuildPipelinesPerFrame) {
     PendingPipeline pending;
-    bool background = false, speculative = false, lowPriority = false;
+    bool background = false, speculative = false;
     {
       std::unique_lock lock{g_pipelineMutex};
       if (g_hasPipelineThread) {
@@ -35,13 +35,12 @@ static void pipeline_worker(unsigned workerIndex = 0) {
       pending = std::move(source.front());
       source.pop_front();
       const auto sampleIt = petariPipelineSamples.find(pending.hash);
-      speculative = sampleIt == petariPipelineSamples.end() || !sampleIt->second.drawBlocking;
-      lowPriority = background || (speculative && petariGameplay);
+      speculative = !background && (sampleIt == petariPipelineSamples.end() || !sampleIt->second.drawBlocking);
       petariBackgroundInFlight += background;
-      petariSpeculativeInFlight += speculative;
+      petariStageSpeculativeInFlight += speculative;
       petariPipelineSamples[pending.hash].started = PetariPipeline::Clock::now();
     }
-    if (g_hasPipelineThread) PetariPipeline::compilationQoS(lowPriority);
+    if (g_hasPipelineThread) PetariPipeline::compilationQoS(background);
     PetariPipeline::stages = {.runtimeKey = pending.hash};
     auto result = [&] {
       PetariPipelineAutoreleasePool pool;
@@ -61,7 +60,7 @@ static void pipeline_worker(unsigned workerIndex = 0) {
       g_pipelines.try_emplace(pending.hash, std::move(result));
       g_pendingPipelines.erase(pending.hash);
       petariBackgroundInFlight -= background;
-      petariSpeculativeInFlight -= speculative;
+      petariStageSpeculativeInFlight -= speculative;
     }
     // A throttled slot opened; a worker parked by a cap may take the next job.
     if (background || speculative) g_pipelineQueueCv.notify_one();
