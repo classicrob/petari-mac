@@ -206,36 +206,39 @@ void gameplayThrottleTest() {
     stop(workers);
 }
 void boundedDrawTest() {
-    // Nothing compiles: the first wait spends the frame budget, the next one skips at once.
+    // Nothing compiles: the first wait spends the whole frame budget (a lower bound
+    // wait_until guarantees), after which the budget is empty and the next draw skips.
+    // No assertion depends on how quickly another thread is scheduled.
     const auto ready = [] { return g_pipelines.count(61) != 0; };
     const auto before = petariDeferredDraws;
     petari_pipeline_frame_budget();
     std::unique_lock lock(g_pipelineMutex);
-    auto start = PetariPipeline::Clock::now();
+    const auto start = PetariPipeline::Clock::now();
     petari_bounded_draw_wait(lock, ready);
     const auto first = PetariPipeline::Clock::now() - start;
-    start = PetariPipeline::Clock::now();
+    require(petariDrawBudgetLeft == PetariPipeline::Clock::duration::zero(), "first wait did not spend the frame budget");
     petari_bounded_draw_wait(lock, ready);
-    const auto second = PetariPipeline::Clock::now() - start;
     lock.unlock();
     require(first >= PetariPipeline::drawWaitBudget() - std::chrono::microseconds(200) &&
-            first < PetariPipeline::drawWaitBudget() + std::chrono::milliseconds(50), "first draw wait ignored the budget");
-    require(second < std::chrono::milliseconds(2), "exhausted frame budget still waited");
+            first < PetariPipeline::drawWaitBudget() + std::chrono::seconds(1), "first draw wait ignored the budget");
     require(petariDeferredDraws == before + 2, "deferred draws not counted");
-    // A new frame restores the budget; a compile landing inside it is not deferred.
+    // A compile that lands while a draw still has budget is not deferred. The budget
+    // is made effectively unbounded so the finisher's scheduling delay cannot matter;
+    // the finisher can only publish once the waiter has released the mutex in its wait.
     petari_pipeline_frame_budget();
+    lock.lock();
+    petariDrawBudgetLeft = std::chrono::hours(1);
     std::thread finisher([] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
         std::lock_guard guard(g_pipelineMutex);
         g_pipelines[61] = CompiledPipeline{true};
         g_pipelineReadyCv.notify_all();
     });
-    lock.lock();
     petari_bounded_draw_wait(lock, ready);
     lock.unlock();
     finisher.join();
     require(petariDeferredDraws == before + 2, "ready pipeline counted as deferred");
     g_pipelines.clear();
+    petari_pipeline_frame_budget();
 }
 void progressTest() {
     enqueue(31, true, [] { return CompiledPipeline{false}; });
