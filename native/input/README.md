@@ -153,6 +153,19 @@ press can neither reopen nor close the menu by itself.
 - `WPADDisconnect` turns the remote off. Pressing any bound input turns it
   back on. `setConnected` and `setNunchukAttached` let the application model
   other remotes and extension changes.
+- **Screen saver.** VI dims the picture after five minutes without input, and
+  input undims it at the next retrace.
+  - On the Wii, `WPADiCheckContInputs` resets VI's idle count (via
+    `__VIResetRFIdle`) whenever a report differs from the previous one.
+  - The report tick does the same with `VIResetDimmingCount` for any change in
+    buttons, stick, accelerometer or pointer dots. It also resets on any host
+    input event since the previous tick: any key, including unbound keys and
+    OS repeats of a held key, a mouse button, or mouse motion anywhere in the
+    window.
+  - Playing therefore never dims the screen. Only true idleness does, and the
+    game can still turn dimming off (`GameSystemDimmingWatcher`), as can the SC
+    screen-saver setting.
+  - `PETARI_VI_DIMMING_SECONDS` shortens the idle time for live checks.
 - `WPADControlMotor` follows the SDK, including the SC rumble setting.
   `rumbleActive(chan)` exposes the motor for host haptics.
 - Remote speaker: the enable, mute, and play commands and stream pacing (one
@@ -240,6 +253,18 @@ covers:
   - Space then mashed F: the first spin comes after the lockout, then
     further spins every 250 ms.
 - **Walk.** Half-length straight and diagonal sticks.
+- **Screen saver.** These run the real VI with a test retrace clock, one
+  retrace per frame.
+  - Six minutes of each input alone never dim the screen: Space taps, W held
+    with OS repeats, mouse motion over the game, mouse motion over the
+    letterbox bar, and an unbound key.
+  - A changing report with no host event (the remote turning upright) resets
+    the count.
+  - Six idle minutes dim at 5:00, and a key press undims at the next retrace.
+  - Mutation checks: each of these fails a test:
+    - no reset call;
+    - host events ignored;
+    - report changes ignored.
 - **Start (Return).**
   - Plain A outside the title, even when held.
   - On the title prompt, a replica of `exeLogoDisplay` built on the game's

@@ -5,6 +5,13 @@
 
 #include <imgui.h>
 
+#ifdef PETARI_HOME_MENU_INPUT
+#include <string>
+
+#include "petari/host_allocation.hpp"
+#include "petari/input.hpp"
+#endif
+
 #include <algorithm>
 #include <cfloat>
 
@@ -52,8 +59,46 @@ void leftText(ImDrawList* list, ImFont* font, float size, float maxWidth, ImVec2
 
 }  // namespace
 
+Rect titleHintRect() {
+    // Above the logo: the title's own text ("Press both A and B", the
+    // copyright) fills the bottom of the image.
+    return {-0.62f, -0.955f, 0.62f, -0.855f};
+}
+
+void drawTitleHint(const char* text, float imageX, float imageY, float imageWidth, float imageHeight) {
+    if (text == nullptr || text[0] == '\0' || !(imageWidth > 0.0f) || !(imageHeight > 0.0f)) {
+        return;
+    }
+    ImDrawList* list = ImGui::GetForegroundDrawList();
+    const ImageSpace image{imageX, imageY, imageWidth, imageHeight};
+    const Rect r = titleHintRect();
+    const ImVec2 barMin = image.point(r.x0, r.y0);
+    const ImVec2 barMax = image.point(r.x1, r.y1);
+    list->PushClipRect(image.point(-1.0f, -1.0f), image.point(1.0f, 1.0f), false);
+    list->AddRectFilled(barMin, barMax, color(0.02f, 0.03f, 0.08f, 0.62f), (barMax.y - barMin.y) * 0.5f);
+    centeredText(list, ImGui::GetFont(), imageHeight * 0.034f, (barMax.x - barMin.x) * 0.92f,
+                 ImVec2((barMin.x + barMax.x) * 0.5f, (barMin.y + barMax.y) * 0.5f), color(1.0f, 1.0f, 1.0f, 0.95f),
+                 text);
+    list->PopClipRect();
+}
+
 void drawImGuiOverlay(float imageX, float imageY, float imageWidth, float imageHeight) {
     const View view = publishedView();
+#ifdef PETARI_HOME_MENU_INPUT
+    // The title's "press A and B": say which keys do that. The text is built
+    // from the bindings each time the prompt appears.
+    static bool sPromptWasActive = false;
+    static std::string sHint;
+    const bool prompt = Input::titlePromptActive();
+    if (prompt && !sPromptWasActive) {
+        HostAllocationScope scope;  // this may be a game thread
+        sHint = Input::titleHint(Input::bindings());
+    }
+    sPromptWasActive = prompt;
+    if (prompt && !view.visible) {
+        drawTitleHint(sHint.c_str(), imageX, imageY, imageWidth, imageHeight);
+    }
+#endif
     if (!view.visible || !(imageWidth > 0.0f) || !(imageHeight > 0.0f)) {
         return;
     }

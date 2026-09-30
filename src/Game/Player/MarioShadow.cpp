@@ -454,7 +454,7 @@ void CollisionShadow::drawAndCaptureTex(J3DModelX* pModel, const TVec3f& rPositi
         TDDraw::fix2Dpos(&center);
         TDDraw::drawFillCircle(center, _2FC / 2, 0xFFFFFFC0, 0, 16);
         const ResTIMG* image = _300->getTexInfo();
-        void* destination = const_cast< u8* >(reinterpret_cast< const u8* >(image) + image->mImageDataOffset);
+        void* destination = const_cast< u8* >(reinterpret_cast< const u8* >(image) + JUT_RESTIMG_OFFSET(image->mImageDataOffset));
         GXRenderModeObj* mode = JUTVideo::getManager()->getRenderMode();
         GXSetCopyFilter(GX_FALSE, mode->sample_pattern, GX_FALSE, mode->vfilter);
         JUTTexture::captureDolTexture(destination, _2FC, _2FE, 608 - _2FC, 0, false, GX_CTF_A8);

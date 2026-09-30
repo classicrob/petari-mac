@@ -29,6 +29,8 @@
 //   "Goomba"       Kuribo. dir: up. HOSTILE.   "Octoomba" Takobo. dir: up. HOSTILE.
 //   "Karipon"      Karikari (clings to Mario; a spin shakes it off). dir: up. state 1
 //                  clinging. HOSTILE.
+//   "Rock"         Rock (a rolling boulder, body radius 225 x scale). dir: its motion since
+//                  the previous frame (units/frame). state: its type. HOSTILE.
 //   "Vine"         Plant. position: its moving part. state: 1 growing, 2 Mario hangs,
 //                  3 grown, 0 otherwise. BOUND: Mario hangs on it.
 #ifdef PETARI_NATIVE

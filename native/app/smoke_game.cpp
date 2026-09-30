@@ -12,6 +12,7 @@
 #include "Game/Player/MarioHolder.hpp"
 #include "Game/Scene/GameScene.hpp"
 #include "Game/Scene/SceneObjHolder.hpp"
+#include "Game/Camera/CameraDirector.hpp"
 #include "Game/Util/CameraUtil.hpp"
 #include "Game/Util/DemoUtil.hpp"
 #include "Game/Util/GamePadUtil.hpp"
@@ -124,6 +125,12 @@ Observation observeGame(bool wantPlayer) {
             observation.camZx = camZ.x;
             observation.camZy = camZ.y;
             observation.camZz = camZ.z;
+            observation.padLeftTrigger = MR::testCorePadTriggerLeft(WPAD_CHAN0);
+            observation.padRightTrigger = MR::testCorePadTriggerRight(WPAD_CHAN0);
+            if (const CameraDirector* pDirector = MR::getCameraDirector()) {
+                observation.camRoundLeft = pDirector->isEnableToRoundLeft();
+                observation.camRoundRight = pDirector->isEnableToRoundRight();
+            }
             observation.talkActive = MR::isSystemTalking();
             observation.playerDead = MR::isPlayerDead();
             observation.playerLife = static_cast< int >(pMario->getHealth());

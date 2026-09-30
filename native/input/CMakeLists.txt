@@ -111,7 +111,10 @@ set_source_files_properties("${PETARI_LEGACY_ROOT}/src/RVL_SDK/kpad/KPAD.c" PROP
     LANGUAGE CXX
     COMPILE_OPTIONS "-include;cstring;-Wno-unknown-pragmas")
 target_include_directories(petari_input PUBLIC include)
-target_link_libraries(petari_input PUBLIC petari_platform_os petari_platform_sc petari_core petari_native_config petari_host_runtime)
+# petari_platform_vi: input activity resets the screen-saver dimming, as WPAD
+# does on the Wii.
+target_link_libraries(petari_input PUBLIC petari_platform_os petari_platform_sc petari_platform_vi petari_core
+    petari_native_config petari_host_runtime)
 target_compile_features(petari_input PUBLIC cxx_std_17)
 
 # SDL3 event adapter (header-only; needs SDL3's headers, not its library).

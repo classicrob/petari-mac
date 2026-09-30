@@ -49,6 +49,9 @@ enum Counter : unsigned {
     // Game thread: waiting at the frame boundary for the previous frame's
     // draw-sync tokens (EFB readbacks) to be delivered.
     TokenBarrierWait,
+    // Game thread: GameSystemSceneController::startScene waiting for the stage's
+    // shader preparation (petari_gx_pipeline_stage_wait) before the first frame.
+    StagePrepWait,
     CounterCount
 };
 

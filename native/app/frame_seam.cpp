@@ -12,16 +12,20 @@
 #include <string>
 
 extern "C" uint64_t petari_gx_pipeline_manifest_failure_count();
+extern "C" void petari_gx_pipeline_report();
 
 #include "frame_stats.hpp"
 #include "host.hpp"
 #include "smoke.hpp"
 #include "smoke_goodegg.hpp"
+#include "smoke_soak.hpp"
 #include "smoke_stage.hpp"
+#include "soak_telemetry.hpp"
 #include "petari/asset_diagnostics.hpp"
 #include "petari/frame_telemetry.hpp"
 #include "petari/home_menu.hpp"
 #include "petari/host_allocation.hpp"
+#include "petari/test_fixture.hpp"
 
 namespace PetariNative::App {
 
@@ -162,6 +166,12 @@ void recordFrame(std::uint64_t entry, FrameStats::Phase phase) {
     frame.us[FrameStats::TextureUpload] = microseconds(takeCounter(Telemetry::TextureUpload, &events));
     frame.textureUploads = static_cast<std::uint32_t>(events);
     frame.us[FrameStats::TokenBarrierWait] = microseconds(takeCounter(Telemetry::TokenBarrierWait));
+    frame.us[FrameStats::StagePrepWait] = microseconds(takeCounter(Telemetry::StagePrepWait));
+    // A scene start that waited for its stage's shaders is part of loading,
+    // though the scene reports itself ready by the frame's end.
+    if (frame.us[FrameStats::StagePrepWait] >= 1000) {
+        frame.phase = FrameStats::Phase::Loading;
+    }
     t.recorder->add(frame);
 
     t.lastEntry = entry;
@@ -190,6 +200,8 @@ Smoke::Driver* gSmoke = nullptr;
 Smoke::StageDriver* gStage = nullptr;
 // Or Good Egg mission 1 (smoke_goodegg.hpp), PETARI_SMOKE=goodegg1.
 Smoke::GoodEggDriver* gGoodEgg = nullptr;
+// Or the long-session soak (smoke_soak.hpp), PETARI_SMOKE=soak.
+Smoke::SoakDriver* gSoak = nullptr;
 
 unsigned long environmentNumber(const char* name, unsigned long fallback) {
     const char* value = std::getenv(name);
@@ -202,6 +214,29 @@ unsigned long environmentNumber(const char* name, unsigned long fallback) {
 }
 
 void startSmoke() {
+    Soak::startTelemetryFromEnvironment();  // PETARI_SOAK_CSV, with any script or none
+    Smoke::SoakConfig soak;
+    if (Smoke::soakEnabledFromEnvironment(&soak)) {
+        if (TestFixture::stage.empty()) {
+            std::fprintf(stderr, "PETARI SMOKE: soak needs --test-fixture stage (with PETARI_STAGE); not running\n");
+            return;
+        }
+        // Only a validated stage fixture's entry is ever changed.
+        soak.setStage = [](const std::string& stage, int scenario) {
+            if (!TestFixture::stage.empty()) {
+                TestFixture::stage = stage;
+                TestFixture::stageScenario = scenario;
+            }
+        };
+        const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 20000);  // per stage cycle
+        const unsigned long stall = environmentNumber("PETARI_SMOKE_STALL_SECONDS", 60);
+        gSoak = new Smoke::SoakDriver(frames, soak);
+        std::fprintf(stderr, "PETARI SMOKE: script soak (%zu stage(s), %.0f minutes), stage frame limit %lu, stall limit %lu s\n",
+                     soak.stages.size(), soak.minutes, frames, stall);
+        std::fflush(stderr);
+        Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
+        return;
+    }
     Smoke::GoodEggConfig goodEgg;
     if (Smoke::goodEggEnabledFromEnvironment(&goodEgg)) {
         const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 72000);
@@ -435,9 +470,18 @@ void openFirstFrame() {
                      "Petari: no CPU release for the frame seam; other game threads wait while the window "
                      "presents and handles events\n");
     }
+    // As in the regular seam, other game threads run while the host opens the frame
+    // (first-use Dawn/ImGui pipeline creation can take hundreds of milliseconds).
+    const bool release = gRelease.begin != nullptr && gRelease.end != nullptr;
+    if (release) {
+        gRelease.begin();
+    }
     handleEvents(aurora_update());
     openFrame();
     updateImage();
+    if (release) {
+        gRelease.end();
+    }
     if (gTrace.enabled) {
         std::fprintf(stderr, "Petari trace: first Aurora frame open; starting the game\n");
         std::fflush(stderr);
@@ -466,6 +510,8 @@ void reportFrameStats() {
             std::fprintf(stderr, "Petari frame times: cannot write %s\n", gTiming.csvPath);
         }
     }
+    // Pipeline scheduler state at exit (pending/failed/skipped); normal exits skip aurora_shutdown.
+    petari_gx_pipeline_report();
     std::fflush(stderr);
 }
 
@@ -496,8 +542,14 @@ extern "C" void petari_host_frame_seam(void) {
         runSmoke(gSmoke);
     } else if (gStage != nullptr) {
         runSmoke(gStage);
+    } else if (gSoak != nullptr) {
+        runSmoke(gSoak);
     } else if (gGoodEgg != nullptr) {
         runSmoke(gGoodEgg);
+    }
+    if (Soak::telemetryActive()) {  // PETARI_SOAK_CSV: frame times and, periodically, the JKR heaps
+        static unsigned long frames = 0;
+        Soak::gameFrame(++frames, gSoak != nullptr ? gSoak->cycle() : 0, gSoak != nullptr ? gSoak->phase() : "");
     }
     const bool release = gRelease.begin != nullptr && gRelease.end != nullptr;
     if (release) {

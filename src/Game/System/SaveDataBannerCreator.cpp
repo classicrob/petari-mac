@@ -85,14 +85,14 @@ void SaveDataBannerCreator::setupBannerInfo() {
     NANDInitBanner(mBanner, NAND_BANNER_FLAG_ANIM_LOOP, title, comment);
 
     const ResTIMG* bannerTex = MR::loadTexFromArc("SaveIconBanner.arc", "SaveBanner.bti");
-    MR::copyMemory(mBanner->bannerTexture, reinterpret_cast< const u8* >(bannerTex) + bannerTex->mImageDataOffset, NAND_BANNER_TEXTURE_SIZE);
+    MR::copyMemory(mBanner->bannerTexture, reinterpret_cast< const u8* >(bannerTex) + JUT_RESTIMG_OFFSET(bannerTex->mImageDataOffset), NAND_BANNER_TEXTURE_SIZE);
 
     for (s32 i = 0; i < 1; i++) {
         char iconTexName[32];
         snprintf(iconTexName, sizeof(iconTexName), "SaveIcon%02d.bti", i);
 
         const ResTIMG* iconTex = MR::loadTexFromArc("SaveIconBanner.arc", iconTexName);
-        MR::copyMemory(mBanner->iconTexture[i], reinterpret_cast< const u8* >(iconTex) + iconTex->mImageDataOffset, NAND_BANNER_ICON_SIZE);
+        MR::copyMemory(mBanner->iconTexture[i], reinterpret_cast< const u8* >(iconTex) + JUT_RESTIMG_OFFSET(iconTex->mImageDataOffset), NAND_BANNER_ICON_SIZE);
 
         NANDSetIconSpeed(mBanner, i, NAND_BANNER_ICON_ANIM_SPEED_SLOW);
     }

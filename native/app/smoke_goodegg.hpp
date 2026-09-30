@@ -127,6 +127,11 @@ private:
     void notePhysical(const Observation& observation);
     void resetStuck();
     bool seen(const char* milestone) const;
+    // Boulders (rolling along the Peanut's rails): predicts them and Mario's
+    // candidate moves 45 frames ahead; when heading for the goal would pass
+    // within 460 of one, steers the safe move nearest the goal's direction
+    // (or waits, or keeps farthest away); true while doing so.
+    bool dodgeRocks(const Observation& observation, Step& step);
 
     struct Release {
         unsigned long frame;
@@ -160,6 +165,10 @@ private:
     bool mTalked = false;              // the Disk Garden Luma's talk ended
     unsigned long mAirFrames = 0;
     int mLastLife = -1;
+    bool mPeanutToured = false;
+    Point3 mGoalPoint{0.0f, 0.0f, 0.0f};  // goTo's latest target (boulder waits look at it)
+    bool mHasGoal = false;
+    unsigned long mRockLogAt = 0;
     float mBestDistance = 1e30f;
     unsigned long mStuckFrames = 0;
     int mRecoveries = 0;

@@ -160,9 +160,12 @@ std::uint32_t RemoteModel::heldBits() const {
     for (int i = 0; i < static_cast<int>(Action::Count); ++i) {
         const Action action = static_cast<Action>(i);
         for (const Binding& input : mBindings.inputs(action)) {
-            const bool held = input.device == Binding::Device::Key
-                                  ? input.code < Key::Max && mKeys[input.code]
-                                  : input.code < mMouse.size() && mMouse[input.code];
+            bool held = false;
+            switch (input.device) {
+            case Binding::Device::Key: held = input.code < Key::Max && mKeys[input.code]; break;
+            case Binding::Device::Mouse: held = input.code < mMouse.size() && mMouse[input.code]; break;
+            case Binding::Device::Pad: held = input.code < mPad.size() && mPad[input.code]; break;
+            }
             if (held) {
                 bits |= actionBits(action);
                 if (action == Action::Start && titlePromptActive()) {
@@ -189,10 +192,10 @@ std::uint32_t RemoteModel::refreshRaw() {
 }
 
 void RemoteModel::inputChanged(Binding input, bool down) {
-    if (input.device == Binding::Device::Key) {
-        mKeys[input.code] = down;
-    } else {
-        mMouse[input.code] = down;
+    switch (input.device) {
+    case Binding::Device::Key: mKeys[input.code] = down; break;
+    case Binding::Device::Mouse: mMouse[input.code] = down; break;
+    case Binding::Device::Pad: mPad[input.code] = down; break;
     }
     if (refreshRaw() != 0) {
         mActivity = true;
@@ -228,10 +231,99 @@ void RemoteModel::mouseButtonEvent(MouseButton button, bool down) {
     inputChanged(Binding::mouse(button), down);
 }
 
+void RemoteModel::padButtonEvent(PadButton button, bool down) {
+    const int index = static_cast<int>(button);
+    if (index < 0 || index >= static_cast<int>(mPad.size()) || mPad[index] == down || (down && !mFocused)) {
+        return;
+    }
+    if (button == PadButton::RightStick && down) {
+        // R3 brings the controller's Star Pointer to the middle of the image.
+        mPadPointer = true;
+        mPadPointerX = 0.0f;
+        mPadPointerY = 0.0f;
+    }
+    inputChanged(Binding::pad(button), down);
+}
+
+void RemoteModel::padAxisEvent(PadAxis axis, float value) {
+    const int index = static_cast<int>(axis);
+    if (index < 0 || index >= static_cast<int>(mPadAxes.size()) || !(value == value)) {
+        return;
+    }
+    const bool trigger = axis == PadAxis::LeftTrigger || axis == PadAxis::RightTrigger;
+    value = trigger ? std::clamp(value, 0.0f, 1.0f) : std::clamp(value, -1.0f, 1.0f);
+    if (!mFocused) {
+        return;
+    }
+    mPadAxes[index] = value;
+    if (trigger) {
+        // A button past half travel, with hysteresis so a resting finger does
+        // not chatter.
+        const PadButton button = axis == PadAxis::LeftTrigger ? PadButton::LeftTrigger : PadButton::RightTrigger;
+        const bool held = mPad[static_cast<int>(button)];
+        if (!held && value >= 0.55f) {
+            padButtonEvent(button, true);
+        } else if (held && value <= 0.45f) {
+            padButtonEvent(button, false);
+        }
+    }
+}
+
+void RemoteModel::padDisconnected() {
+    for (int i = 0; i < static_cast<int>(PadButton::Count); ++i) {
+        if (mPad[i]) {
+            inputChanged(Binding::pad(static_cast<PadButton>(i)), false);
+        }
+    }
+    mPadAxes.fill(0.0f);
+    mPadPointer = false;
+}
+
+bool RemoteModel::padStick(PadAxis xAxis, PadAxis yAxis, float* x, float* y) const {
+    const float px = mPadAxes[static_cast<int>(xAxis)];
+    const float py = -mPadAxes[static_cast<int>(yAxis)];  // SDL: y down
+    const float length = std::sqrt(px * px + py * py);
+    const float dead = std::clamp(mSettings.padStickDeadZone, 0.0f, 0.95f);
+    if (!(length > dead)) {
+        *x = *y = 0.0f;
+        return false;
+    }
+    const float scaled = std::min((length - dead) / (1.0f - dead), 1.0f);
+    *x = px / length * scaled;
+    *y = py / length * scaled;
+    return true;
+}
+
+void RemoteModel::updatePadPointer() {
+    float x;
+    float y;
+    if (!mFocused || !padStick(PadAxis::RightX, PadAxis::RightY, &x, &y)) {
+        return;
+    }
+    if (!mPadPointer) {
+        // Take over from wherever the mouse left the pointer.
+        float posX = 0.0f;
+        float posY = 0.0f;
+        if (mMouseInWindow && pointerPosition(mViewport, mMouseX, mMouseY, &posX, &posY)) {
+            mPadPointerX = std::clamp(posX, -1.0f, 1.0f);
+            mPadPointerY = std::clamp(posY, -1.0f, 1.0f);
+        } else {
+            mPadPointerX = mPadPointerY = 0.0f;
+        }
+        mPadPointer = true;
+    }
+    // A squared response: fine aiming near the centre, full speed at the rim.
+    const float speed = std::max(mSettings.padPointerWidthsPerSecond, 0.0f) * 2.0f * static_cast<float>(kReportSeconds);
+    const float length = std::sqrt(x * x + y * y);
+    mPadPointerX = std::clamp(mPadPointerX + x * length * speed, -1.0f, 1.0f);
+    mPadPointerY = std::clamp(mPadPointerY - y * length * speed, -1.0f, 1.0f);  // KPAD: y down
+}
+
 void RemoteModel::mouseMoved(float x, float y) {
     mMouseX = x;
     mMouseY = y;
     mMouseInWindow = true;
+    mPadPointer = false;  // the mouse takes the pointer back
 }
 
 void RemoteModel::mouseLeft() {
@@ -241,6 +333,9 @@ void RemoteModel::mouseLeft() {
 void RemoteModel::releaseAll() {
     mKeys.fill(false);
     mMouse.fill(false);
+    mPad.fill(false);
+    mPadAxes.fill(0.0f);
+    mPadPointer = false;
     mPendingPresses.fill(0);
     mRaw = 0;
     mMouseInWindow = false;
@@ -304,6 +399,10 @@ void RemoteModel::stickVector(float* x, float* y) const {
     if (*x != 0.0f && *y != 0.0f) {
         *x *= kDiagonal;
         *y *= kDiagonal;
+    }
+    if (*x == 0.0f && *y == 0.0f && mFocused) {
+        // No stick keys: a controller's left stick, analog.
+        padStick(PadAxis::LeftX, PadAxis::LeftY, x, y);
     }
     if ((mOutput & kBitWalk) != 0) {
         const float scale = std::clamp(mSettings.walkStickScale, 0.0f, 1.0f);
@@ -404,10 +503,11 @@ Report RemoteModel::nextReport(const PointerCalibration& calibration) {
 
     // IR camera. The camera's roll is the remote's roll about the pointing
     // axis, which KPAD also derives from gravity (acc_horizon).
-    float posX;
-    float posY;
-    if (mFocused && mMouseInWindow && std::fabs(mPitch) < radians(kSensorVisiblePitchDegrees) &&
-        pointerPosition(mViewport, mMouseX, mMouseY, &posX, &posY)) {
+    updatePadPointer();
+    float posX = mPadPointerX;
+    float posY = mPadPointerY;
+    const bool pointing = mPadPointer || (mMouseInWindow && pointerPosition(mViewport, mMouseX, mMouseY, &posX, &posY));
+    if (mFocused && pointing && std::fabs(mPitch) < radians(kSensorVisiblePitchDegrees)) {
         const float cameraRoll = std::atan2(sr, cp * cr);
         report.dotCount = pointerDots(calibration, posX, posY, cameraRoll, mSettings.pointerDistance, report.dots);
     }

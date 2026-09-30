@@ -5,6 +5,7 @@
 #include "Game/System/NANDErrorSequence.hpp"
 #include "Game/System/NANDManager.hpp"
 #include "Game/System/NativeBootTrace.hpp"
+#include "Game/System/NativeUnlockedSave.hpp"
 #include "Game/System/SaveDataHandler.hpp"
 #include "Game/System/SysConfigFile.hpp"
 #include "Game/System/UserFile.hpp"
@@ -119,6 +120,20 @@ void SaveDataHandleSequence::update() {
                      isHandlerDone ? mSaveDataHandler->getLastResultCode().getCode() : 0, mSaveDataHandler != nullptr ? mSaveDataHandler->_10 : 0,
                      mNANDErrorSequence == nullptr ? "none" : (mNANDErrorSequence->mIsDead ? "dead" : "alive"), _24);
             sPrevNerve = pNerve;
+        }
+    }
+#endif
+
+#ifdef PETARI_NATIVE
+    // --make-unlocked-save: once the game's save of the unlocked file is done,
+    // reload it through the same boot-time load path.
+    if (NativeUnlockedSave::isRequested()) {
+        if (isNerve(GET_NERVE_ANON(SaveDataHandleSequenceErrorHandling))) {
+            NativeUnlockedSave::fail("the game's save sequence reported a NAND error");
+        }
+
+        if (NativeUnlockedSave::isSaveWritten(isNerve(GET_NERVE_ANON(SaveDataHandleSequenceNoOperation)))) {
+            startPreLoad();
         }
     }
 #endif
@@ -506,6 +521,12 @@ void SaveDataHandleSequence::exePreLoad() {
 
     NANDResultCode resultCode = mSaveDataHandler->getLastResultCode();
 
+#ifdef PETARI_NATIVE
+    if (NativeUnlockedSave::isRequested() && !resultCode.isSuccess()) {
+        NativeUnlockedSave::fail("GameData.bin could not be read from the isolated user directory");
+    }
+#endif
+
     if (resultCode.isSuccess()) {
         setNerve(GET_NERVE_ANON(SaveDataHandleSequencePreLoadDone));
     } else if (resultCode.isNoExistFile()) {
@@ -522,6 +543,11 @@ void SaveDataHandleSequence::exePreLoad() {
 
 void SaveDataHandleSequence::exePreLoadDone() {
     if (!mSaveDataHandler->requestVerifyAfterLoadGameDataFile()) {
+#ifdef PETARI_NATIVE
+        if (NativeUnlockedSave::isRequested()) {
+            NativeUnlockedSave::fail("SaveDataHandler rejected GameData.bin (version, size or checksum)");
+        }
+#endif
         mNerveForError = GET_NERVE_ANON(SaveDataHandleSequenceNoOperation);
         mNANDErrorSequence->startRemoveFile();
 
@@ -529,6 +555,13 @@ void SaveDataHandleSequence::exePreLoadDone() {
     } else {
         restoreSysConfigFile(mSysConfigFile);
         _24 = 2;
+
+#ifdef PETARI_NATIVE
+        if (NativeUnlockedSave::isRequested() && NativeUnlockedSave::onLoaded(this, mCurrentUserFile, mSaveDataHandler)) {
+            setNerve(GET_NERVE_ANON(SaveDataHandleSequenceSaveAllWithoutWindow));
+            return;
+        }
+#endif
 
         setNerve(GET_NERVE_ANON(SaveDataHandleSequenceNoOperation));
     }

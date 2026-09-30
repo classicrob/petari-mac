@@ -14,7 +14,7 @@ constexpr const char* kPartNames[PartCount] = {
     "seam_compose", "seam_end_frame", "seam_begin_frame", "seam_reacquire", "retrace_wait", "game_work",
     "draw_done_wait", "unattributed", "retrace_wake", "pipeline_wait", "efb_staging_wait", "efb_submit_wait",
     "efb_capture_max", "drawable_acquire", "frame_submit", "present_call", "vi_timer_late_max", "vi_lock_wait_max",
-    "texture_hash", "texture_upload", "token_barrier_wait",
+    "texture_hash", "texture_upload", "token_barrier_wait", "stage_prep_wait",
 };
 constexpr unsigned kTotal = kPhaseCount;
 
@@ -30,11 +30,11 @@ void writeParts(std::FILE* out, const std::uint64_t* sums, std::uint64_t frames,
     std::fprintf(out,
                  "      game thread: retrace wait %.2f, game work %.2f, draw-done wait %.2f, seam compose %.2f, "
                  "end frame %.2f, begin frame %.2f, CPU reacquire %.2f, unattributed %.2f (retrace-to-resume %.2f, "
-                 "token barrier in game work %.2f)\n",
+                 "token barrier %.2f and stage shader prep %.2f in game work)\n",
                  ms(sums[RetraceWait]) / frames, ms(sums[GameWork]) / frames, ms(sums[DrawDoneWait]) / frames,
                  ms(sums[SeamCompose]) / frames, ms(sums[SeamEndFrame]) / frames, ms(sums[SeamBeginFrame]) / frames,
                  ms(sums[SeamReacquire]) / frames, ms(sums[Unattributed]) / frames, ms(sums[RetraceWake]) / frames,
-                 ms(sums[TokenBarrierWait]) / frames);
+                 ms(sums[TokenBarrierWait]) / frames, ms(sums[StagePrepWait]) / frames);
     std::fprintf(out,
                  "      other threads (overlapping): pipeline wait %.2f, EFB staging %.2f, EFB submit %.2f, "
                  "texture hash %.2f, texture upload %.2f, drawable acquire %.2f, frame submit %.2f, present call %.2f",

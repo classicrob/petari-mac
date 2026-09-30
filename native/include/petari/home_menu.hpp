@@ -214,5 +214,12 @@ void publish(const View& view);
 // coordinates. Draws nothing while the menu is hidden. The overlay window
 // takes no input, so ImGui never captures the game's keyboard or mouse.
 void drawImGuiOverlay(float imageX, float imageY, float imageWidth, float imageHeight);
+// The title screen's keyboard hint (ASCII), in a bar across the top of the
+// image, above the logo. drawImGuiOverlay draws it while the input layer
+// reports the title's "press A and B" prompt and the menu is hidden, when
+// the input layer is in the build. Same thread and frame rules.
+void drawTitleHint(const char* text, float imageX, float imageY, float imageWidth, float imageHeight);
+// The hint's bar in KPAD space (-1..1 across the image, y down).
+Rect titleHintRect();
 
 }  // namespace PetariNative::HomeMenu

@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """CPU regressions for seed provenance and generated draw-priority scheduling."""
+import argparse
 import importlib.util
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from export_pipeline_stage_seeds import export
 
 ROOT = Path(__file__).resolve().parents[2]
+AURORA = ROOT.parent / 'aurora-reference'
 
 
 class PipelineSeedTests(unittest.TestCase):
@@ -38,7 +41,7 @@ class PipelineSeedTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('patch_pipeline', ROOT / 'native/gx/patch_aurora_pipeline.py')
         patcher = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patcher)
-        patched = patcher.patch((ROOT.parent / 'aurora-reference/lib/gfx/pipeline_cache.cpp').read_text())
+        patched = patcher.patch((AURORA / 'lib/gfx/pipeline_cache.cpp').read_text())
         start = patched.index('static void promote_pending_pipeline(')
         end = patched.index('static std::optional<PendingPipeline> take_pending_pipeline', start)
         function = patched[start:end]
@@ -75,4 +78,8 @@ int main() {
 
 
 if __name__ == '__main__':
-    unittest.main()
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--aurora', type=Path, default=AURORA)
+    args, remaining = parser.parse_known_args()
+    AURORA = args.aurora
+    unittest.main(argv=[sys.argv[0], *remaining])

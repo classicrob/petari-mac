@@ -20,6 +20,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 
@@ -94,8 +95,18 @@ u32 tvFormatOf(u32 tvMode) {
 }
 
 u32 dimmingThreshold() {
+    // PETARI_VI_DIMMING_SECONDS (live checks): a shorter idle time, in seconds.
+    static const long sOverrideSeconds = [] {
+        const char* text = std::getenv("PETARI_VI_DIMMING_SECONDS");
+        const long seconds = text != nullptr ? std::strtol(text, nullptr, 10) : 0;
+        return seconds > 0 && seconds < 86400 ? seconds : 0;
+    }();
+    const bool pal = tvFormatOf(gLatched.tvMode) == VI_PAL;
+    if (sOverrideSeconds > 0) {
+        return static_cast<u32>(sOverrideSeconds * (pal ? 50 : 60));
+    }
     // Five minutes of retraces (NEW_TIME_TO_DIMMING for VI_DM_DEFAULT).
-    return tvFormatOf(gLatched.tvMode) == VI_PAL ? 15000 : 18000;
+    return pal ? 15000 : 18000;
 }
 
 VIN::DisplayState snapshotLocked() {
@@ -136,6 +147,7 @@ void retraceInterrupt() {
     }
     OSWakeupThread(&gRetraceQueue);
 
+    const bool wasDimmed = gDimmed;
     if (gActivity) {
         gActivity = false;
         gIdleCount = 0;
@@ -145,6 +157,11 @@ void retraceInterrupt() {
         if (gIdleCount >= dimmingThreshold()) {
             gDimmed = true;
         }
+    }
+    if (gDimmed != wasDimmed) {
+        // Rare: once per change. This is a host thread.
+        std::fprintf(stderr, "PETARI VI: screen %s at retrace %u\n", gDimmed ? "dimmed (idle)" : "undimmed (input)",
+                     gRetraceCount);
     }
 }
 

@@ -392,10 +392,17 @@ void StageDriver::exercise(const Observation& o, Step& step) {
         break;
     case Phase::Camera: {
         const Walk& camera = kCameras[mStep];
+        const bool left = camera.button == Button::CameraLeft;
+        if (mPhaseFrames > kSettle && !mCamTriggerSeen && (left ? o.padLeftTrigger : o.padRightTrigger)) {
+            mCamTriggerSeen = true;
+            mCamRoundAllowed = left ? o.camRoundLeft : o.camRoundRight;
+        }
         if (mPhaseFrames == kSettle) {
             mCamZx = o.camZx;
             mCamZy = o.camZy;
             mCamZz = o.camZz;
+            mCamTriggerSeen = false;
+            mCamRoundAllowed = false;
             tap(camera.button, kTapFrames, step);
         } else if (mPhaseFrames == kSettle + kCameraWait) {
             const Vec before{mCamZx, mCamZy, mCamZz};
@@ -403,8 +410,22 @@ void StageDriver::exercise(const Observation& o, Step& step) {
             const float denominator = length(before) * length(after);
             const float cosine = denominator > 1e-6f ? std::clamp(dot(before, after) / denominator, -1.0f, 1.0f) : 1.0f;
             const float degrees = std::acos(cosine) * 180.0f / 3.14159265f;
+            // A view that did not turn is a warning either way; the detail
+            // says whether the game saw the press and whether the area's
+            // camera allows rotation (where it does not, the game answers with
+            // its "can't" sound, as on the Wii).
+            std::string why;
+            if (degrees < kCameraMinimumDegrees) {
+                if (!mCamTriggerSeen) {
+                    why = "; INPUT: the game never saw the D-pad press";
+                } else if (!mCamRoundAllowed) {
+                    why = "; fixed camera: the area's camera does not allow rotation";
+                } else {
+                    why = "; CAMERA: rotation allowed but the view did not turn";
+                }
+            }
             check(std::string("camera_") + camera.name, degrees >= kCameraMinimumDegrees ? "ok" : "warn",
-                  "view turned " + number(degrees) + " degrees (only where the area's camera allows rotation)");
+                  "view turned " + number(degrees) + " degrees" + why);
             mPhaseFrames = 0;
             if (++mStep == 2) next(Phase::PauseOpen);
         }

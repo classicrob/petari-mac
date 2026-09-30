@@ -21,6 +21,16 @@ const char* const kActionNames[kActionCount] = {
 
 const char* const kMouseNames[static_cast<int>(MouseButton::Count)] = {"Left", "Middle", "Right", "X1", "X2"};
 
+const char* const kPadNames[static_cast<int>(PadButton::Count)] = {
+    "South",        "East",          "West",   "North",    "Back",     "Guide",     "Start",       "LeftStick", "RightStick",
+    "LeftShoulder", "RightShoulder", "DpadUp", "DpadDown", "DpadLeft", "DpadRight", "LeftTrigger", "RightTrigger"};
+
+// Player-facing, layout neutral (South is Xbox A, PlayStation Cross, Nintendo B).
+const char* const kPadDisplayNames[static_cast<int>(PadButton::Count)] = {
+    "Pad bottom",   "Pad right",    "Pad left",      "Pad top",        "Pad Back",       "Pad Guide",
+    "Pad Start",    "Pad L3",       "Pad R3",        "Pad LB",         "Pad RB",         "Pad D-pad up",
+    "Pad D-pad down", "Pad D-pad left", "Pad D-pad right", "Pad LT", "Pad RT"};
+
 struct NamedKey {
     const char* name;
     KeyCode code;
@@ -85,6 +95,14 @@ bool parseBinding(const std::string& text, Binding* binding) {
         for (int i = 0; i < static_cast<int>(MouseButton::Count); ++i) {
             if (name == kMouseNames[i]) {
                 *binding = Binding::mouse(static_cast<MouseButton>(i));
+                return true;
+            }
+        }
+    }
+    if (device == "Pad") {
+        for (int i = 0; i < static_cast<int>(PadButton::Count); ++i) {
+            if (name == kPadNames[i]) {
+                *binding = Binding::pad(static_cast<PadButton>(i));
                 return true;
             }
         }
@@ -162,6 +180,9 @@ std::string firstOfEach(const Bindings& bindings, std::initializer_list<Action> 
 }  // namespace
 
 std::string displayName(Binding input) {
+    if (input.device == Binding::Device::Pad) {
+        return input.code < static_cast<int>(PadButton::Count) ? kPadDisplayNames[input.code] : "Pad";
+    }
     if (input.device == Binding::Device::Mouse) {
         return input.code < static_cast<int>(MouseButton::Count) ? kMouseDisplayNames[input.code] : "Mouse";
     }
@@ -185,23 +206,50 @@ std::vector<ControlsLine> controlsSummary(const Bindings& b) {
         return inputs.empty() ? std::string("(not bound)") : "Hold " + joined(inputs, " / ") + suffix;
     };
     return {
-        {"Move", move},
+        {"Move", move + " / left stick"},
         {"Jump / confirm", joined(inputsOf(b, {Action::A}), " / ")},
         {"Start (title: A and B)", joined(inputsOf(b, {Action::Start}), " / ")},
         {"Spin", joined(inputsOf(b, {Action::Shake}), " / ")},
         {"Crouch / ground pound", joined(inputsOf(b, {Action::NunchukZ}), " / ")},
-        {"Star Pointer", "Mouse"},
+        {"Star Pointer", "Mouse / right stick (R3: center)"},
         {"Shoot Star Bits / back", joined(inputsOf(b, {Action::B}), " / ")},
         {"Grab (Pull Stars)", hold({Action::A}, " on the target")},
         {"Rotate camera", firstOfEach(b, {Action::DpadLeft, Action::DpadRight}, " / ")},
         {"Recenter camera", joined(inputsOf(b, {Action::NunchukC}), " / ")},
-        {"First-person view", joined(inputsOf(b, {Action::DpadUp}), " / ")},
+        {"First-person view", joined(inputsOf(b, {Action::DpadUp}), " / ") + " (leave: " +
+                                  joined(inputsOf(b, {Action::DpadDown}), " / ") + ")"},
         {"Walk slowly", hold({Action::Walk}, "")},
         {"Pause", joined(inputsOf(b, {Action::Plus, Action::Minus}), " / ")},
         {"Star Ball / Ray", move + " tilt while riding"},
         {"Tilt the remote by hand", hold({Action::TiltHold}, " + " + move)},
         {"This menu", joined(inputsOf(b, {Action::Home}), " / ")},
     };
+}
+
+std::string titleHint(const Bindings& b) {
+    // The keyboard input of an action if it has one, else its first input.
+    auto preferKey = [&b](Action action) {
+        const std::vector<Binding>& inputs = b.inputs(action);
+        for (const Binding& input : inputs) {
+            if (input.device == Binding::Device::Key) {
+                return displayName(input);
+            }
+        }
+        return displayName(inputs.front());
+    };
+    std::string start;
+    if (!b.inputs(Action::Start).empty()) {
+        start = preferKey(Action::Start) + " starts";
+    } else if (!b.inputs(Action::A).empty() && !b.inputs(Action::B).empty()) {
+        start = "hold " + preferKey(Action::A) + ", then press " + preferKey(Action::B) + " to start";
+    } else {
+        start = "bind Start in controls.txt to start";
+    }
+    std::string text = "Keyboard: " + start;
+    if (!b.inputs(Action::Home).empty()) {
+        text += "   |   " + preferKey(Action::Home) + ": all controls";
+    }
+    return text;
 }
 
 Bindings Bindings::defaults() {
@@ -238,6 +286,25 @@ Bindings Bindings::defaults() {
     // B together; it never sends B elsewhere, where B backs out of menus.
     b.bind(Action::Start, Binding::key(Key::Return));
     b.bind(Action::Start, Binding::key(Key::KeypadEnter));
+    // Game controllers: the usual console layout for this game. The left
+    // stick is the Nunchuk stick and the right stick the Star Pointer (not
+    // bindings; see RemoteModel). Start and Back would block pausing if they
+    // also sent A or B, so the title's A and B is the top button (Start).
+    b.bind(Action::A, Binding::pad(PadButton::South));
+    b.bind(Action::B, Binding::pad(PadButton::East));
+    b.bind(Action::B, Binding::pad(PadButton::RightTrigger));  // Star Bits
+    b.bind(Action::Shake, Binding::pad(PadButton::West));
+    b.bind(Action::Shake, Binding::pad(PadButton::RightShoulder));
+    b.bind(Action::Start, Binding::pad(PadButton::North));
+    b.bind(Action::NunchukZ, Binding::pad(PadButton::LeftTrigger));
+    b.bind(Action::NunchukC, Binding::pad(PadButton::LeftShoulder));
+    b.bind(Action::DpadUp, Binding::pad(PadButton::DpadUp));
+    b.bind(Action::DpadDown, Binding::pad(PadButton::DpadDown));
+    b.bind(Action::DpadLeft, Binding::pad(PadButton::DpadLeft));
+    b.bind(Action::DpadRight, Binding::pad(PadButton::DpadRight));
+    b.bind(Action::Plus, Binding::pad(PadButton::Start));
+    b.bind(Action::Minus, Binding::pad(PadButton::Back));
+    b.bind(Action::Home, Binding::pad(PadButton::Guide));
     return b;
 }
 
@@ -273,8 +340,10 @@ std::string Bindings::serialize() const {
             first = false;
             if (input.device == Binding::Device::Key) {
                 out << "Key:" << keyName(input.code);
-            } else {
+            } else if (input.device == Binding::Device::Mouse) {
                 out << "Mouse:" << kMouseNames[input.code];
+            } else {
+                out << "Pad:" << kPadNames[input.code];
             }
         }
         out << '\n';

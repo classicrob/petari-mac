@@ -70,8 +70,8 @@ def main():
     parser.add_argument('--inside-lock', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--inside-sweep', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if not 1 <= args.seconds <= 1200 or args.session < 1:
-        parser.error('session must be positive; duration must be 1..1200 seconds')
+    if not 1 <= args.seconds <= 1500 or args.session < 1:
+        parser.error('session must be positive; duration must be 1..1500 seconds')
     OUT.mkdir(exist_ok=True)
     if args.summarize:
         summarize()
@@ -100,7 +100,9 @@ def main():
                                  '--app', str(args.app.resolve())], cwd=ROOT)
         raise SystemExit(result.returncode)
     lane = ROOT / 'build/.petari-sweep-lane.lock'
-    if (lane / 'owner').read_text().strip() != 'cu-playtest' or int((lane / 'pid').read_text()) != os.getppid():
+    if (lane / 'owner').read_text().strip() != 'cu-playtest':
+        parser.error('inside-sweep mode requires the cu-playtest sweep lane')
+    if int((lane / 'pid').read_text()) != os.getppid():
         parser.error('inside-sweep mode requires this launcher’s sweep-lane parent')
     prefix = OUT / f'session-{args.session}'
     log = prefix.with_suffix('.log')
@@ -113,7 +115,7 @@ def main():
     command = [str(binary), '--disc', str(ROOT / 'build/game-data/RMGE01'),
                '--user', str(FIXTURE), '--test-fixture', 'observatory']
     record = {'started_utc': utc(), 'command': command, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
-              'app': str(args.app.resolve()), 'diagnostics': {k:v for k,v in env.items() if k in ('PETARI_TRACE_BOOT','PETARI_AUDIO_DIAG','PETARI_BATON_DIAG','PETARI_BATON_SAMPLE','PETARI_PIPELINE_GLOBAL_PRECOMPILE','PETARI_FRAME_CSV')},
+              'app': str(args.app.resolve()), 'host_load_average_at_start': os.getloadavg(), 'diagnostics': {k:v for k,v in env.items() if k in ('PETARI_TRACE_BOOT','PETARI_AUDIO_DIAG','PETARI_BATON_DIAG','PETARI_BATON_SAMPLE','PETARI_PIPELINE_GLOBAL_PRECOMPILE','PETARI_FRAME_CSV')},
               'nand_before': hashes(), 'internal_smoke_driver': False, 'deadline_seconds': args.seconds}
     started = time.monotonic()
     with log.open('x') as output:

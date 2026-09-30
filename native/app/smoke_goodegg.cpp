@@ -4,6 +4,7 @@
 #include "smoke_goodegg.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -131,6 +132,123 @@ const Vec kPeanutChips[] = {{-9208.8f, -15819.9f, -2453.4f},
                             {-11150.4f, -15615.0f, -3413.3f},
                             {-10156.9f, -15547.8f, -1449.6f}};
 constexpr int kPeanutChipCount = 5;
+// PeanutMudPlanet tour from the Disk Garden launch star's landing past the
+// five chips (in the order right lobe, top, waist bottom, waist top, left
+// lobe) to below the launch star they form: shortest paths over the
+// collision's sand (floor code 13; never on SinkDeathMud, code 32, nor within
+// 130 of it), penalised within 350 of the three boulder rails (PeanutZone
+// rails 1-3, the RockCreators' paths once SwitchCube SW 1006 turns on),
+// sampled every 200. The rails cross the planet: boulders are dodged live.
+const std::vector<Point3> kPeanutRoute = {
+    {-9122, -15504, -2193}, {-9216, -15716, -2408}, {-9261, -15795, -2429}, {-9407, -15982, -2409},
+    {-9536, -16091, -2198}, {-9798, -16159, -2140}, {-10019, -16153, -2162}, {-10289, -16011, -1984},
+    {-10332, -15851, -1780}, {-10372, -15653, -1686}, {-10248, -15525, -1580}, {-10348, -15776, -1731},
+    {-10309, -15944, -1872}, {-10260, -16059, -2107}, {-10430, -15950, -2327}, {-10527, -15879, -2441},
+    {-10696, -15952, -2564}, {-10760, -15976, -2796}, {-10720, -15849, -2965}, {-10739, -15630, -3142},
+    {-10706, -15365, -3149}, {-10717, -15090, -3056}, {-10710, -14920, -2793}, {-10569, -14970, -2518},
+    {-10710, -14920, -2793}, {-10732, -15021, -3010}, {-10729, -15236, -3146}, {-10730, -15456, -3173},
+    {-10821, -15641, -3210}, {-11001, -15660, -3300}, {-11156, -15607, -3350}, {-11430, -15747, -3292},
+    {-11648, -15679, -3226}, {-11798, -15568, -3128}, {-11923, -15385, -2954}};
+// PeanutZone rails l_id 1-3: closed cubic Bezier loops (point, then the
+// handles pnt2 out and pnt1 in), evaluated every ~120 units. The boulders
+// (RockCreator, default speed 10 units/frame, one boulder each; two creators
+// per rail) roll around them for good once SwitchCube SW 1006 turns on;
+// observed boulders in goodegg-6 were within 182 units of these curves.
+const std::vector<Point3> kPeanutRails[3] = {
+    // rail l_id 1 (49 points)
+    {{-10193, -15290, -1202}, {-10190, -15151, -1220}, {-10185, -15029, -1252}, {-10176, -14894, -1302},
+     {-10162, -14754, -1373}, {-10146, -14651, -1441}, {-10126, -14553, -1523}, {-10101, -14463, -1620},
+     {-10071, -14385, -1732}, {-10034, -14323, -1862}, {-9991, -14280, -2009}, {-9940, -14259, -2175},
+     {-9903, -14259, -2295}, {-9851, -14284, -2457}, {-9806, -14336, -2598}, {-9767, -14410, -2718},
+     {-9734, -14500, -2819}, {-9706, -14603, -2903}, {-9682, -14714, -2971}, {-9664, -14827, -3024},
+     {-9645, -14975, -3077}, {-9632, -15109, -3110}, {-9623, -15239, -3132}, {-9620, -15361, -3134},
+     {-9623, -15495, -3115}, {-9629, -15642, -3082}, {-9637, -15765, -3046}, {-9649, -15895, -2997},
+     {-9665, -16025, -2934}, {-9685, -16150, -2856}, {-9712, -16264, -2760}, {-9745, -16363, -2645},
+     {-9785, -16441, -2510}, {-9833, -16491, -2353}, {-9869, -16507, -2235}, {-9908, -16508, -2109},
+     {-9945, -16494, -1991}, {-9995, -16450, -1834}, {-10037, -16381, -1698}, {-10073, -16292, -1583},
+     {-10104, -16187, -1486}, {-10128, -16071, -1407}, {-10148, -15948, -1343}, {-10164, -15822, -1294},
+     {-10176, -15699, -1257}, {-10184, -15581, -1231}, {-10190, -15441, -1210}, {-10193, -15309, -1202},
+     {-10193, -15290, -1202}},
+    // rail l_id 2 (35 points)
+    {{-10542, -14655, -2429}, {-10495, -14666, -2577}, {-10457, -14697, -2700}, {-10417, -14764, -2829},
+     {-10388, -14852, -2923}, {-10368, -14952, -2987}, {-10353, -15083, -3034}, {-10347, -15204, -3053},
+     {-10347, -15325, -3055}, {-10348, -15452, -3050}, {-10355, -15592, -3027}, {-10370, -15730, -2980},
+     {-10389, -15841, -2917}, {-10418, -15943, -2826}, {-10456, -16027, -2702}, {-10493, -16072, -2584},
+     {-10538, -16099, -2443}, {-10589, -16103, -2279}, {-10635, -16082, -2132}, {-10672, -16040, -2015},
+     {-10708, -15957, -1897}, {-10733, -15852, -1817}, {-10748, -15736, -1769}, {-10755, -15617, -1746},
+     {-10757, -15479, -1741}, {-10753, -15356, -1752}, {-10750, -15223, -1763}, {-10743, -15101, -1784},
+     {-10730, -14981, -1827}, {-10706, -14861, -1903}, {-10678, -14776, -1995}, {-10639, -14708, -2119},
+     {-10602, -14673, -2237}, {-10558, -14656, -2377}, {-10542, -14655, -2429}},
+    // rail l_id 3 (47 points)
+    {{-11571, -15304, -1654}, {-11564, -15439, -1664}, {-11553, -15569, -1685}, {-11535, -15718, -1721},
+     {-11517, -15837, -1761}, {-11495, -15956, -1812}, {-11469, -16072, -1875}, {-11439, -16181, -1954},
+     {-11405, -16277, -2047}, {-11366, -16357, -2157}, {-11322, -16417, -2286}, {-11274, -16451, -2434},
+     {-11222, -16457, -2600}, {-11174, -16431, -2757}, {-11134, -16379, -2898}, {-11099, -16305, -3022},
+     {-11071, -16214, -3131}, {-11048, -16109, -3226}, {-11029, -15997, -3307}, {-11015, -15880, -3375},
+     {-11005, -15765, -3430}, {-10995, -15620, -3486}, {-10991, -15495, -3523}, {-10988, -15370, -3545},
+     {-10997, -15226, -3529}, {-11010, -15107, -3501}, {-11029, -14969, -3457}, {-11055, -14822, -3395},
+     {-11078, -14713, -3335}, {-11106, -14608, -3263}, {-11137, -14513, -3176}, {-11172, -14432, -3075},
+     {-11212, -14368, -2958}, {-11256, -14327, -2824}, {-11304, -14312, -2672}, {-11351, -14325, -2518},
+     {-11393, -14361, -2378}, {-11429, -14417, -2251}, {-11460, -14489, -2137}, {-11487, -14574, -2036},
+     {-11509, -14667, -1948}, {-11527, -14767, -1872}, {-11541, -14869, -1808}, {-11555, -15002, -1740},
+     {-11564, -15125, -1692}, {-11570, -15250, -1660}, {-11571, -15304, -1654}}};
+constexpr float kRockOffRail = 350.0f;  // farther: not rolling on its rail
+constexpr float kRockWatch = 1500.0f;   // boulders this close are predicted
+constexpr int kRockSteps = 9;           // prediction samples...
+constexpr int kRockStepFrames = 5;      // ...5 frames apart: 45 frames ahead
+constexpr float kMarioSpeed = 8.0f;     // running, units per frame
+// Mario's position is his feet, a boulder's its centre, about a radius above
+// its rail: contact is near 340 feet-to-centre. The margin covers the rail
+// fit (observed boulders median 60, at most 235 from the fitted curves) and
+// the 8-way stick.
+constexpr float kRockSafe = 460.0f;
+
+struct RailSpot {
+    int rail = -1;
+    size_t index = 0;
+    float distance = 1e30f;
+};
+// The nearest rail point (on one rail, or on any when rail < 0).
+RailSpot nearestRail(Vec p, int rail) {
+    RailSpot best;
+    for (int r = 0; r < 3; ++r) {
+        if (rail >= 0 && r != rail) {
+            continue;
+        }
+        for (size_t i = 0; i < kPeanutRails[r].size(); ++i) {
+            const float d = length(vec(kPeanutRails[r][i]) - p);
+            if (d < best.distance) {
+                best = {r, i, d};
+            }
+        }
+    }
+    return best;
+}
+Vec railTangent(const RailSpot& spot) {
+    const auto& rail = kPeanutRails[spot.rail];
+    const size_t next = (spot.index + 1) % rail.size();
+    return normalized(vec(rail[next]) - vec(rail[spot.index]));
+}
+// +1 when moving toward higher indices.
+int railDirection(const RailSpot& spot, Vec velocity) {
+    return dot(velocity, railTangent(spot)) >= 0.0f ? 1 : -1;
+}
+// The rail point `distance` along the rail from `from`, rolling in `direction`.
+Vec railAhead(const RailSpot& from, int direction, float distance) {
+    const auto& rail = kPeanutRails[from.rail];
+    const size_t n = rail.size();
+    size_t i = from.index;
+    for (size_t steps = 0; steps < n; ++steps) {
+        const size_t next = (i + n + direction) % n;
+        const float segment = length(vec(rail[next]) - vec(rail[i]));
+        if (distance <= segment) {
+            return vec(rail[i]) + (vec(rail[next]) - vec(rail[i])) * (distance / std::max(segment, 1.0f));
+        }
+        distance -= segment;
+        i = next;
+    }
+    return vec(rail[i]);
+}
 const Vec kPeanutLaunchStar{-12216.7f, -15424.5f, -3022.8f};  // l_id 4, SW_APPEAR 1007 (the chips)
 const Vec kBeanBPiranha{-18416.7f, -15888.5f, -8672.8f};      // PackunPetit l_id 62, SW_DEAD 4
 const Vec kBeanBVine{-18425.0f, -15878.7f, -8666.7f};         // Plant l_id 21, SW_APPEAR 4
@@ -511,6 +629,8 @@ bool GoodEggDriver::goTo(const Observation& o, const Point3& target, float radiu
     const Vec pos = position(o);
     const Vec delta = vec(target) - pos;
     const float distance = flat ? length(across(delta, up(o))) : length(delta);
+    mGoalPoint = target;
+    mHasGoal = true;
     if (mGoal != what) {
         mGoal = what;
         resetStuck();
@@ -677,6 +797,10 @@ void GoodEggDriver::mission(const Observation& o, Step& step) {
                step);
         return;
     }
+    // Rolling boulders: step off the line of one that is coming.
+    if (dodgeRocks(o, step)) {
+        return;
+    }
     // Small enemies close by: spin (stuns Goombas and Octoombas, knocks down Piranha Plants).
     for (const Observation::Actor& actor : o.actors) {
         if ((actor.flags & kActorHostile) &&
@@ -695,6 +819,77 @@ void GoodEggDriver::mission(const Observation& o, Step& step) {
     case Planet::Dino: dino(o, step); break;
     default: steer({}, step); break;
     }
+}
+
+bool GoodEggDriver::dodgeRocks(const Observation& o, Step& step) {
+    const Vec pos = position(o);
+    const Vec u = up(o);
+    // Where each boulder will be over the horizon: along its rail, or
+    // straight on when it is off the rails.
+    std::vector<std::array<Vec, kRockSteps + 1>> rocks;
+    for (const Observation::Actor& actor : o.actors) {
+        if (actor.kind != "Rock" || length(actorPos(actor) - pos) > kRockWatch) {
+            continue;
+        }
+        const Vec rock = actorPos(actor);
+        const Vec velocity{actor.dx, actor.dy, actor.dz};
+        const float speed = length(velocity);
+        std::array<Vec, kRockSteps + 1> path;
+        const RailSpot on = nearestRail(rock, -1);
+        for (int k = 0; k <= kRockSteps; ++k) {
+            const float t = static_cast< float >(k * kRockStepFrames);
+            path[k] = on.rail >= 0 && on.distance < kRockOffRail && speed > 1.0f
+                          ? railAhead(on, railDirection(on, velocity), speed * t) + (rock - vec(kPeanutRails[on.rail][on.index]))
+                          : rock + velocity * t;
+        }
+        rocks.push_back(path);
+    }
+    if (rocks.empty()) {
+        return false;
+    }
+    // Candidate moves across the ground: toward the goal, eight directions
+    // around it, and standing still; Mario runs about 8 units per frame.
+    const Vec toGoal = mHasGoal ? normalized(across(vec(mGoalPoint) - pos, u)) : Vec{};
+    const Vec side = length(toGoal) > 0.5f ? normalized(cross(u, toGoal)) : Vec{};
+    auto clearance = [&](Vec dir) {
+        float least = 1e30f;
+        for (const auto& path : rocks) {
+            for (int k = 0; k <= kRockSteps; ++k) {
+                const Vec mario = pos + dir * (kMarioSpeed * static_cast< float >(k * kRockStepFrames));
+                least = std::min(least, length(path[k] - mario));
+            }
+        }
+        return least;
+    };
+    if (length(toGoal) < 0.5f || clearance(toGoal) >= kRockSafe) {
+        return false;
+    }
+    Vec best{};
+    float bestScore = -1e30f;
+    float bestClearance = 0.0f;
+    for (int i = 0; i <= 8; ++i) {
+        Vec dir{};
+        if (i < 8) {
+            const float angle = static_cast< float >(i) * 0.785398f;
+            dir = toGoal * std::cos(angle) + side * std::sin(angle);
+        }
+        const float c = clearance(dir);
+        // Safe moves win, the nearer the goal's direction the better; else the
+        // move that stays farthest from every boulder.
+        const float score = c >= kRockSafe ? 10000.0f + (i < 8 ? dot(dir, toGoal) : -0.5f) : c;
+        if (score > bestScore) {
+            bestScore = score;
+            best = dir;
+            bestClearance = c;
+        }
+    }
+    if (mFrame >= mRockLogAt) {
+        mRockLogAt = mFrame + 60;
+        note(std::string(length(best) < 0.5f ? "waiting for a boulder to pass" : "stepping around a boulder") +
+             " (clearance " + number(bestClearance) + ", Mario " + text(pos) + ")");
+    }
+    steer(length(best) < 0.5f ? StickKeys{} : stickKeysForWorld(o, {best.x, best.y, best.z}), step);
+    return true;
 }
 
 bool GoodEggDriver::seen(const char* milestone) const {
@@ -761,6 +956,14 @@ void GoodEggDriver::peanut(const Observation& o, Step& step) {
     for (const std::string& m : mSeen) {
         got += m == "StarChip.Got";
     }
+    // The tour first (it passes every chip); then any chip it missed, directly.
+    if (got < kPeanutChipCount && !mPeanutToured) {
+        if (!followRoute(o, kPeanutRoute, "Peanut route", step)) {
+            return;
+        }
+        mPeanutToured = true;
+        note("Peanut route done with " + std::to_string(got) + " of 5 chips");
+    }
     if (got >= kPeanutChipCount) {
         // It floats about 300 above the ground: stand under it (it pulls Mario in).
         goTo(o, {kPeanutLaunchStar.x, kPeanutLaunchStar.y, kPeanutLaunchStar.z}, 60.0f, "the Peanut launch star", step,
@@ -794,7 +997,7 @@ void GoodEggDriver::peanut(const Observation& o, Step& step) {
     const Vec delta = target - pos;
     const float height = dot(delta, u);
     const float flat = length(across(delta, u));
-    if (flat < 100.0f && height > 110.0f && o.playerOnGround && mFrame - mLastA >= 40) {
+    if (flat < 110.0f && height > 90.0f && o.playerOnGround && mFrame - mLastA >= 40) {
         mLastA = mFrame;
         note("tap A: jump for the chip " + number(height) + " above at " + text(pos));
         tap(Button::A, 12, step);

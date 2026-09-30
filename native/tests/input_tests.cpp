@@ -8,6 +8,8 @@
 
 #include <revolution/kpad.h>
 #include <revolution/os.h>
+#include <revolution/sc.h>
+#include <revolution/vi.h>
 #include <revolution/wpad.h>
 
 #include <sys/wait.h>
@@ -33,6 +35,7 @@
 #include "Game/Util/TriggerChecker.hpp"
 #include "petari/input.hpp"
 #include "petari/platform/sc.hpp"
+#include "petari/platform/vi.hpp"
 #include "../input/remote_model.hpp"
 
 #ifdef PETARI_INPUT_TEST_SDL3
@@ -43,6 +46,7 @@ extern "C" void __OSThreadInit(void);
 
 namespace In = PetariNative::Input;
 namespace PSC = PetariNative::Platform::SC;
+namespace PVI = PetariNative::Platform::VI;
 using In::Key::Max;
 
 namespace {
@@ -189,7 +193,8 @@ void testBindings() {
     std::string error;
     check(parsed.parse(text, &error), "defaults parse: " + error);
     check(parsed.serialize() == text, "bindings round-trip through text");
-    check(text.find("A=Key:Space,Mouse:Right\n") != std::string::npos, "text form names keys and mouse buttons");
+    check(text.find("A=Key:Space,Mouse:Right,Pad:South\n") != std::string::npos,
+          "text form names keys, mouse buttons and controller buttons");
 
     In::Bindings edited = d;
     check(edited.parse("# comment\nA=Key:J, Mouse:Middle\nShake=\n", &error), "partial remap parses");
@@ -222,22 +227,22 @@ void testControlsSummary() {
         const char* action;
         const char* inputs;
     } expected[] = {
-        {"Move", "W A S D"},
-        {"Jump / confirm", "Space / Right mouse"},
-        {"Start (title: A and B)", "Return / Keypad Enter"},
-        {"Spin", "F"},
-        {"Crouch / ground pound", "Shift"},
-        {"Star Pointer", "Mouse"},
-        {"Shoot Star Bits / back", "Left mouse / Backspace"},
-        {"Grab (Pull Stars)", "Hold Space / Right mouse on the target"},
+        {"Move", "W A S D / left stick"},
+        {"Jump / confirm", "Space / Right mouse / Pad bottom"},
+        {"Start (title: A and B)", "Return / Keypad Enter / Pad top"},
+        {"Spin", "F / Pad left / Pad RB"},
+        {"Crouch / ground pound", "Shift / Pad LT"},
+        {"Star Pointer", "Mouse / right stick (R3: center)"},
+        {"Shoot Star Bits / back", "Left mouse / Backspace / Pad right / Pad RT"},
+        {"Grab (Pull Stars)", "Hold Space / Right mouse / Pad bottom on the target"},
         {"Rotate camera", "Q / E"},
-        {"Recenter camera", "C"},
-        {"First-person view", "Up arrow"},
+        {"Recenter camera", "C / Pad LB"},
+        {"First-person view", "Up arrow / Pad D-pad up (leave: Down arrow / Pad D-pad down)"},
         {"Walk slowly", "Hold Left Alt"},
-        {"Pause", "Escape / -"},
+        {"Pause", "Escape / Pad Start / - / Pad Back"},
         {"Star Ball / Ray", "W A S D tilt while riding"},
         {"Tilt the remote by hand", "Hold Tab + W A S D"},
-        {"This menu", "F1"},
+        {"This menu", "F1 / Pad Guide"},
     };
     for (const auto& e : expected) {
         check(summaryOf(d, e.action) == e.inputs,
@@ -256,7 +261,7 @@ void testControlsSummary() {
                          &error),
           "remap parses: " + error);
     const std::vector<In::ControlsLine> r = In::controlsSummary(remapped);
-    check(summaryOf(r, "Move") == "I J K L", "remapped movement");
+    check(summaryOf(r, "Move") == "I J K L / left stick", "remapped movement");
     check(summaryOf(r, "Spin") == "Middle mouse", "remapped spin to a mouse button");
     check(summaryOf(r, "Crouch / ground pound") == "Left Shift", "only the left Shift left");
     check(summaryOf(r, "Start (title: A and B)") == "(not bound)", "unbound Start");
@@ -265,6 +270,22 @@ void testControlsSummary() {
     check(summaryOf(r, "Star Ball / Ray") == "I J K L tilt while riding", "ride line follows movement");
     check(In::displayName(In::Binding::key(In::Key::Num1)) == "1" && In::displayName(In::Binding::key(In::Key::G)) == "G",
           "digits and letters display plainly");
+
+    // The title screen's hint.
+    check(In::titleHint(In::Bindings::defaults()) == "Keyboard: Return starts   |   F1: all controls",
+          "title hint: " + In::titleHint(In::Bindings::defaults()));
+    In::Bindings noStart = In::Bindings::defaults();
+    check(noStart.parse("Start=\nHome=\n", &error), "unbind Start and Home");
+    check(In::titleHint(noStart) == "Keyboard: hold Space, then press Backspace to start",
+          "title hint without Start names keyboard keys: " + In::titleHint(noStart));
+    In::Bindings mouseOnly = In::Bindings::defaults();
+    check(mouseOnly.parse("Start=Mouse:Middle\n", &error), "Start on a mouse button");
+    check(In::titleHint(mouseOnly) == "Keyboard: Middle mouse starts   |   F1: all controls", "title hint follows remaps");
+    for (const char* text : {"Keyboard: Return starts   |   F1: all controls"}) {
+        for (const char* c = text; *c != '\0'; ++c) {
+            check(static_cast<unsigned char>(*c) < 0x80, "title hint is ASCII (any ImGui font draws it)");
+        }
+    }
 }
 
 // --- Connection -----------------------------------------------------------
@@ -606,6 +627,15 @@ void testStart() {
     }
     check(!swingEarly && swingLater, "Return then F: the flick waits out Mario's A/B swing lockout");
     rig.frames_(20);
+
+    // The host-side view of the prompt, for the native title hint.
+    rig.frames_(10);
+    check(!In::titlePromptActive(), "host: no title prompt");
+    In::titlePromptShown();
+    rig.frame();
+    check(In::titlePromptActive(), "host: title prompt reported");
+    rig.frames_(8);
+    check(!In::titlePromptActive(), "host: prompt lapses once the title stops reporting it");
 
     // Remappable by name.
     In::Bindings remapped = In::bindings();
@@ -1333,6 +1363,182 @@ void testSteering() {
     rig.frames_(40);
 }
 
+// --- Game controllers ------------------------------------------------------
+
+void padTap(In::PadButton button) {
+    In::padButtonEvent(button, true);
+    In::padButtonEvent(button, false);
+}
+
+void testGamepad() {
+    using In::PadButton;
+    using In::PadAxis;
+    const In::Bindings d = In::Bindings::defaults();
+    const struct {
+        In::Action action;
+        PadButton button;
+        const char* what;
+    } defaults[] = {
+        {In::Action::A, PadButton::South, "bottom: A (jump)"},
+        {In::Action::B, PadButton::East, "right: B (back)"},
+        {In::Action::B, PadButton::RightTrigger, "RT: B (Star Bits)"},
+        {In::Action::Shake, PadButton::West, "left: spin"},
+        {In::Action::Shake, PadButton::RightShoulder, "RB: spin"},
+        {In::Action::Start, PadButton::North, "top: Start (title A+B)"},
+        {In::Action::NunchukZ, PadButton::LeftTrigger, "LT: Z"},
+        {In::Action::NunchukC, PadButton::LeftShoulder, "LB: C"},
+        {In::Action::DpadUp, PadButton::DpadUp, "D-pad up"},
+        {In::Action::DpadLeft, PadButton::DpadLeft, "D-pad left"},
+        {In::Action::Plus, PadButton::Start, "Start: pause"},
+        {In::Action::Minus, PadButton::Back, "Back: Minus"},
+        {In::Action::Home, PadButton::Guide, "Guide: Home"},
+    };
+    for (const auto& e : defaults) {
+        check(hasBinding(d, e.action, In::Binding::pad(e.button)), std::string("pad default ") + e.what);
+    }
+    check(!hasBinding(d, In::Action::A, In::Binding::pad(PadButton::Start)) &&
+              !hasBinding(d, In::Action::B, In::Binding::pad(PadButton::Start)),
+          "Start sends no A or B, which would block pausing");
+    In::Bindings parsed;
+    std::string error;
+    check(parsed.parse("Shake=Pad:LeftStick,Key:F\n", &error) &&
+              hasBinding(parsed, In::Action::Shake, In::Binding::pad(PadButton::LeftStick)),
+          "controller buttons remap by name: " + error);
+    check(!parsed.parse("A=Pad:Nope\n", &error), "unknown controller button is an error");
+
+    Rig rig;
+    WPadButton& button = *rig.pad->mButton;
+    const WPadStick& stick = *rig.pad->mStick;
+
+    // Buttons.
+    In::padButtonEvent(PadButton::South, true);
+    rig.frame();
+    check(button.testTriggerA(), "pad bottom: A");
+    In::padButtonEvent(PadButton::South, false);
+    rig.frames_(2);
+    check(!button.testButtonA(), "released");
+    padTap(PadButton::LeftShoulder);
+    rig.frame();
+    check(button.testTriggerC(), "LB tap: C");
+    rig.frames_(2);
+
+    // Triggers: past half travel, with hysteresis.
+    In::padAxisEvent(PadAxis::RightTrigger, 0.6f);
+    rig.frame();
+    check(button.testTriggerB(), "RT pulled: B (Star Bits)");
+    In::padAxisEvent(PadAxis::RightTrigger, 0.5f);
+    rig.frames_(2);
+    check(button.testButtonB(), "RT at half: still held");
+    In::padAxisEvent(PadAxis::RightTrigger, 0.4f);
+    rig.frames_(2);
+    check(!button.testButtonB(), "RT eased off: released");
+    In::padAxisEvent(PadAxis::RightTrigger, 0.0f);
+
+    // Left stick: the Nunchuk stick, analog, with a radial dead zone.
+    In::padAxisEvent(PadAxis::LeftX, 0.1f);
+    In::padAxisEvent(PadAxis::LeftY, -0.1f);
+    rig.frames_(2);
+    check(stick.mStick.x == 0.0f && stick.mStick.y == 0.0f, "inside the dead zone: neutral");
+    In::padAxisEvent(PadAxis::LeftX, 0.0f);
+    In::padAxisEvent(PadAxis::LeftY, -1.0f);  // pushed forward (SDL y down)
+    rig.frames_(2);
+    check(stick.mStick.y > 0.97f && std::fabs(stick.mStick.x) < 0.03f, "full forward: stick up");
+    In::padAxisEvent(PadAxis::LeftY, -0.6f);
+    rig.frames_(2);
+    check(near(stick.mStick.y, 0.5f, 0.03f), "60% push past a 20% dead zone: half stick (" + std::to_string(stick.mStick.y) + ")");
+    press(In::Key::D);
+    rig.frames_(2);
+    check(stick.mStick.x > 0.97f && std::fabs(stick.mStick.y) < 0.03f, "a stick key overrides the controller stick");
+    lift(In::Key::D);
+    In::padAxisEvent(PadAxis::LeftY, 0.0f);
+    rig.frames_(2);
+    check(stick.mStick.y == 0.0f, "stick released");
+
+    // Right stick: the Star Pointer, taking over from the mouse.
+    In::mouseMoved(640.0f, 360.0f);
+    rig.frames_(10);
+    check(rig.latest().dpd_valid_fg == 2 && near(rig.latest().pos.x, 0.0f, 0.02f), "mouse pointer at the centre");
+    In::padAxisEvent(PadAxis::RightX, 1.0f);
+    rig.frames_(15);  // 0.25 s at 0.9 widths per second: 0.45 of the 2-unit image
+    In::padAxisEvent(PadAxis::RightX, 0.0f);
+    rig.frames_(10);
+    check(near(rig.latest().pos.x, 0.45f, 0.06f) && near(rig.latest().pos.y, 0.0f, 0.03f),
+          "right stick moves the pointer right (" + std::to_string(rig.latest().pos.x) + ")");
+    In::padAxisEvent(PadAxis::RightY, -1.0f);
+    rig.frames_(8);
+    In::padAxisEvent(PadAxis::RightY, 0.0f);
+    rig.frames_(10);
+    check(rig.latest().pos.y < -0.15f, "right stick up moves the pointer up");
+    In::padAxisEvent(PadAxis::RightX, 1.0f);
+    rig.frames_(120);
+    In::padAxisEvent(PadAxis::RightX, 0.0f);
+    rig.frames_(10);
+    check(rig.latest().dpd_valid_fg == 2 && rig.latest().pos.x > 0.9f && rig.latest().pos.x <= 1.02f,
+          "the pointer stops at the image edge");
+    padTap(PadButton::RightStick);
+    rig.frames_(12);
+    check(near(rig.latest().pos.x, 0.0f, 0.03f) && near(rig.latest().pos.y, 0.0f, 0.03f), "R3 recenters the pointer");
+    In::mouseMoved(960.0f, 180.0f);
+    rig.frames_(12);
+    check(near(rig.latest().pos.x, 0.5f, 0.02f) && near(rig.latest().pos.y, -0.5f, 0.02f), "moving the mouse takes the pointer back");
+
+    // Focus loss and disconnection release everything.
+    In::padButtonEvent(PadButton::West, true);
+    In::padButtonEvent(PadButton::South, true);
+    In::padAxisEvent(PadAxis::LeftX, 1.0f);
+    rig.frame();
+    In::focusChanged(false);
+    rig.frames_(3);
+    check(rig.hold() == 0 && stick.mStick.x == 0.0f, "focus loss releases the controller");
+    In::padButtonEvent(PadButton::South, true);
+    rig.frames_(2);
+    check(!button.testButtonA(), "controller ignored while unfocused");
+    In::focusChanged(true);
+    In::padButtonEvent(PadButton::South, false);
+    In::padButtonEvent(PadButton::West, false);
+    In::padButtonEvent(PadButton::South, true);
+    In::padAxisEvent(PadAxis::LeftX, 1.0f);
+    rig.frames_(3);
+    check(button.testButtonA() && stick.mStick.x > 0.9f, "refocused: works again");
+    In::padDisconnected();
+    rig.frames_(3);
+    check(!button.testButtonA() && stick.mStick.x == 0.0f, "disconnecting releases the controller");
+    rig.frames_(40);
+
+    // Rides: the left stick tilts, analog.
+    In::padAxisEvent(PadAxis::LeftX, 1.0f);
+    for (int f = 0; f < 40; ++f) {
+        In::motionControlShown(In::Steering::Ball);
+        rig.frame();
+    }
+    TVec3f acc;
+    float xy;
+    float yz;
+    rig.pad->getAcceleration(&acc, WPAD_DEV_CORE);
+    sphereAngles(acc, &xy, &yz);
+    check(xy > 0.7f && stick.mStick.x == 0.0f, "Star Ball: the left stick rolls it (" + std::to_string(xy) + ")");
+    In::padAxisEvent(PadAxis::LeftX, 0.0f);
+    rig.frames_(40);
+
+    // The title: the top button starts it.
+    press(In::Key::Space);
+    lift(In::Key::Space);
+    rig.frames_(10);
+    TriggerChecker a;
+    TriggerChecker b;
+    In::titlePromptShown();
+    rig.frame();
+    In::titlePromptShown();
+    In::padButtonEvent(PadButton::North, true);
+    rig.frame();
+    In::titlePromptShown();
+    a.update(button.testButtonA());
+    b.update(button.testButtonB());
+    check(a.getLevel() && b.getLevel(), "pad top on the title prompt: A and B");
+    In::padButtonEvent(PadButton::North, false);
+    rig.frames_(12);
+}
+
 // --- Rumble, speaker, status ----------------------------------------------
 
 std::vector<std::string> gDeviceEvents;
@@ -1498,6 +1704,126 @@ void testCalibrationThreads() {
     In::resetForTesting();
 }
 
+// --- Screen saver ----------------------------------------------------------
+
+// Retraces from a host thread (an OS thread cannot raise one), one per game
+// frame, after that frame's reports: VI's dimming counts idle retraces and a
+// VIResetDimmingCount takes effect at the next one.
+void retraces(int count) {
+    std::thread source([count] {
+        for (int i = 0; i < count; ++i) {
+            PVI::signalRetrace();
+        }
+    });
+    source.join();
+}
+
+// Runs `seconds` of 60 Hz frames in 2-second steps, calling `act` at the
+// start of each step; true if the display was never dimmed.
+bool neverDims(Rig& rig, int seconds, const std::function<void(int)>& act) {
+    bool dimmed = false;
+    for (int step = 0; step < seconds / 2; ++step) {
+        act(step);
+        rig.frames_(120);
+        retraces(120);
+        dimmed = dimmed || PVI::displayState().dimmed;
+    }
+    return !dimmed;
+}
+
+void testScreenSaver() {
+    PSC::reset();  // screen saver on
+    PVI::setClock(PVI::Clock::External);
+    VIInit();
+    check(VIEnableDimming(TRUE) == TRUE && VIGetDimmingCount() > 0, "dimming on, as the game leaves it in play");
+    const int sixMinutes = 6 * 60;
+
+    // Each kind of input alone keeps the screen lit through six minutes.
+    {
+        Rig rig;
+        VIResetDimmingCount();
+        check(neverDims(rig, sixMinutes, [](int) { press(In::Key::Space); lift(In::Key::Space); }),
+              "6 minutes of Space taps: never dims");
+    }
+    {
+        Rig rig;
+        VIResetDimmingCount();
+        press(In::Key::W);  // held: the report stops changing, the OS repeats
+        check(neverDims(rig, sixMinutes, [](int) { In::keyEvent(In::Key::W, true, true); }),
+              "6 minutes holding W (OS key repeats): never dims");
+        lift(In::Key::W);
+    }
+    {
+        Rig rig;
+        VIResetDimmingCount();
+        check(neverDims(rig, sixMinutes, [](int step) { In::mouseMoved(400.0f + (step % 2) * 40.0f, 300.0f); }),
+              "6 minutes of mouse motion over the game: never dims");
+    }
+    {
+        Rig rig;
+        VIResetDimmingCount();
+        // 1280x720 letterboxed to 16:9 has no bars; use a 4:3 window's bars.
+        In::setViewport(In::Viewport::letterbox(1280.0f, 960.0f, 16.0f / 9.0f));
+        check(neverDims(rig, sixMinutes, [](int step) { In::mouseMoved(640.0f + (step % 2) * 40.0f, 10.0f); }),
+              "6 minutes of mouse motion over the letterbox bar: never dims");
+        check(rig.latest().dpd_valid_fg == 0, "over the bar the pointer is off the image: only host events count");
+    }
+    {
+        Rig rig;
+        VIResetDimmingCount();
+        check(neverDims(rig, sixMinutes, [](int step) { In::keyEvent(In::Key::G, (step % 2) == 0, false); }),
+              "6 minutes of an unbound key: never dims");
+        lift(In::Key::G);
+    }
+
+    // A changing report alone counts, as on the Wii (WPADiCheckContInputs):
+    // no host event, the remote turns upright.
+    {
+        Rig rig;
+        rig.frames_(2);
+        VIResetDimmingCount();
+        retraces(1);
+        for (int second = 0; second < 240; second += 2) {
+            rig.frames_(120);
+            retraces(120);
+        }
+        check(VIGetDimmingCount() < 18000 - 239 * 60, "four idle minutes counted");
+        In::setPosture(In::Posture::Upright);
+        rig.frames_(30);
+        retraces(30);
+        check(VIGetDimmingCount() > 18000 - 60, "the remote turning resets the count (" +
+                                                    std::to_string(VIGetDimmingCount()) + " retraces left)");
+        In::setPosture(In::Posture::Pointing);
+        rig.frames_(30);
+    }
+
+    // Six idle minutes: dims after five, as on the Wii; any input undims at
+    // the next retrace.
+    {
+        Rig rig;
+        rig.frames_(2);
+        VIResetDimmingCount();
+        retraces(1);
+        int dimmedAt = -1;
+        for (int second = 0; second < sixMinutes && dimmedAt < 0; second += 2) {
+            rig.frames_(120);
+            retraces(120);
+            if (PVI::displayState().dimmed) {
+                dimmedAt = second + 2;
+            }
+        }
+        check(dimmedAt >= 300 && dimmedAt <= 302, "idle: dims after 5 minutes (" + std::to_string(dimmedAt) + " s)");
+        press(In::Key::Space);
+        rig.frame();
+        retraces(1);
+        check(!PVI::displayState().dimmed, "a key press undims at the next retrace");
+        lift(In::Key::Space);
+        rig.frames_(2);
+    }
+    VIEnableDimming(FALSE);
+    In::resetForTesting();
+}
+
 #ifdef PETARI_INPUT_TEST_SDL3
 void testSdl3() {
     Rig rig;
@@ -1561,12 +1887,14 @@ int main() {
     testTilt();
     testPauseTap();
     testSteering();
+    testGamepad();
     testDevice();
 #ifdef PETARI_INPUT_TEST_SDL3
     testSdl3();
 #endif
     testAlarmClock();
     testCalibrationThreads();
+    testScreenSaver();
     std::printf("native input tests passed (%d checks)\n", checks);
     return 0;
 }

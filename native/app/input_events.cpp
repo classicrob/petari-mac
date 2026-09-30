@@ -96,6 +96,30 @@ void countPhysical(const SDL_Event& event) {
         }
         return;
     }
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP: {
+        Input::PadButton button;
+        if (Input::SDL3::padButtonOf(event.gbutton.button, &button)) {
+            const char* action = boundAction(Input::Binding::pad(button));
+            if (action != nullptr) {
+                countGameplay("pad", Input::displayName(Input::Binding::pad(button)).c_str(), action, event.gbutton.down);
+            }
+        }
+        return;
+    }
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+        // A deliberate push (past half travel) is gameplay input; a resting
+        // stick's drift is not. The right stick moves the pointer.
+        Input::PadAxis axis;
+        if (Input::SDL3::padAxisOf(event.gaxis.axis, &axis) && (event.gaxis.value > 16384 || event.gaxis.value < -16384)) {
+            if (axis == Input::PadAxis::RightX || axis == Input::PadAxis::RightY) {
+                ++gPhysical.pointer;
+            } else {
+                countGameplay("pad", "stick or trigger", "axis", true);
+            }
+        }
+        return;
+    }
     case SDL_EVENT_MOUSE_MOTION:
         ++gPhysical.pointer;
         return;

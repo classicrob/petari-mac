@@ -55,6 +55,12 @@ public:
     // archive; the archive bytes resident in the file cache since it was created separate the
     // Wii's share of its use (the same archive bytes) from native growth.
     void noteArchiveMounted(JKRHeap* pHeap, const char* pName, const void* pData);
+
+    // Native room on top of the Wii file cache size for native resource-object growth (see
+    // createFileCacheHeapOnGameHeap), and the free ratio the Wii placement rule sees: the file
+    // cache's free bytes beyond that room over the Wii size.
+    static const u32 cFileCacheNativeAllowance = 0x300000;
+    f32 getFileCachePlacementFreeRatio() const;
     u32 mFileCacheArchiveBytes;
     u32 mFileCacheArchiveCount;
 #endif

@@ -168,6 +168,17 @@ Observation observeGame(bool wantPlayer) {
 }
 }  // namespace PetariNative::App::Smoke
 
+// The soak telemetry is off in these tests.
+namespace PetariNative::App::Soak {
+bool startTelemetryFromEnvironment() {
+    return false;
+}
+bool telemetryActive() {
+    return false;
+}
+void gameFrame(unsigned long, int, const char*) {}
+}  // namespace PetariNative::App::Soak
+
 extern "C" {
 const AuroraEvent* aurora_update() {
     hostCall("update");
@@ -207,6 +218,7 @@ std::uint64_t petari_sound_missing_reference_count() {
 std::uint64_t petari_gx_pipeline_manifest_failure_count() {
     return 0;
 }
+void petari_gx_pipeline_report() {}
 }
 
 namespace {
@@ -461,6 +473,15 @@ void testSeamTiming() {
     check(std::fabs(gameThread - intervalUs) <= 10.0, "game-thread parts and unattributed add up to the interval");
     check(part(FrameStats::PipelineWait) == 5000 && after.pipelineWaits == before.pipelineWaits + 1,
           "other threads' waits land in the frame they ended in");
+
+    // A scene start that waited for stage shader preparation is a loading frame.
+    const unsigned loading = static_cast<unsigned>(FrameStats::Phase::Loading);
+    const auto loadingBefore = stats->totals(loading).frames;
+    Telemetry::add(Telemetry::StagePrepWait, 9000000);
+    petari_host_frame_seam();
+    check(stats->totals(loading).frames == loadingBefore + 1 &&
+              stats->totals(loading).allSum[FrameStats::StagePrepWait] >= 9000,
+          "a frame with a stage shader-prep wait counts as loading, with the wait attributed");
 
     // Marks out of order (none this frame): the time stays unattributed.
     const auto second = stats->totals(FrameStats::kPhaseCount);

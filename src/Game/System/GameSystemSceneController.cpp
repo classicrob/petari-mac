@@ -32,6 +32,7 @@ extern "C" void petari_gx_pipeline_stage_begin(const char* stage, const char* se
 extern "C" void petari_gx_pipeline_stage_wait(void);
 extern "C" void petari_os_begin_host_blocking(void);
 extern "C" void petari_os_end_host_blocking(void);
+#include <petari/frame_telemetry.hpp>
 #endif
 
 namespace {
@@ -212,9 +213,13 @@ bool GameSystemSceneController::isFirstUpdateSceneNerveNormal() const {
 
 void GameSystemSceneController::startScene() {
 #ifdef PETARI_NATIVE
-    petari_os_begin_host_blocking();
-    petari_gx_pipeline_stage_wait();
-    petari_os_end_host_blocking();
+    {
+        // Frame statistics: the frame holding this wait is a loading frame.
+        PetariNative::FrameTelemetry::Scope stagePrepTiming{PetariNative::FrameTelemetry::StagePrepWait};
+        petari_os_begin_host_blocking();
+        petari_gx_pipeline_stage_wait();
+        petari_os_end_host_blocking();
+    }
 #endif
     mScene->start();
     GameSystemFunction::restartControllerLeaveWatcher();

@@ -962,7 +962,9 @@ void MarioActor::createTextureDL(DLholder* pHolder, u16 texMapID, u16 texIndex) 
     __GDCurrentDL = &obj;
 
     ResTIMG* texture = _B64[texIndex];
-    GDSetTexImgPtr(static_cast< GXTexMapID >(texMapID), reinterpret_cast< u8* >(texture) + texture->mImageDataOffset);
+    // A model texture's offset may be negative after J3DTexture::setResTIMG rebases it (see
+    // JUT_RESTIMG_OFFSET); added as an unsigned 32-bit value it would point 4 GiB away natively.
+    GDSetTexImgPtr(static_cast< GXTexMapID >(texMapID), reinterpret_cast< u8* >(texture) + JUT_RESTIMG_OFFSET(texture->mImageDataOffset));
 
     GDPadCurr32();
 

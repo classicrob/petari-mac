@@ -234,18 +234,25 @@ check idempotence, additive overlays, attribution, ready gates and old-stage
 demotion. Seed tests compile the generated production promotion function and
 check shared/attributed export, signed hashes and input preservation.
 
+With `BUILD_TESTING=ON`, the default build includes the CPU worker, stage and
+seed-sort executables. CTest registers all seven pipeline checks: ImGui,
+worker default/async policy, stage scheduling, seed export, replay bookkeeping,
+and read-only SQLite sorting. Each has a 60-second timeout and uses synthetic
+inputs; no disc-dependent test is added by this group. The seed-sort wrapper
+creates and removes its own indexed/unindexed fixture databases. The seed test
+uses CMake's configured Aurora source directory rather than requiring a sibling
+reference checkout.
+
 ```sh
-build/locked-build.sh pipeline c++ -std=c++20 -pthread -O1 -Inative/include native/tools/pipeline_worker_tests.cpp -o build/pipeline-worker-tests
-build/locked-build.sh pipeline build/pipeline-worker-tests
-PETARI_PIPELINE_POLICY=async build/locked-build.sh pipeline build/pipeline-worker-tests async
-build/locked-build.sh pipeline c++ -std=c++20 -pthread -O1 -Inative/include native/tools/pipeline_stage_tests.cpp -lsqlite3 -o build/pipeline-stage-tests
-build/locked-build.sh pipeline build/pipeline-stage-tests
-build/locked-build.sh pipeline python3 native/tools/pipeline_seed_tests.py
-build/locked-build.sh pipeline cmake --build build/macos-gx \
-  --target petari_pipeline_cache_inspect petari_gx_shader_tests -j2
-build/locked-build.sh pipeline ctest --test-dir build/macos-gx \
-  -R '^native_gx_shader$' --output-on-failure
+build/locked-build.sh pipeline-build cmake --build build/macos-gx -j2
+build/locked-build.sh pipeline-build ctest --test-dir build/macos-gx \
+  -R '^native_pipeline_' --output-on-failure
 ```
+
+The registration integration run passed the default build and all 83 CTests
+in 141.78 seconds (`build/pipeline-prep-measure/resume-background/full-ctest.log`).
+The seven pipeline tests took 0.04–5.24 seconds each. This is a shared-build
+suite result, not a separate clean-build or live-play verification.
 
 These are component and source checks. Cold/warm route measurements are separate
 and must hold app, sweep-lane and build locks in that order. All heavy CPU work,
@@ -282,7 +289,8 @@ additions as observed rather than offline replay. Reapply after corpus regenerat
 
 The first retained BattleShipGalaxy scenarios 1/2 supplied 88 distinct new configs
 (62 from scenario 1, another 26 from scenario 2). These extend the working stage
-and global seeds; frozen measurement bundles retain the original 8,270-row union.
+and global seeds. Pre-pause frozen bundles retain the original 8,270-row union;
+the resumed 8c4 measurement bundle contains the enriched 8,358-row union.
 All 8,355 GX configs in the enriched union passed five-variant source generation
 (41,775 checks, zero invalid results). The merge snapshots/provenance are under `build/pipeline-prep-measure/observations`.
 Historical logs without retained caches or owner stacks cannot reconstruct owners.
@@ -294,3 +302,217 @@ the fixture marker. OS Metal caches are not cleared; “cold” means empty app 
 Warm runs require a successful preceding cold route. The first corrected run was
 aborted under host load above 200; it is explicitly rejected as a performance
 comparison. Requeued runs acquire all three locks before their timers start.
+
+
+## Controlled app-cache cold/warm route, checkpoint 8c4c107cf
+
+Artifacts: `build/pipeline-prep-measure/resume-8c4/{stage-cold,stage-warm}`.
+Both runs passed the galaxy smoke through Good Egg mission 1 using the same
+frozen app/seeds, automatic four-worker pool, Blocking policy, global preparation
+off and owner tracing off. Each held app, sweep-lane and build locks. Cold means
+empty **app** caches; the OS Metal cache was not cleared. All comparisons below
+are this pair, not the earlier load-contaminated aborted run.
+
+| Measurement | Cold | Warm |
+| --- | ---: | ---: |
+| Whole route, seconds | 183.84 | 112.23 |
+| Startup preparation, seconds | 40.21 (454 jobs) | 0.12 (481 jobs) |
+| Runtime pipeline builds | 2,142 | 2,142 |
+| Build p50 / p95 / p99 / max, ms | 105.023 / 686.134 / 843.821 / 1012.819 | 0.626 / 70.752 / 145.591 / 206.631 |
+| API p50 / p95, ms | 101.863 / 677.250 | 0.470 / 69.379 |
+| Module p50 / p95, ms | 2.609 / 4.617 | 0.093 / 3.965 |
+| Queue p50 / p95 / p99 / max, ms | 8262.370 / 29521.143 / 37240.777 / 39526.374 | 286.433 / 1503.620 / 1602.624 / 1672.026 |
+| Host load p50 / p95 | 17.13 / 22.34 | 14.64 / 15.46 |
+| Gate expiries | 2 | 0 |
+| Individual blocking resolves >=10 ms | 0 | 0 |
+| Telemetry waits >=50 us / total wait ms | 18 / 2.439 | 26 / 4.603 |
+| Audio underrun frames / startup replay blocks | 0 / 1 | 0 / 1 |
+
+WGSL generation was tiny (cold p50 0.060 ms, p95 0.098 ms). The pipeline API
+includes deferred Tint-to-MSL, Metal library compilation and PSO construction;
+it does not isolate Metal alone. The API accounts for 98.3% of cold build time.
+The warm result demonstrates substantial caching benefit, but its remaining
+70.75 ms build p95 prevents claiming that every cached pipeline is instant.
+
+| Stage | Cold gate wait / pending at exit | Warm gate wait / pending at exit |
+| --- | --- | --- |
+| FileSelect | 10.002 s / 83 (expired) | 0.035 ms / 0 |
+| AstroGalaxy | 10.002 s / 226 (expired) | 959.482 ms / 0 |
+| AstroDome | 0.052 ms / 0 | 0.051 ms / 0 |
+| EggStarGalaxy | 9.393 s / 0 | 0.044 ms / 0 |
+
+Submission-to-gate-exit elapsed times were respectively 11.276/1.456 s for
+FileSelect, 10.807/1.715 s for AstroGalaxy, 1.792/1.792 s for AstroDome and
+15.990/6.880 s for EggStar (cold/warm). For expired gates these are **not** full
+preparation times: later completion is not logged per stage. Every logged real
+stage post-prep first use was covered; cold EggStar had 191/191 covered.
+
+All-frame p50/p95/p99 were 16.681/17.400/19.685 ms cold and
+16.682/17.644/20.216 ms warm. Counts above 16.7/33.3 ms were 2752/7 and 2789/10.
+Stage gates contribute the largest intervals (10.020 s cold, 0.977 s warm), and
+the current phase labels include some transition work in gameplay. Cold had no
+unfocused frames; warm had 483 unfocused frames and four focus changes, so this
+is not a controlled focused-frame A/B. Cold also had a 603.82 ms frame dominated
+by 587.57 ms draw-done wait, and a 270.83 ms frame with 259.06 ms EFB submit wait.
+Neither showed a pipeline wait on that frame. Pipeline preparation does not
+explain or eliminate those stalls, and these results do not establish locked 60.
+
+### Global preparation evaluation (8c4 frozen app)
+
+`build/pipeline-prep-measure/resume-8c4/global-cold` passed the same galaxy
+route with an independent empty app-cache fixture, the same frozen app, four
+compile workers, and all three quiet locks. macOS's own Metal cache was not
+cleared. `PETARI_PIPELINE_GLOBAL_PRECOMPILE=1` prepared all 8,355 GX configs
+in 221.016 seconds (8,363 runtime builds including clear masks); whole-process
+elapsed time was 331.590 seconds. Early work progressed around 21 configs/s;
+the full preparation averaged 37.8/s as later configs increasingly hit caches.
+This should not be compared as pure compiler scaling against the earlier
+contended 7/s run.
+
+Build p50/p95/p99/max was 4.590/592.058/710.751/862.507 ms. Pipeline API time
+was 2.333/588.831/705.750/859.319 ms and accounted for 97.7% of build time.
+Module p50/p95 was 0.054/7.036 ms, and WGSL p50/p95 was 0.057/0.106 ms.
+Queue p50/p95 was 175.005/219.896 seconds: startup intentionally waits for
+this whole queue, so those numbers are not in-play render-thread stalls.
+Host-load p50/p95 was 22.23/27.71.
+
+Every subsequent stage gate completed in <0.3 ms, with no expiry, no uncovered
+post-prep first use, and no individual blocking resolve >=10 ms. Telemetry
+still recorded 19 waits >=50 us totaling 3.301 ms. Audio had zero underrun
+frames and one expected startup replay. All 6,509 frames were focused; frame
+p50/p95/p99/max was 16.682/17.335/20.950/608.018 ms, with 2,647 frames >16.7 ms
+and 12 >33.3 ms. The worst frame recorded no pipeline wait. Global preparation
+eliminated the measured stage gates but did not establish locked 60 fps.
+The isolated process's reported maximum RSS was approximately 10.0 GB;
+this is whole-process high-water usage, not attributed pipeline-cache storage.
+A warm run is pending; do not infer near-instant relaunch from this result.
+
+### Experimental background preparation
+
+`PETARI_PIPELINE_GLOBAL_PRECOMPILE=background` submits the global manifest
+before the game thread starts without waiting for completion. No value is
+required for normal launches: global preparation remains **off by default**;
+`1` retains the explicit blocking experiment. The existing pool is sized from
+performance cores with four reserved and a cap of four workers. Background
+jobs run at utility QoS; stage requests move ahead of them, and actual draw
+requests move ahead of speculative stage work. Already compiling work cannot
+be preempted. Therefore QoS and queue priority alone are not proof of clean
+frame times or audio; a live comparison is still required.
+
+The background manifest is excluded from stage attribution and stage gates.
+Repeated submission is idempotent, and speculative configs persist as never
+drawn so a subsequent normal startup does not synchronously rebuild every
+unused global config. Shutdown reports pending and terminal compile counts.
+The scheduling harness covers these properties, including the missing-manifest
+fallback fix. The harness and full app build passed. Live background testing
+is pending. Shared-observed fallback must exclude never-drawn global
+configs, otherwise an Unknown stage would promote and gate the global queue. The pre-game manifest read/enqueue is synchronous and is timed in
+its stage-prep log; shader compilation itself runs on the pool.
+
+The inspector found 3,789 distinct exact WGSL strings for 8,355 default-layout
+GX configurations, and 18,945 strings for all 41,775 legal variant checks.
+All variants generated successfully. Dawn already content-caches identical
+shader modules, so the 2.2 configs/source ratio is not evidence that another
+WGSL module cache would save 2.2x compilation. Deferred MSL translation and
+Metal compilation live inside the pipeline API boundary. See the pinned
+package/source audit in `build/pipeline-prep-measure/dawn-package-audit` for
+Release provenance and the existing MSL blob cache. No Metal binary archive
+or new Metal library cache has been implemented.
+
+
+The slowest global-cold config (`4867779342108c6d`) built in 862.507 ms:
+0.216 ms outside module/API, 2.972 ms module creation, and 859.319 ms pipeline
+API. Its WGSL was 17,483 bytes/512 lines with two TEV stages and one indirect
+stage. The largest generated shader in the run was 18,312 bytes/532 lines.
+Of 8,363 builds, 3,935 spent <1 ms in the API, 1,720 spent 1–100 ms, 2,106
+spent 100–500 ms, and 602 spent >=500 ms. This bimodality is consistent with
+cache reuse, but the current instrumentation does not identify which backend
+cache supplied each hit. Summed build time of 882.267 seconds over 221.016
+seconds preparation is consistent with four concurrent workers, not a
+single-worker serialization bottleneck.
+
+A possible product workflow after successful warm/background measurements is an
+explicit first-launch preparation choice. Store completion only after every
+manifest target succeeds, keyed by seed/config ABI, Dawn version, device,
+render-target layout and relevant driver/OS identity. On later launches use
+normal observed startup plus stage lookahead. An interrupted preparation must
+retain partial caches and remain retryable; a completion marker alone must not
+claim that the OS Metal cache still contains every compiled result. This is a
+design option, not an implemented first-launch UI or automatic default.
+
+
+The exact-key check (`resume-8c4/stage-key-comparison.json`) found identical
+sets of 2,142 runtime keys in the stage-cold and stage-warm runs: no new warm
+variants. Nevertheless, 120 warm API calls exceeded 50 ms (maximum 201.728 ms).
+Their latency cannot be explained by discovering different configuration keys.
+This strengthens the case for backend library/PSO timing before promising an
+instant cache hit or adding a redundant WGSL module cache.
+
+A subsequent offline reconstruction matches each frozen stage DB's config hashes,
+plus eight clear masks, to logged compile-completion timestamps. It accepts a
+stage only when every target has exactly one recorded runtime variant and the
+set size equals the logged target count. For this pair those checks pass.
+`resume-8c4/stage-completion-estimates.json` estimates full target readiness from
+begin at 14.708/1.136 s for FileSelect, 18.960/1.727 s for AstroGalaxy, and
+16.000/1.791 s for EggStar (cold/warm). ScenarioSelect took 7.498/0.024 s;
+AstroDome and GalaxyMap targets were already compiled at begin. The global-cold
+run had all these targets ready before begin. These are log-receipt-based
+estimates, not new exact stage-completion instrumentation; they exclude extra
+overlay target unions. They clarify that the two cold gate expiries preceded
+actual completion rather than representing the total preparation duration.
+
+
+## First-frame ImGui pipeline preparation
+
+The two Dawn CPU-held waits in `build/soak/validate1/app.log:504` (88.1 ms)
+and `:505` (360.1 ms) precede `first Aurora frame open; starting the game`
+at line 506. They are startup evidence, not EggStar stage-load evidence.
+The captured stack ends at Dawn APICreateRenderPipeline and does not include
+its frontend caller. Source tracing identifies an unprepared ImGui pipeline:
+`app_main.cpp:232` opens the first frame after starting the emulated OS;
+Aurora's `imgui::new_frame` builds the font atlas/device objects on that frame,
+and the backend also lazily creates device objects if its pipeline is absent.
+Both lead to the synchronous WebGPU render-pipeline API. GX stage layout
+finalization itself only computes a key.
+
+`patch_aurora_pipeline_imgui.py` moves ImGui device-object creation immediately
+after backend initialization in Aurora initialization, before `startOS()`.
+It records `[gx pipeline prewarm] kind=imgui ready=... build_ms=...` and preserves
+the SDL renderer branch. The lead separately added the normal host-blocking
+release around first-frame event/presentation work in `frame_seam.cpp`; this
+also protects any remaining lazy host work on that frame.
+
+The full app build passed with the generated source. The CPU regression
+`pipeline_imgui_tests.py` compiles the actual patched initializer and upstream
+first-frame functions against stubs, verifies no creation while holding a
+simulated baton, and rejects the original first-frame path by exit status.
+The test passed (`resume-8c4/imgui-test-2.log`). This validates call ordering,
+not live Metal timing; a running-app check remains pending. The generated
+source and app are frozen in `resume-background/Petari.app` for that check.
+
+
+The next observed extension published 462 additional per-stage configs from
+17 completed PASS routes in `build/stage-sweep/batch1b` (281 globally new),
+bringing the union to 8,636 GX configs. These retain stage-observed provenance,
+not offline-replay attribution. The inspector generated all 43,180 legal
+variants with zero invalid states (3,809 distinct default WGSL strings).
+The normal app build passed and all 20 changed bundled DB/metadata hashes
+match the published seeds (`resume-8c4/observed-extension/rebundle.log`).
+The 8,355-config measurement apps remain frozen for their existing comparisons.
+Historical hashes from the merged routes are covered by the extension; this
+is not evidence of zero gaps on a fresh run or identification of draw owners.
+
+
+The background experiment's acceptance criterion is gameplay frame/audio cost
+while compiles are active, not merely lower stage-gate waits. The recorded
+stage-only cold baseline is 19.685 ms overall p99 and 19.720 ms gameplay p99,
+with zero device underrun frames. Compare matching categories, focus state,
+load and replay counts with both that baseline and the matched frozen control.
+Existing global cold preparation has primed the system Metal cache; the new
+control/trial have empty application caches but are not OS-cache-cold tests.
+Full-warm duration requires every exact global target to finish successfully;
+a route that exits with pending compiles yields only a lower bound, not a
+completed preparation time. Compile log timestamps are receipt times. The
+frame CSV lacks an absolute timestamp/pending-compile field, so any overlap
+window reconstructed from cumulative frame intervals must be labeled as an
+estimate, alongside the unambiguous whole-gameplay frame statistics.

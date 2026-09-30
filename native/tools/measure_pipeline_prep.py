@@ -6,6 +6,7 @@ Existing app-only tickets acquire the remaining locks before measurement starts.
 The supplied user directory must already be a marked observatory fixture.
 """
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -31,13 +32,19 @@ def distribution(values):
 
 
 def summarize(events, loads):
-    compiles, blocking, stages = [], [], []
+    compiles, blocking, stages, essentials = [], [], [], []
+    first_frame = next((index for index, event in enumerate(events)
+                        if 'first Aurora frame open; starting the game' in event['line']), None)
+    startup_waits = [event for event in events[:first_frame]
+                     if '[baton]' in event['line'] and 'held the CPU blocked in host code' in event['line']]
     stage = 'startup'
     for event in events:
         line = event['line']
         fields = dict(re.findall(r'(\w+)=([^\s]+)', line))
-        if '[gx stage prep]' in line:
+        if '[gx stage prep]' in line and fields.get('stage') not in ('ScenarioSelect', 'GalaxyMap', '__global__'):
             stage = fields.get('stage', stage)
+        if '[gx pipeline prewarm]' in line:
+            essentials.append(dict(fields, elapsed_s=event['elapsed_s']))
         if '[gx pipeline compile]' in line:
             compiles.append(dict(fields, elapsed_s=event['elapsed_s'], stage=stage))
         if '[gx stage prep]' in line or '[gx stage ready]' in line or '[gx warmup]' in line or '[gx global prep]' in line:
@@ -45,11 +52,34 @@ def summarize(events, loads):
         if '[gx pipeline] blocking resolve' in line:
             match = re.search(r'blocking resolve ([\d.]+) ms', line)
             if match: blocking.append({'stage': stage, 'elapsed_s': event['elapsed_s'], 'ms': float(match[1]), 'line': line})
-    return {'stage_events': stages, 'blocking_resolves': blocking,
+    return {'stage_events': stages, 'essential_prewarm': essentials, 'blocking_resolves': blocking,
+            'startup_baton': {'first_frame_marker_seen': first_frame is not None,
+                              'cpu_held_waits_before_first_frame': startup_waits if first_frame is not None else None,
+                              'note': 'Detected/logged waits only; monitor threshold is recorded in run.json.'},
             'blocking_ms': distribution([entry['ms'] for entry in blocking]),
             'compile_ms': {field: distribution([float(entry[field]) for entry in compiles if field in entry])
                            for field in ['queue_ms', 'requested_queue_ms', 'build_ms', 'wgsl_ms', 'module_ms', 'pipeline_api_ms']},
             'compiles': compiles, 'load_1m': distribution([entry['load'][0] for entry in loads])}
+
+
+def summarize_frames(path):
+    if not path.is_file(): return {}
+    phases = {}
+    with path.open() as source:
+        for row in csv.DictReader(source):
+            for phase in (row['phase'], 'total'):
+                item = phases.setdefault(phase, {'intervals': [], 'waits': [], 'resolves': 0, 'unfocused': 0})
+                item['intervals'].append(float(row['interval_ms']))
+                item['waits'].append(float(row['pipeline_wait_ms']))
+                item['resolves'] += int(row['pipeline_resolves'])
+                item['unfocused'] += int(row['unfocused'])
+    return {phase: {'interval_ms': distribution(item['intervals']),
+                    'unfocused_frames': item['unfocused'],
+                    'over_16_7_ms': sum(value > 16.7 for value in item['intervals']),
+                    'over_33_3_ms': sum(value > 33.3 for value in item['intervals']),
+                    'pipeline_waits_at_least_50us': item['resolves'],
+                    'pipeline_wait_ms_per_frame': distribution(item['waits'])}
+            for phase, item in phases.items()}
 
 
 def require_quiet_locks():
@@ -88,7 +118,8 @@ def run(args):
     args.output.mkdir(parents=True, exist_ok=False)
     env = os.environ.copy()
     env.update(PETARI_SMOKE='galaxy', PETARI_SMOKE_FRAMES='108000', PETARI_TRACE_BOOT='1',
-               PETARI_AUDIO_DIAG='1', PETARI_PIPELINE_DIAG='1', PETARI_FRAME_CSV=str((args.output / 'frames.csv').resolve()))
+               PETARI_AUDIO_DIAG='1', PETARI_PIPELINE_DIAG='1', PETARI_BATON_MONITOR='1',
+               PETARI_BATON_BLOCK_MS='20', PETARI_FRAME_CSV=str((args.output / 'frames.csv').resolve()))
     env.pop('PETARI_PIPELINE_SEED_DIR', None)
     exe = args.app / 'Contents/MacOS/Petari'
     command = [str(exe.resolve()), '--disc', str(args.disc.resolve()), '--user', str(args.user.resolve()), '--test-fixture', 'observatory']
@@ -118,6 +149,8 @@ def run(args):
     code = process.wait(); done.set(); sampler.join()
     result = summarize(events, loads)
     result.update(exit=code, timeout=bool(expired), elapsed_s=time.monotonic()-started)
+    result['blocking_log_threshold_ms'] = 10.0
+    result['frame_stats'] = summarize_frames(args.output / 'frames.csv')
     result['smoke_pass'] = any('PETARI SMOKE RESULT: PASS' in event['line'] for event in events)
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     result['child_cpu_s'] = usage.ru_utime + usage.ru_stime

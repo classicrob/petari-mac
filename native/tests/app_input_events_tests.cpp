@@ -37,7 +37,7 @@ void check(bool condition, const std::string& label) {
 
 // What reached the input layer, in order.
 struct Delivered {
-    enum Kind { Key, MouseButton, MouseMoved, MouseLeft, Focus } kind;
+    enum Kind { Key, MouseButton, MouseMoved, MouseLeft, Focus, PadButton, PadAxis, PadRemoved } kind;
     unsigned code;
     bool down;
     bool repeat;
@@ -66,6 +66,15 @@ void mouseMoved(float, float) {
 }
 void mouseLeft() {
     gDelivered.push_back({Delivered::MouseLeft, 0, false, false});
+}
+void padButtonEvent(PadButton button, bool down) {
+    gDelivered.push_back({Delivered::PadButton, static_cast<unsigned>(button), down, false});
+}
+void padAxisEvent(PadAxis axis, float value) {
+    gDelivered.push_back({Delivered::PadAxis, static_cast<unsigned>(axis), value > 0.0f, false});
+}
+void padDisconnected() {
+    gDelivered.push_back({Delivered::PadRemoved, 0, false, false});
 }
 void setViewport(const Viewport&) {}
 void focusChanged(bool focused) {
@@ -102,6 +111,22 @@ SDL_Event mouseButton(Uint8 button, bool down) {
     event.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
     event.button.button = button;
     event.button.down = down;
+    return event;
+}
+
+SDL_Event padButton(Uint8 button, bool down) {
+    SDL_Event event{};
+    event.type = down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+    event.gbutton.button = button;
+    event.gbutton.down = down;
+    return event;
+}
+
+SDL_Event padAxis(Uint8 axis, Sint16 value) {
+    SDL_Event event{};
+    event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+    event.gaxis.axis = axis;
+    event.gaxis.value = value;
     return event;
 }
 
@@ -202,6 +227,36 @@ int main() {
     check(now.gameplay == before.gameplay && now.pointer == before.pointer && now.focus == before.focus &&
               std::strcmp(now.last, before.last) == 0,
           "smoke presses, pointer and focus are not physical input");
+
+    // Game controllers: a bound button counts both ways, an unbound one does
+    // not; a stick counts only past half travel (drift is not a player), and
+    // the right stick is pointer motion.
+    bindings.bind(Input::Action::A, Input::Binding::pad(Input::PadButton::South));
+    Input::setBindings(bindings);
+    gDelivered.clear();
+    const Smoke::PhysicalInputs padBefore = Events::physicalInputs();
+    Events::input(padButton(SDL_GAMEPAD_BUTTON_SOUTH, true));
+    check(Events::physicalInputs().gameplay == padBefore.gameplay + 1 && last() == "pad Pad bottom (A) down",
+          "bound pad button: " + last());
+    Events::input(padButton(SDL_GAMEPAD_BUTTON_SOUTH, false));
+    Events::input(padButton(SDL_GAMEPAD_BUTTON_GUIDE, true));
+    Events::input(padButton(SDL_GAMEPAD_BUTTON_GUIDE, false));
+    check(Events::physicalInputs().gameplay == padBefore.gameplay + 2, "unbound pad button not counted");
+    Events::input(padAxis(SDL_GAMEPAD_AXIS_LEFTX, 3000));
+    check(Events::physicalInputs().gameplay == padBefore.gameplay + 2, "stick drift not counted");
+    Events::input(padAxis(SDL_GAMEPAD_AXIS_LEFTX, 30000));
+    check(Events::physicalInputs().gameplay == padBefore.gameplay + 3, "a pushed stick counts");
+    Events::input(padAxis(SDL_GAMEPAD_AXIS_RIGHTY, -30000));
+    check(Events::physicalInputs().pointer == padBefore.pointer + 1 &&
+              Events::physicalInputs().gameplay == padBefore.gameplay + 3,
+          "the right stick is pointer motion");
+    Events::input(ofType(SDL_EVENT_GAMEPAD_REMOVED));
+    check(gDelivered.size() == 8 && gDelivered[0].kind == Delivered::PadButton &&
+              gDelivered[0].code == static_cast<unsigned>(Input::PadButton::South) && gDelivered[0].down &&
+              gDelivered[5].kind == Delivered::PadAxis && gDelivered[5].down &&
+              gDelivered[6].code == static_cast<unsigned>(Input::PadAxis::RightY) && !gDelivered[6].down &&
+              gDelivered[7].kind == Delivered::PadRemoved,
+          "pad events delivered unchanged (" + std::to_string(gDelivered.size()) + " calls)");
 
     std::printf("native app input events tests passed (%d checks)\n", checks);
     return 0;

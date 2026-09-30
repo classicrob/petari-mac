@@ -811,6 +811,9 @@ struct BlockStats {
 constexpr std::size_t kMaxBlockSites = 32;
 std::atomic<double> gBlockThresholdMs{20.0};
 std::atomic<bool> gBlockLogAll{false};  // tests: log every stretch
+// Tests: a line to this file at every poll (fork safety), and the poll count.
+std::atomic<std::FILE*> gMonitorChatter{nullptr};
+std::atomic<std::uint64_t> gMonitorPolls{0};
 // Held by the monitor for everything it does between sleeps (stdio, dladdr,
 // suspending a thread, its statistics). pthread_atfork's prepare handler takes
 // it, so fork never snapshots the process while the monitor holds the stdio
@@ -1071,8 +1074,12 @@ void learnCode(const PreemptAttempt& attempt) {
     }
 }
 
+// A refusal matters only when the holder stays unpreemptible: short ones (a
+// library call, a renderer entry point) end at its next OS call by themselves.
+constexpr double kReportRefusalAfterMs = 100.0;
+
 void noteForcedPreemption(ForceResult result, const PreemptAttempt& attempt, double pendingMs) {
-    if (result != ForceResult::Preempted && result != ForceResult::Unsafe) {
+    if (result != ForceResult::Preempted && (result != ForceResult::Unsafe || pendingMs < kReportRefusalAfterMs)) {
         return;
     }
     std::string site = attempt.site != nullptr && !attempt.site->name.empty() ? attempt.site->name : "(unknown function)";
@@ -1091,7 +1098,7 @@ void noteForcedPreemption(ForceResult result, const PreemptAttempt& attempt, dou
             seen = &st.forcedSites.back().second;
         }
         if (seen == nullptr || ++*seen <= 3) {
-            std::fprintf(stderr, "[baton] preempted a CPU holder busy-waiting without OS calls (pending %.1f ms) in %s\n",
+            std::fprintf(stderr, "[baton] preempted a CPU holder running game code without OS calls (preemption pending %.1f ms) in %s\n",
                          pendingMs, site.c_str());
         }
         return;
@@ -1121,6 +1128,11 @@ void* batonMonitor(void*) {
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         std::lock_guard<std::mutex> quiesce(monitorQuiesce());
+        const std::uint64_t poll = gMonitorPolls.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (std::FILE* chatter = gMonitorChatter.load(std::memory_order_acquire)) {
+            std::fprintf(chatter, "baton monitor poll %llu\n", static_cast<unsigned long long>(poll));
+            std::fflush(chatter);
+        }
         const std::uint64_t hand = gHolderHand.load(std::memory_order_acquire);
         const bool running = gHolderRunning.load(std::memory_order_acquire);
         const mach_port_t port = gHolderPort.load(std::memory_order_relaxed);
@@ -1456,6 +1468,16 @@ void setBatonBlockLogAll(bool enabled) {
     gBlockLogAll.store(enabled);
 }
 
+void setBatonMonitorChatter(std::FILE* file) {
+    gMonitorChatter.store(file, std::memory_order_release);
+    // After this returns, no poll is still writing to the previous file.
+    std::lock_guard<std::mutex> quiesce(monitorQuiesce());
+}
+
+std::uint64_t batonMonitorPolls() {
+    return gMonitorPolls.load(std::memory_order_relaxed);
+}
+
 void setForcedPreemption(bool enabled, double afterMs) {
     gForcePreemption.store(enabled);
     gPreemptAfterMs.store(afterMs);
@@ -1495,10 +1517,11 @@ void dumpBatonBlocks(std::FILE* out) {
         std::fprintf(out, "[baton]   %llu more at other sites\n", static_cast<unsigned long long>(st.unattributed));
     }
     std::fprintf(out,
-                 "[baton] summary: %llu forced preemptions of busy-waits without OS calls (pending over %.0f ms)%s, %llu "
-                 "refusals at unsafe points\n",
+                 "[baton] summary: %llu forced preemptions of game code running without OS calls (pending over %.0f ms)%s, %llu "
+                 "refusals at unsafe points after %.0f ms pending\n",
                  static_cast<unsigned long long>(st.forced), gPreemptAfterMs.load(),
-                 gForcePreemption.load() ? "" : " (forcing disabled: reported only)", static_cast<unsigned long long>(st.unsafe));
+                 gForcePreemption.load() ? "" : " (forcing disabled: reported only)", static_cast<unsigned long long>(st.unsafe),
+                 kReportRefusalAfterMs);
     for (const auto& [site, count] : st.forcedSites) {
         std::fprintf(out, "[baton]   %llu x preempted in %s\n", static_cast<unsigned long long>(count), site.c_str());
     }

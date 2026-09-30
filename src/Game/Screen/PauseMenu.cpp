@@ -286,6 +286,15 @@ void PauseMenu::exeSelecting() {
         // Also entered again after the confirm, save and letter sub-screens return.
         NATIVE_MILESTONE("PauseMenu.Open");
     }
+#ifdef PETARI_NATIVE
+    // Native automation (the soak script): the two main buttons as pointer
+    // targets. PauseMenu.Back is "Back to the Comet Observatory" in a galaxy
+    // and "End Game" (save, then the title) in the observatory.
+    _20->publishUiTarget("PauseMenu.Continue", 0);
+    if (_24 != nullptr) {
+        _24->publishUiTarget("PauseMenu.Back", 0);
+    }
+#endif
 
     bool isPointingTrigger = _20->isPointingTrigger() || (_24 != nullptr && _24->isPointingTrigger()) ||
                              (!(_38 == nullptr || _38->isHidden()) && _38->isPointingTrigger());

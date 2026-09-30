@@ -20,6 +20,8 @@
 
 #include "host.hpp"
 
+extern "C" void petari_gx_pipeline_background_begin();
+
 namespace App = PetariNative::App;
 
 namespace {
@@ -214,6 +216,9 @@ int main(int argc, char** argv) {
         aurora_shutdown();
         return 0;
     }
+    // Opt-in (PETARI_PIPELINE_GLOBAL_PRECOMPILE=background): queue every known pipeline at
+    // background priority so it compiles while the game plays. A no-op otherwise.
+    petari_gx_pipeline_background_begin();
     // Audio opens on a game thread when the game starts AI DMA; initialize
     // SDL's audio subsystem here, on the main thread, first. The sink's own
     // initialization then only adds a reference.

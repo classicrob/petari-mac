@@ -285,9 +285,11 @@ python3 native/tools/cu_playtest.py --session 1 --app build/cu-playtest/frozen/P
 python3 native/tools/cu_playtest.py --session 2 --app build/cu-playtest/frozen/Petari.app
 ```
 
-The helper owns `build/cu-playtest/user`, obtains the FIFO `locked-app.sh` lock followed by `locked-sweep-lane.sh`,
+The helper owns `build/cu-playtest/user`, obtains the lead-dispatched `locked-app.sh` lock followed by `locked-sweep-lane.sh`,
 launches only the app binary with that directory and the observatory marker,
-and limits each actual app session to 20 minutes. It records binary/save hashes,
+and limits each actual app session to 25 minutes (20 minutes by default). Computer-use sessions do not
+hold the build lock; dedicated timing measurements still require app → sweep-lane
+→ build locks. It records binary/save hashes,
 PID, UTC times, exit status, boot/audio logs and frame CSV. It enables baton
 diagnostics with `PETARI_BATON_SAMPLE=0` to avoid sampling-induced pauses. A forced deadline exit
 is reported as failure, not a clean quit. `--prepare` refuses to overwrite an
@@ -330,3 +332,30 @@ Repeatable scenario script (observe between steps; do not run blind coordinates)
 Report observed facts separately from likely causes and untested scenarios. A
 screenshot is not continuous video, and device/audio counters are not a listening
 assessment. Do not modify game code during this diagnostic task.
+
+For this playtest the user explicitly authorized the optional macOS CGEvent
+keyboard-hold helper, because CUA has no held-key API. Compile it **before**
+launching the app, using the build lock for compilation only:
+
+```sh
+build/locked-build.sh cu-input swiftc native/tools/cu_hold_input.swift -o build/cu-playtest/cu-hold-input
+```
+
+After binding the running app with CUA and making it frontmost, a bounded forward
+hold is:
+
+```sh
+build/cu-playtest/cu-hold-input build/cu-playtest/active-session.json w 1.0
+```
+
+Use fresh CUA accessibility/screenshot observations after each hold. Supported
+keys are W/A/S/D, Space, F, Q/E, C and Shift (lowercase argument names); up to three
+may be combined with commas. Holds are capped at three seconds. The helper checks
+the recorded PID and bundle, frontmost application and both app/sweep lock owners.
+It logs every key event to `actions.jsonl` and sends cleanup key-up events only
+to the original PID on normal return, focus loss, SIGTERM, SIGINT or SIGHUP.
+It does not open a macOS permission prompt if event-post access is unavailable.
+Continue using CUA for screenshots, pointer operations, window control and all
+other interactions. This helper sends OS events; it never injects game inputs or
+changes game state directly. SIGKILL cannot run cleanup; prefer the handled
+signals when stopping it.

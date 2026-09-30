@@ -71,7 +71,9 @@ extern "C" void petari_gx_pipeline_stage_begin(const char* name, const char* see
   PetariNative::HostAllocationScope petariHostAllocations;
   const auto started = PetariPipeline::Clock::now();
   const std::string stageName = petari_stage_name(name);
-  const bool overlay = stageName == "ScenarioSelect" || stageName == "GalaxyMap";
+  const bool globalBackground = stageName == "__global__";
+  const bool overlay = globalBackground || stageName == "ScenarioSelect" || stageName == "GalaxyMap";
+  const auto priority = globalBackground ? PipelinePriority::Background : PipelinePriority::Normal;
   const auto scene = scene_render_target_layout();
   auto offscreen = scene;
   offscreen.colorAttachmentCount = 1;
@@ -97,7 +99,9 @@ extern "C" void petari_gx_pipeline_stage_begin(const char* name, const char* see
         }
       }
     }
-    if (overlay) {
+    if (globalBackground) {
+      // Global preparation must not affect stage attribution, coverage, or gates.
+    } else if (overlay) {
       petariOverlayStages.insert(stageName);
     } else {
       if (petariActiveStage != stageName) petariOverlayStages.clear();
@@ -106,7 +110,7 @@ extern "C" void petari_gx_pipeline_stage_begin(const char* name, const char* see
     auto& stage = petariStages[stageName];
     if (stage.initialized && stage.layoutKey == scene.key) {
       if (!overlay) stage.prepared = false;
-      for (const auto key : stage.targets) promote_pending_pipeline(key, PipelinePriority::Normal);
+      for (const auto key : stage.targets) promote_pending_pipeline(key, priority);
       g_pipelineQueueCv.notify_all();
       return;
     }
@@ -183,7 +187,10 @@ extern "C" void petari_gx_pipeline_stage_begin(const char* name, const char* see
   }
   if (manifest.empty()) {
     std::lock_guard lock{g_pipelineMutex};
-    for (const auto& [key, known] : g_knownPipelines) manifest.push_back(known);
+    for (const auto& [key, known] : g_knownPipelines) {
+      // Missing-stage fallback is observed history, not the speculative global queue.
+      if (known.firstFrameUsed != UINT32_MAX) manifest.push_back(known);
+    }
     provenance = "shared-observed-memory";
   }
 
@@ -192,8 +199,9 @@ extern "C" void petari_gx_pipeline_stage_begin(const char* name, const char* see
   const auto submit = [&](ShaderType type, const auto& config) {
     const auto key = xxh3_hash(config, static_cast<HashType>(type));
     configs.insert(key);
-    targets.insert(resolve_pipeline(type, config, scene, PipelinePriority::Normal));
-    if (offscreen.key != scene.key) targets.insert(resolve_pipeline(type, config, offscreen, PipelinePriority::Normal));
+    if (globalBackground) remember_pipeline_config(type, config, UINT32_MAX, true);
+    targets.insert(resolve_pipeline(type, config, scene, priority));
+    if (offscreen.key != scene.key) targets.insert(resolve_pipeline(type, config, offscreen, priority));
   };
   for (unsigned mask = 0; mask != 8; ++mask) {
     clear::PipelineConfig config{};
@@ -253,4 +261,18 @@ extern "C" void petari_gx_pipeline_stage_wait() {
                complete ? "completed" : "timeout-proceed");
   petari_stage_flush_logs();
 }
+
+extern "C" void petari_gx_pipeline_report() {
+  PetariNative::HostAllocationScope petariHostAllocations;
+  petari_stage_flush_logs();
+  std::lock_guard lock{g_pipelineMutex};
+  petari_pipeline_summary();
+}
+
+extern "C" void petari_gx_pipeline_background_begin() {
+  if (!PetariPipeline::backgroundGlobalPrecompile()) return;
+  // Called on the host thread after prepareKnownPipelines returns, before game startup.
+  petari_gx_pipeline_stage_begin("__global__", nullptr);
+}
+
 }

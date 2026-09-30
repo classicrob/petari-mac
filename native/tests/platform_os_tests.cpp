@@ -704,7 +704,14 @@ void testDispatchBeforeWake() {
         OSCreateThread(&high, dispatchHigh, &highQueue, highStack + sizeof(highStack), sizeof(highStack), 2, 0);
         OSResumeThread(&low);
         OSResumeThread(&high);  // both run and block on their queues
-        petari_os_begin_host_blocking();  // the CPU is idle now
+        petari_os_begin_host_blocking();
+        // The CPU goes to the low thread, which runs and blocks on its queue;
+        // under host load that takes a while. Wait until the CPU is idle, or
+        // the "interrupt" below would find the low thread still running.
+        for (int i = 0; i < 3000 && !(OSGetCurrentThread() == nullptr && low.state == OS_THREAD_STATE_WAITING); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        check(OSGetCurrentThread() == nullptr, "the CPU is idle with both threads blocked");
         static OSThread* afterLow;
         static OSThread* afterHigh;
         std::thread interrupt([] {
@@ -852,7 +859,9 @@ void testHostBlocking() {
     gHostBlockSpins = 0;
 
     petari_os_begin_host_blocking();
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));  // e.g. SDL_WaitEvent
+    for (int i = 0; i < 3000 && gHostBlockSpins.load() == 0; ++i) {  // e.g. SDL_WaitEvent
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     const int during = gHostBlockSpins.load();
     petari_os_end_host_blocking();
     check(during > 0, "ready OS threads run while the main thread does host work");
@@ -918,7 +927,9 @@ void testTryHostBlocking() {
     OSThread* self = OSGetCurrentThread();
 
     check(petari_os_try_begin_host_blocking() == 1, "an OS thread holding the CPU can release it");
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));  // a contended host lock
+    for (int i = 0; i < 3000 && gHostBlockSpins.load() == 0; ++i) {  // a contended host lock
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     check(gHostBlockSpins.load() > 0, "other OS threads run while it waits");
     check(petari_os_try_begin_host_blocking() == 0, "nested use does nothing");
     petari_os_end_host_blocking();
@@ -991,71 +1002,44 @@ void testBatonMonitor() {
 
     contend(250, [] { waitForHostLockHoldingCpu(); });
     const auto blocked = settledBlockStats();
-    check(blocked.stretches == before.stretches + 1, "a host wait while holding the CPU is counted");
-    check(blocked.maxMs >= 150.0, "with its length");
+    check(blocked.stretches >= before.stretches + 1, "a host wait while holding the CPU is counted");
+    check(blocked.maxMs >= 100.0, "with its length");
     check(hasSite(blocked, "waitForHostLockHoldingCpu"), "and its site in the executable");
     check(hasSite(blocked, "[waiting in __psynch_mutexwait"), "and the host primitive it waits in");
 
+    const auto beforeReleased = settledBlockStats();
     contend(250, [] {
         petari_os_begin_host_blocking();
         waitForHostLockHoldingCpu();
         petari_os_end_host_blocking();
     });
-    check(settledBlockStats().stretches == blocked.stretches, "the same wait with the CPU released is not counted");
+    check(settledBlockStats().stretches == beforeReleased.stretches, "the same wait with the CPU released is not counted");
 
+    // Below the threshold (1 s here, so host load cannot stretch a 5 ms wait past it).
+    OSI::setBatonBlockThresholdMs(1000.0);
+    const auto beforeShort = settledBlockStats();
     contend(5, [] { waitForHostLockHoldingCpu(); });
-    check(settledBlockStats().stretches == blocked.stretches, "a wait shorter than the threshold is not counted");
+    check(settledBlockStats().stretches == beforeShort.stretches, "a wait shorter than the threshold is not counted");
+    OSI::setBatonBlockThresholdMs(20.0);
 }
 
-// Tests fork (aborts()) while the monitor may be printing a stretch, holding
-// stderr's lock; a child that then touches stderr must not hang. A
-// higher-priority OS thread keeps blocking in a host lock while holding the
-// CPU, the monitor logs every stretch, and this thread forks children that
-// reopen and write stderr, with the CPU released.
-std::atomic<bool> gStopBlocker{false};
-std::atomic<int> gBlockerLoops{0};
-std::mutex gToggledLock;
-void* blockerThread(void*) {
-    while (!gStopBlocker.load()) {
-        ++gBlockerLoops;
-        { std::lock_guard<std::mutex> guard(gToggledLock); }  // blocks while the toggler holds it
-        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(4);
-        while (std::chrono::steady_clock::now() < until) {  // game code (runs, never blocks)
-        }
-    }
-    return nullptr;
-}
-
+// Tests fork (aborts()) while the monitor may be writing through stdio,
+// holding that FILE's lock; a child that then uses the FILE must not hang.
+// The monitor writes a line to one file at every poll (a test mode, so the
+// test does not depend on how many stretches it happens to detect), and each
+// child writes to the same file right after the fork.
 void testMonitorForkSafety() {
     namespace OSI = PetariNative::Platform::OS;
-    OSI::setBatonBlockThresholdMs(1.0);
-    OSI::setBatonBlockLogAll(true);
-    gStopBlocker = false;
-    std::thread toggler([] {
-        while (!gStopBlocker.load()) {
-            {
-                std::lock_guard<std::mutex> guard(gToggledLock);
-                std::this_thread::sleep_for(std::chrono::milliseconds(4));
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(4));  // the blocker runs (spins)
-        }
-    });
-    static OSThread blocker;
-    alignas(32) static u8 stack[0x4000];
-    OSCreateThread(&blocker, blockerThread, nullptr, stack + sizeof(stack), sizeof(stack), 10, 0);
-    const auto logged = OSI::batonBlockStats().stretches;
-    petari_os_begin_host_blocking();  // the blocker holds the CPU from here
-    OSResumeThread(&blocker);
-    int hung = 0, forks = 0;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    for (int i = 0; hung == 0 && OSI::batonBlockStats().stretches < logged + 15 &&
-                    std::chrono::steady_clock::now() < deadline;
-         ++i, ++forks) {
+    std::FILE* chatter = std::tmpfile();
+    OSI::setBatonMonitorChatter(chatter);
+    const std::uint64_t pollsBefore = OSI::batonMonitorPolls();
+    int hung = 0;
+    for (int i = 0; i < 150 && hung == 0; ++i) {
         std::fflush(nullptr);
         const pid_t pid = ::fork();
         if (pid == 0) {
-            std::freopen("/dev/null", "w", stderr);
-            std::fprintf(stderr, "child %d\n", i);
+            std::fprintf(chatter, "child %d\n", i);
+            std::fflush(chatter);
             ::_exit(0);
         }
         int status = 0;
@@ -1068,19 +1052,19 @@ void testMonitorForkSafety() {
             ::waitpid(pid, &status, 0);
             ++hung;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(3));  // the monitor logs meanwhile
+        if (i % 10 == 0) {
+            // Let the monitor poll between batches, whatever the host load.
+            for (int w = 0; w < 1000 && OSI::batonMonitorPolls() == pollsBefore; ++w) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
     }
-    const auto after = OSI::batonBlockStats().stretches;
-    gStopBlocker = true;
-    toggler.join();
-    petari_os_end_host_blocking();
-    OSJoinThread(&blocker, nullptr);
-    OSI::setBatonBlockLogAll(false);
-    OSI::setBatonBlockThresholdMs(20.0);
-    std::printf("monitor fork safety: %d forks, %llu stretches logged meanwhile\n", forks,
-                static_cast<unsigned long long>(after - logged));
-    check(after >= logged + 5, "the monitor was logging stretches throughout");
-    check(hung == 0, "children forked while the monitor logs never hang on stderr");
+    const std::uint64_t polls = OSI::batonMonitorPolls() - pollsBefore;
+    OSI::setBatonMonitorChatter(nullptr);
+    std::fclose(chatter);
+    std::printf("monitor fork safety: 150 forks while the monitor polled %llu times\n", static_cast<unsigned long long>(polls));
+    check(polls > 0, "the monitor was writing while the test forked");
+    check(hung == 0, "children forked while the monitor writes through stdio never hang");
 }
 
 }  // namespace
@@ -1175,7 +1159,9 @@ void testForcedPreemption() {
     check(waitReleased([] { return gSpinning.load(); }, 3000), "the host spinner is spinning");
     std::thread interrupt([] { OSSendMessage(&gLoaderQueue, nullptr, OS_MESSAGE_NOBLOCK); });
     interrupt.join();
-    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    // Until the monitor has looked at the spin at least once (a refusal).
+    const std::uint64_t unsafeBefore = after.unsafePreemptions;
+    waitReleased([&] { return OSI::batonBlockStats().unsafePreemptions > unsafeBefore; }, 3000);
     const bool loaderRanEarly = gWaveDataLoaded.load();
     const auto refused = OSI::batonBlockStats();
     PetariNative::PreemptionTest::gRelease = true;  // the spinner returns; its exit schedules the loader

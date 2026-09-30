@@ -30,6 +30,36 @@ namespace {
                  size != 0 ? 100.0f * freeSize / size : 0.0f, pHeap->getFreeSize());
     }
 
+    // Every JKR heap below pHeap, one line each: depth, type, size, used, free, largest free
+    // block, and the HeapMemoryWatcher role when it has one (PETARI_TRACE_BOOT, at scene ready).
+    void traceHeapTree(const HeapMemoryWatcher* pWatcher, JKRHeap* pHeap, int depth) {
+        const char* pRole = "";
+        if (pHeap == JKRHeap::sRootHeap) pRole = "root NAPA";
+        else if (pHeap == HeapMemoryWatcher::sRootHeapGDDR3) pRole = "root GDDR";
+        else if (pHeap == JKRHeap::sSystemHeap) pRole = "system";
+        else if (pHeap == pWatcher->mStationedHeapNapa) pRole = "stationed NAPA";
+        else if (pHeap == pWatcher->mStationedHeapGDDR) pRole = "stationed GDDR";
+        else if (pHeap == pWatcher->mGameHeapNapa) pRole = "game NAPA";
+        else if (pHeap == pWatcher->mGameHeapGDDR) pRole = "game GDDR";
+        else if (pHeap == pWatcher->mFileCacheHeap) pRole = "file cache";
+        else if (pHeap == pWatcher->mFileCacheHostImageHeap) pRole = "file cache host images";
+        else if (pHeap == pWatcher->mSceneHeapNapa) pRole = "scene NAPA";
+        else if (pHeap == pWatcher->mSceneHeapGDDR) pRole = "scene GDDR";
+        else if (pHeap == pWatcher->mWPadHeap) pRole = "WPAD";
+        else if (pHeap == pWatcher->mHomeButtonLayoutHeap) pRole = "home button layout";
+        else if (pHeap == pWatcher->mAudSystemHeap) pRole = "audio system";
+        const u32 type = pHeap->getHeapType();
+        const char typeName[5] = {static_cast< char >(type >> 24), static_cast< char >(type >> 16), static_cast< char >(type >> 8),
+                                  static_cast< char >(type), '\0'};
+        const s32 size = static_cast< s32 >(static_cast< u8* >(pHeap->getEndAddr()) - static_cast< u8* >(pHeap->getStartAddr()));
+        const s32 freeSize = pHeap->getTotalFreeSize();
+        OSReport("[heap-tree] %*s%p %s size %d used %d free %d (%.1f%%) max free %d %s\n", depth * 2, "", pHeap, typeName, size, size - freeSize,
+                 freeSize, size != 0 ? 100.0f * freeSize / size : 0.0f, pHeap->getFreeSize(), pRole);
+        for (JSUTree< JKRHeap >* pChild = pHeap->mChildTree.getFirstChild(); pChild != nullptr; pChild = pChild->getNextChild()) {
+            traceHeapTree(pWatcher, pChild->getObject(), depth + 1);
+        }
+    }
+
     JKRHeap* resolveFileCacheHostImageHeap(const void* pSource) {
         HeapMemoryWatcher* pWatcher = SingletonHolder< HeapMemoryWatcher >::get();
 
@@ -107,10 +137,25 @@ JKRHeap* HeapMemoryWatcher::getHeapGDDR3(const JKRHeap* pHeap) {
 }
 
 void HeapMemoryWatcher::createFileCacheHeapOnGameHeap(u32 size) {
-    mFileCacheHeap = ::createSolidHeap(size, mGameHeapGDDR);
 #ifdef PETARI_NATIVE
+    // The file cache holds scene archives while the Wii placement rule sees 3% free
+    // (MR::getAproposHeapForSceneArchive), and then the resource objects ResourceHolder
+    // creates for them, on the file cache, after that check: the Wii's 3% is their room.
+    // Native resource objects and holders are larger (64-bit pointers). Measured over every
+    // scene archive on the disc (native_file_cache_demand): J3D resource objects 5.8% of the
+    // archive bytes; in Good Egg 1 (116 cached archives, 14.49 MB) all native non-archive use
+    // was 1.42 MB, 9.8%. A stage whose archives fill the Wii rule's 97% (about 16.5 MB) would
+    // need about 1.6 MB, where the Wii leaves 0.5 MB. The file cache therefore gets
+    // cFileCacheNativeAllowance more room, and placement ignores that room
+    // (getFileCachePlacementFreeRatio), so the same archives are cached as on the Wii (or
+    // fewer, as native objects created meanwhile count as used) and the objects get 3% plus
+    // the allowance.
+    size += cFileCacheNativeAllowance;
     mFileCacheArchiveBytes = 0;
     mFileCacheArchiveCount = 0;
+#endif
+    mFileCacheHeap = ::createSolidHeap(size, mGameHeapGDDR);
+#ifdef PETARI_NATIVE
     // Natively each J3D model or animation file in a cached archive also gets a same-size
     // host-layout copy (J3DModelLoader/J3DAnmLoader). Archive placement (the 3% rule of
     // getAproposHeapForSceneArchive) only sees archive bytes, so the copies get their own
@@ -277,6 +322,13 @@ HeapMemoryWatcher::HeapMemoryWatcher()
 }
 
 #ifdef PETARI_NATIVE
+f32 HeapMemoryWatcher::getFileCachePlacementFreeRatio() const {
+    const s32 size = static_cast< s32 >(static_cast< u8* >(mFileCacheHeap->getEndAddr()) - static_cast< u8* >(mFileCacheHeap->getStartAddr()));
+    const s32 wiiSize = size - static_cast< s32 >(cFileCacheNativeAllowance);
+    const s32 wiiFree = mFileCacheHeap->getTotalFreeSize() - static_cast< s32 >(cFileCacheNativeAllowance);
+    return wiiSize > 0 ? static_cast< f32 >(wiiFree) / wiiSize : 0.0f;
+}
+
 void HeapMemoryWatcher::noteArchiveMounted(JKRHeap* pHeap, const char* pName, const void* pData) {
     // A mounted archive's resident size: the RARC header's file size (big-endian word 1), the
     // bytes FileRipper allocated for it (before 0x40 alignment).
@@ -329,6 +381,10 @@ void HeapMemoryWatcher::checkRestMemory() {
         ::traceSceneHeap("file cache host images", mFileCacheHostImageHeap);
         ::traceSceneHeap("scene NAPA", mSceneHeapNapa);
         ::traceSceneHeap("scene GDDR", mSceneHeapGDDR);
+        ::traceHeapTree(this, JKRHeap::sRootHeap, 0);
+        if (sRootHeapGDDR3 != nullptr && sRootHeapGDDR3->mChildTree.getParent() == nullptr) {
+            ::traceHeapTree(this, sRootHeapGDDR3, 0);  // a separate root (MEM2)
+        }
     }
 #endif
 }

@@ -32,7 +32,7 @@ namespace gx { constexpr unsigned GXPipelineConfigVersion = 13; struct PipelineC
 namespace clear { constexpr unsigned ClearPipelineConfigVersion = 1; struct PipelineConfig { unsigned version = 1; bool clearColor = false, clearAlpha = false, clearDepth = false; }; }
 enum class ShaderType { Clear, GX };
 enum class PipelinePriority { Background, Normal, Blocking };
-struct KnownPipeline { ShaderType type; std::variant<gx::PipelineConfig, clear::PipelineConfig> config; unsigned frame; };
+struct KnownPipeline { ShaderType type; std::variant<gx::PipelineConfig, clear::PipelineConfig> config; unsigned firstFrameUsed; };
 struct Layout { uint64_t key; unsigned colorAttachmentCount = 2, sampleCount = 4; };
 static Layout scene_render_target_layout() { return {5}; }
 namespace detail { static void finalize_render_target_layout(Layout& value) { value.key = 9; } }
@@ -45,6 +45,8 @@ struct Compiled { bool main = true; };
 static std::mutex g_pipelineMutex;
 static std::condition_variable g_pipelineReadyCv, g_pipelineQueueCv;
 static std::atomic<bool> g_pipelineThreadEnd{false};
+static unsigned summaryCalls = 0;
+static void petari_pipeline_summary() { ++summaryCalls; }
 static std::deque<Pending> g_pipelineQueue, g_backgroundPipelineQueue;
 static std::unordered_map<PipelineRef, Sample> petariPipelineSamples;
 static std::unordered_map<PipelineRef, Compiled> g_pipelines;
@@ -53,7 +55,8 @@ static struct { const char* resourcesPath = "/nonexistent-petari-stage-test"; } 
 static auto find_pending_pipeline(std::deque<Pending>& queue, PipelineRef key) {
     return std::find_if(queue.begin(), queue.end(), [=](const auto& item) { return item.hash == key; });
 }
-static void promote_pending_pipeline(PipelineRef key, PipelinePriority) {
+static void promote_pending_pipeline(PipelineRef key, PipelinePriority priority) {
+    if (priority == PipelinePriority::Background) return;
     auto it = find_pending_pipeline(g_backgroundPipelineQueue, key);
     if (it != g_backgroundPipelineQueue.end()) {
         g_pipelineQueue.push_back(*it);
@@ -62,14 +65,20 @@ static void promote_pending_pipeline(PipelineRef key, PipelinePriority) {
 }
 template<class Config>
 static PipelineRef resolve_pipeline(ShaderType type, const Config& config, Layout layout, PipelinePriority priority) {
-    if (priority != PipelinePriority::Normal) throw std::runtime_error("stage begin must not block");
+    if (priority == PipelinePriority::Blocking) throw std::runtime_error("stage begin must not block");
     const auto key = xxh3_hash(layout.key, xxh3_hash(config, static_cast<HashType>(type)));
     std::lock_guard lock(g_pipelineMutex);
     petariPipelineSamples.try_emplace(key);
-    promote_pending_pipeline(key, priority);
-    if (!g_pipelines.contains(key) && find_pending_pipeline(g_pipelineQueue, key) == g_pipelineQueue.end())
-        g_pipelineQueue.push_back({key});
+    if (priority != PipelinePriority::Background) promote_pending_pipeline(key, priority);
+    if (!g_pipelines.contains(key) && find_pending_pipeline(g_pipelineQueue, key) == g_pipelineQueue.end() &&
+        find_pending_pipeline(g_backgroundPipelineQueue, key) == g_backgroundPipelineQueue.end())
+        (priority == PipelinePriority::Background ? g_backgroundPipelineQueue : g_pipelineQueue).push_back({key});
     return key;
+}
+template<class Config>
+static void remember_pipeline_config(ShaderType type, const Config& config, uint32_t firstUse, bool persist) {
+    if (!persist || firstUse != UINT32_MAX) throw std::runtime_error("global speculation must persist as never drawn");
+    g_knownPipelines.try_emplace(xxh3_hash(config, static_cast<HashType>(type)), KnownPipeline{type, config, firstUse});
 }
 enum class ManifestFixture { OpenFailure, QueryFailure, StepFailure, Empty, InvalidRow, Valid };
 static ManifestFixture manifestFixture = ManifestFixture::OpenFailure;
@@ -112,10 +121,10 @@ static void manifestFailureTest() {
     const auto initial = petari_gx_pipeline_manifest_failure_count();
     petari_gx_pipeline_stage_begin("MissingOptionalSeed", nullptr);
     require(petari_gx_pipeline_manifest_failure_count() == initial, "absent optional seed counted as read failure");
-    char directory[] = "/tmp/petari-stage-manifest-XXXXXX";
-    require(mkdtemp(directory) != nullptr, "fixture directory failed");
-    const auto root = std::filesystem::path(directory);
-    setenv("PETARI_PIPELINE_SEED_DIR", directory, 1);
+    const auto root = std::filesystem::temp_directory_path() /
+        ("petari-stage-manifest-" + std::to_string(PetariPipeline::Clock::now().time_since_epoch().count()));
+    require(std::filesystem::create_directory(root), "fixture directory failed");
+    setenv("PETARI_PIPELINE_SEED_DIR", root.c_str(), 1);
     unsigned failures = 0;
     for (const auto mode : {ManifestFixture::OpenFailure, ManifestFixture::QueryFailure, ManifestFixture::StepFailure,
                            ManifestFixture::Empty, ManifestFixture::InvalidRow, ManifestFixture::Valid}) {
@@ -136,6 +145,9 @@ static void manifestFailureTest() {
 int main() {
     unsetenv("PETARI_PIPELINE_SEED_DIR");
     g_knownPipelines.emplace(1, KnownPipeline{ShaderType::GX, gx::PipelineConfig{13, 1}, 0});
+    unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
+    petari_gx_pipeline_background_begin();
+    require(petariStages.empty(), "background global preparation must be opt-in");
     petari_gx_pipeline_stage_begin("AstroGalaxy", nullptr);
     const auto originalCount = g_pipelineQueue.size();
     require(originalCount == 18, "expected eight clear masks and one GX in two layouts");
@@ -168,6 +180,37 @@ int main() {
     require(find_pending_pipeline(g_pipelineQueue, 101) != g_pipelineQueue.end(), "real draw request demoted");
     petari_stage_reset();
     require(petariActiveStage.empty() && petariStages.empty(), "shutdown retained stage state");
+    g_pipelineQueue.clear(); g_backgroundPipelineQueue.clear(); g_pipelines.clear();
+    petari_gx_pipeline_stage_begin("Active", nullptr);
+    for (const auto& job : g_pipelineQueue) g_pipelines[job.hash] = {};
+    g_pipelineQueue.clear();
+    g_knownPipelines.emplace(999, KnownPipeline{ShaderType::GX, gx::PipelineConfig{13, 999}, 0});
+    setenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE", "background", 1);
+    require(!PetariPipeline::globalPrecompile(), "background mode enabled blocking global startup");
+    petari_gx_pipeline_background_begin();
+    require(petariActiveStage == "Active" && petariOverlayStages.empty(), "global jobs changed stage attribution or gates");
+    require(g_pipelineQueue.empty() && g_backgroundPipelineQueue.size() == 2, "global jobs were not background priority");
+    petari_gx_pipeline_background_begin();
+    require(g_pipelineQueue.empty() && g_backgroundPipelineQueue.size() == 2, "repeated global begin promoted or duplicated jobs");
+    petari_gx_pipeline_stage_wait();
+    require(petariStages["Active"].prepared, "global jobs blocked an already-ready stage gate");
+    petari_note_stage_config(123456, 999999);
+    require(petariStages["__global__"].seen.empty(), "global job coverage hid a stage gap");
+    const gx::PipelineConfig speculative{13, 1001};
+    const auto speculativeHash = xxh3_hash(speculative, static_cast<HashType>(ShaderType::GX));
+    remember_pipeline_config(ShaderType::GX, speculative, UINT32_MAX, true);
+    const auto speculativeScene = resolve_pipeline(ShaderType::GX, speculative, Layout{5}, PipelinePriority::Background);
+    const auto speculativeOffscreen = resolve_pipeline(ShaderType::GX, speculative, Layout{9}, PipelinePriority::Background);
+    petari_gx_pipeline_stage_begin("MissingManifest", nullptr);
+    require(!petariStages["MissingManifest"].configs.contains(speculativeHash),
+            "missing stage seed adopted speculative global configs");
+    require(find_pending_pipeline(g_backgroundPipelineQueue, speculativeScene) != g_backgroundPipelineQueue.end() &&
+            find_pending_pipeline(g_backgroundPipelineQueue, speculativeOffscreen) != g_backgroundPipelineQueue.end(),
+            "missing stage seed promoted global background work");
+    unsetenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
+    petari_stage_reset();
     manifestFailureTest();
+    petari_gx_pipeline_report();
+    require(summaryCalls == 1, "explicit pipeline report did not reach summary");
     std::puts("Stage preparation: manifest failure counter, idempotence, additive overlays, first-use tags, ready gate and priority demotion pass");
 }

@@ -42,6 +42,31 @@ constexpr KeyCode Max = 512;  // exclusive bound accepted by the API (SDL_SCANCO
 
 enum class MouseButton : std::uint8_t { Left, Middle, Right, X1, X2, Count };
 
+// Game controller buttons, by position (SDL3's standard gamepad layout:
+// South is Xbox A, PlayStation Cross, Nintendo B). The triggers are analog
+// axes that act as buttons past half travel.
+enum class PadButton : std::uint8_t {
+    South,
+    East,
+    West,
+    North,
+    Back,
+    Guide,
+    Start,
+    LeftStick,   // L3
+    RightStick,  // R3: also recenters the controller's Star Pointer
+    LeftShoulder,
+    RightShoulder,
+    DpadUp,
+    DpadDown,
+    DpadLeft,
+    DpadRight,
+    LeftTrigger,
+    RightTrigger,
+    Count
+};
+enum class PadAxis : std::uint8_t { LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger, Count };
+
 // What a binding does. Buttons are the Wii Remote's and the Nunchuk's.
 enum class Action : std::uint8_t {
     StickUp,
@@ -70,12 +95,13 @@ enum class Action : std::uint8_t {
 };
 
 struct Binding {
-    enum class Device : std::uint8_t { Key, Mouse };
+    enum class Device : std::uint8_t { Key, Mouse, Pad };
     Device device = Device::Key;
-    std::uint16_t code = 0;  // KeyCode, or MouseButton
+    std::uint16_t code = 0;  // KeyCode, MouseButton, or PadButton
 
     static Binding key(KeyCode code) { return {Device::Key, code}; }
     static Binding mouse(MouseButton button) { return {Device::Mouse, static_cast<std::uint16_t>(button)}; }
+    static Binding pad(PadButton button) { return {Device::Pad, static_cast<std::uint16_t>(button)}; }
     bool operator==(const Binding& other) const { return device == other.device && code == other.code; }
 };
 
@@ -93,7 +119,10 @@ public:
     const std::vector<Binding>& inputs(Action action) const;
 
     // Text form, one "Action=Input,Input" line per action, for saving remaps.
-    // Inputs are "Key:<name>" (see keyName) or "Mouse:<Left|Middle|Right|X1|X2>".
+    // Inputs are "Key:<name>" (see keyName), "Mouse:<Left|Middle|Right|X1|X2>"
+    // or "Pad:<South|East|West|North|Back|Guide|Start|LeftStick|RightStick|
+    // LeftShoulder|RightShoulder|DpadUp|DpadDown|DpadLeft|DpadRight|
+    // LeftTrigger|RightTrigger>".
     std::string serialize() const;
     // Replaces bindings for the actions present in the text. Actions not
     // mentioned keep their current bindings. On error nothing changes.
@@ -115,6 +144,11 @@ struct ControlsLine {
     std::string inputs;
 };
 std::vector<ControlsLine> controlsSummary(const Bindings& bindings);
+// One line for the title screen, which asks for A and B together:
+// "Keyboard: Return starts   |   F1: all controls", from the bindings (without
+// a Start key: "hold Space, then press Backspace"). Allocates, like
+// controlsSummary.
+std::string titleHint(const Bindings& bindings);
 // How an input appears to the player: "Space", "Left Shift", "Left mouse".
 std::string displayName(Binding input);
 // The constant names in Key ("W", "Num1", "LeftShift", ...), or "Usage<n>".
@@ -174,6 +208,12 @@ struct Settings {
     // and its hold counter is not updated while paused, so the long press
     // cannot reopen it.
     int pauseTapReports = 50;
+    // Game controller sticks: a radial dead zone (0..1 of full travel); past
+    // it the left stick is the Nunchuk stick, analog.
+    float padStickDeadZone = 0.2f;
+    // The right stick moves the Star Pointer at up to this many image widths
+    // per second (the image is 2 KPAD units wide).
+    float padPointerWidthsPerSecond = 0.9f;
 };
 
 // --- Host events (any thread) ---
@@ -195,6 +235,12 @@ void setViewport(const Viewport& viewport);
 // Losing focus releases every held input and hides the pointer, so nothing
 // stays pressed while the window is in the background.
 void focusChanged(bool focused);
+// Game controllers (all of them act as one). Axis values are -1..1 for the
+// sticks, x right and y DOWN as SDL reports them, and 0..1 for the triggers.
+void padButtonEvent(PadButton button, bool down);
+void padAxisEvent(PadAxis axis, float value);
+// The last controller was removed: everything it held is released.
+void padDisconnected();
 void setPosture(Posture posture);
 Posture posture();
 
@@ -204,6 +250,9 @@ Posture posture();
 // presses B with A, so one key starts the game. Elsewhere Start is A alone,
 // and never sends the B that backs out of menus. Any thread.
 void titlePromptShown();
+// Host side: the title prompt was reported within the last 100 ms (the
+// native title hint shows while it is). Any thread.
+bool titlePromptActive();
 // Game side (native builds): the game steers by the remote's tilt this frame.
 // For the next 100 ms the stick keys tilt the remote instead of moving the
 // stick, as Tab would, so WASD steer with no extra keys. Any thread.

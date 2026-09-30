@@ -107,6 +107,8 @@ private:
     int mStep = 0;                   // walk direction / camera direction index
     float mStartX = 0, mStartY = 0, mStartZ = 0;
     float mCamZx = 0, mCamZy = 0, mCamZz = 1;
+    bool mCamTriggerSeen = false;   // the game saw this step's D-pad trigger
+    bool mCamRoundAllowed = false;  // the camera allowed rotation when it did
     bool mLeftGround = false;
     float mMaxRise = 0;
     int mWalksOk = 0;

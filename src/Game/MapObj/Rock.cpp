@@ -5,6 +5,7 @@
 #include "Game/MapObj/RockCreator.hpp"
 #include "Game/Util.hpp"
 #include "Game/Util/ActorMovementUtil.hpp"
+#include "Game/Util/NativeActorObserve.hpp"
 #include "Game/Util/ActorSensorUtil.hpp"
 #include "Game/Util/CameraUtil.hpp"
 #include "Game/Util/EffectUtil.hpp"
@@ -208,6 +209,9 @@ void Rock::control() {
     if (isNerve(GET_NERVE(Rock, RockNrvBreak))) {
         return;
     }
+#ifdef PETARI_NATIVE
+    MR::Native::publishActor("Rock", mPosition, mPosition - mPrevPos, static_cast< s32 >(mRockType), PETARI_ACTOR_HOSTILE);
+#endif
 
     bool updateFront;
     bool hasMoved = false;

@@ -21,7 +21,10 @@ selection have been exercised in the full game; later controls remain unverified
 
 Bindings are loaded from `controls.txt` in the app's user directory (normally
 `~/Library/Application Support/Petari`, overridden by `--user`). Mouse motion
-controls the Star Pointer by default.
+controls the Star Pointer by default. In the game, F1 then Controls lists
+every control as currently bound, remaps included. While the title screen asks
+for A and B, a bar at the top of the screen names the keys ("Keyboard: Return
+starts | F1: all controls").
 
 Additional development defaults provide the remaining remote controls. These
 have input-component tests but have not been approved through gameplay:
@@ -29,7 +32,7 @@ have input-component tests but have not been approved through gameplay:
 | Input | Action |
 | --- | --- |
 | Arrow keys | D-pad; Up enters first-person view where supported, Down or Space leaves it |
-| F1 | Native Home menu (Resume, Restart from Title, Quit) |
+| F1 | Native Home menu: Resume, Controls (every key as currently bound), Restart from Title, Quit |
 | Minus | Remote Minus (also pauses) |
 | 1 / 2 | Remote 1 / 2 (the game never needs them) |
 | Keypad Enter | Same as Return |
@@ -84,9 +87,17 @@ from the screen to zoom (`CameraDPD`).
   `MarioActor::getStickValue` checks).
 - **Q / E.**
   - They rotate the camera one step per press, and only where that area's
-    camera allows rotation. Elsewhere they do nothing.
+    camera allows rotation. Many areas use a fixed camera: there the game
+    plays a short "can't" sound and the view stays put, as it does with a Wii
+    remote. That sound means the key worked.
   - They are ignored during cutscenes and in first-person view.
   - Their directions swap while the camera is upside down.
+- **First-person view (Up arrow).**
+  - Up looks through Mario's eyes where the area allows it. Elsewhere the game
+    plays the same "can't" sound.
+  - W A S D look around (the game reads the stick, not the pointer). Holding
+    Left Alt looks more slowly.
+  - Down arrow or Space returns to the normal camera. Backspace does not.
 - **Right mouse button.** It is the remote's A button, so pressing it while
   the pointer is not on a Pull Star or another target makes Mario jump.
   A Pull Star keeps pulling while the button is held and lets go shortly

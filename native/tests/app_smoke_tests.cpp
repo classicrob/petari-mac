@@ -2063,9 +2063,36 @@ void testGoodEggObjectives() {
     // Peanut: a chip floating out of reach overhead gets a jump.
     EggRun chips;
     toGoodEgg(chips);
-    Observation under = actor(egg(-10547, -15100, -2485), "StarChip", -10547.9f, -14915.6f, -2485.1f, 1, Smoke::kActorReady);
-    chips.frames(under, 3);
-    check(chips.logged("on Peanut") && chips.logged("jump for the chip"), "a chip 185 above: jump");
+    // Landing: the tour past all chips starts at its nearest point.
+    chips.frames(egg(-9122, -15504, -2193), 2);
+    check(chips.logged("on Peanut") && chips.logged("Peanut route: from point 0"), "the Peanut tour starts");
+    // At the tour's end with a chip missed: that chip directly, jumping for it.
+    EggRun missed;
+    toGoodEgg(missed);
+    Observation under = actor(egg(-11923, -15385, -2954), "StarChip", -11923, -15200, -2954, 1, Smoke::kActorReady);
+    missed.frames(under, 3);
+    check(missed.logged("Peanut route done with 0 of 5 chips") && missed.logged("jump for the chip"),
+          "a missed chip 185 above: jump");
+    // A boulder rolling at Mario along his way (tour point 0 to 1): he steps
+    // around it rather than into it; one rolling away changes nothing.
+    auto rolling = [](Observation o, float x, float y, float z, float dx, float dy, float dz) {
+        o = actor(o, "Rock", x, y, z, 0, Smoke::kActorHostile);
+        o.actors.back().dx = dx; o.actors.back().dy = dy; o.actors.back().dz = dz;
+        return o;
+    };
+    // (-9122, -15504, -2193) -> (-9216, -15716, -2408): direction (-0.25, -0.69, -0.68).
+    EggRun rock;
+    toGoodEgg(rock);
+    Observation start = egg(-9122, -15504, -2193);
+    rock.frames(start, 3);
+    rock.frames(rolling(start, -9310, -15930, -2620, 2.5f, 6.9f, 6.8f), 2);
+    check(rock.logged("stepping around a boulder") || rock.logged("waiting for a boulder to pass"),
+          "a boulder coming along Mario's way: he does not walk into it");
+    EggRun away;
+    toGoodEgg(away);
+    away.frames(start, 3);
+    away.frames(rolling(start, -9310, -15930, -2620, -2.5f, -6.9f, -6.8f), 2);
+    check(!away.logged("stepping around") && !away.logged("waiting for a boulder"), "a boulder rolling away is ignored");
     // Five chips got: the launch star they form, which floats above the ground.
     EggRun star;
     toGoodEgg(star);

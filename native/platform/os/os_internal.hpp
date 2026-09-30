@@ -76,7 +76,11 @@ struct BatonBlockStats {
 BatonBlockStats batonBlockStats();
 void setBatonBlockThresholdMs(double ms);
 void setBatonBlockLogAll(bool enabled);
-void setForcedPreemption(bool enabled, double afterMs);  // PETARI_FORCED_PREEMPTION; default on, 4 ms  // tests: log every stretch, not the first three per site
+void setForcedPreemption(bool enabled, double afterMs);
+// Tests: the monitor writes a line to `file` at every poll (null: stops; on
+// return no poll still writes the old one), and counts its polls.
+void setBatonMonitorChatter(std::FILE* file);
+std::uint64_t batonMonitorPolls();  // PETARI_FORCED_PREEMPTION; default on, 4 ms  // tests: log every stretch, not the first three per site
 void dumpBatonBlocks(std::FILE* out);  // interrupt lock held, or read racily by dumpThreads
 std::string describeAddress(std::uint64_t address);  // symbol+offset, or hex
 

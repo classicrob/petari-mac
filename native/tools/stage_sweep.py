@@ -349,6 +349,17 @@ def analyze(log_path, csv_path, stage, exit_status, timed_out, user):
         heap["min_free_pct"] = min(heap["min_free_pct"], float(pct))
         heap.update({"size": int(size), "free": int(free), "free_pct": float(pct), "max_free": int(maxfree)})
     result["heaps"] = heaps
+    # File-cache demand (8c4c107cf onward, with PETARI_TRACE_BOOT): the last
+    # archive summary after the entry, and the archives of this stage's load
+    # that were mounted in scene GDDR (spilled from the file cache).
+    stage_text = text[after:] if after >= 0 else ""
+    archives = re.findall(r"^\[heap\] file cache archives: (\d+) resident, (\d+) bytes; other use \([^)]*\) (\d+) bytes",
+                          stage_text, re.M)
+    result["file_cache_archives"] = ({"resident": int(archives[-1][0]), "bytes": int(archives[-1][1]),
+                                      "other_use": int(archives[-1][2])} if archives else None)
+    mounts = re.findall(r"^\[heap-arc\] (\S+) -> ([^,]+), (\d+) bytes", stage_text, re.M)
+    result["archive_mounts"] = {"total": len(mounts),
+                                "scene_gddr": [m[0] for m in mounts if m[1].strip() == "scene GDDR"]}
     result["heap_warnings"] = [f"{name} {h['min_free_pct']}% ({h['min_free']} bytes) free"
                                for name, h in heaps.items() if h["min_free_pct"] < HEAP_WARN_PCT]
     # A stage without a per-stage seed file: the renderer logs the absent
@@ -442,6 +453,25 @@ def run_one(args, out, baseline, fixture, stage, scenario):
     if (run_dir / "result.json").is_file() and not args.rerun:
         print(f"[skip] {name}: result exists (use --rerun)")
         return json.loads((run_dir / "result.json").read_text())
+    for other in args.reuse_from:
+        # The same run, finished by another sweep on the identical app binary
+        # and without extra environment: copy it in (log, frames, result,
+        # pipeline DB, crash reports) instead of running it again.
+        source = args.out_root / other / "runs" / name
+        try:
+            previous = json.loads((source / "result.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if previous.get("app_sha256") != args.app_sha256 or previous.get("extra_env") or previous.get("outcome") == "INFRA":
+            continue
+        if run_dir.exists():
+            shutil.rmtree(run_dir)
+        shutil.copytree(source, run_dir, symlinks=True)
+        previous["reused_from"] = str(source)
+        previous["log"] = str(run_dir / "app.log")
+        (run_dir / "result.json").write_text(json.dumps(previous, indent=2, ensure_ascii=False) + "\n")
+        print(f"[reuse] {name}: {previous['outcome']} from {other}", flush=True)
+        return previous
     if run_dir.exists():
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True)
@@ -451,6 +481,8 @@ def run_one(args, out, baseline, fixture, stage, scenario):
         shutil.copy2(db, user / db.name)
     command, env_extra = app_command(args, user, stage["stage"], scenario["scenario"])
     env_extra["PETARI_FRAME_CSV"] = str(run_dir / "frames.csv")
+    extra = dict(item.split("=", 1) for item in args.env)
+    env_extra.update(extra)
     if args.frozen_seeds:
         env_extra["PETARI_PIPELINE_SEED_DIR"] = str(args.frozen_seeds)
     env = dict(os.environ, **env_extra)
@@ -490,6 +522,8 @@ def run_one(args, out, baseline, fixture, stage, scenario):
         "scenario": scenario["scenario"], "scenario_name": scenario["name"], "comet": scenario["comet"],
         "hidden": scenario["hidden"], "wall_seconds": round(time.time() - started, 1), "log": str(log_path),
         "repro": repro, "synthetic_entry": True, "app_sha256": args.app_sha256,
+        # Extra environment (--env), e.g. diagnostics that make timing incomparable.
+        "extra_env": extra,
     })
     if result["outcome"] == "INFRA":
         # No result.json: a later invocation retries this run.
@@ -566,7 +600,8 @@ def summarize(out):
     columns = ["run", "dome_name", "stage", "scenario", "scenario_name", "outcome", "signature", "exit_status",
                "load_to_ready_seconds", "p50_ms", "p95_ms", "p99_ms", "max_ms", "late", "over_100ms",
                "stage_first_use_configs", "stage_first_use_uncovered", "compiles", "compile_failures",
-               "blocking_resolves", "blocking_resolve_max_ms", "min_heap_free_pct", "warn_checks", "wall_seconds", "log"]
+               "blocking_resolves", "blocking_resolve_max_ms", "min_heap_free_pct", "file_cache_archives", "file_cache_archive_bytes", "file_cache_other_use",
+               "spilled_to_scene_gddr", "warn_checks", "wall_seconds", "app_sha256", "log"]
     with (out / "results.csv").open("w", newline="") as handle:
         heap_names = sorted({name for r in results for name in (r.get("heaps") or {})})
         columns = columns + [f"heap_min_free[{n}]" for n in heap_names] + [f"heap_min_free_pct[{n}]" for n in heap_names]
@@ -578,10 +613,14 @@ def summarize(out):
             heaps = r.get("heaps") or {}
             writer.writerow({
                 **{k: r.get(k) for k in ("run", "dome_name", "stage", "scenario", "scenario_name", "outcome",
-                                         "signature", "exit_status", "load_to_ready_seconds", "wall_seconds", "log")},
+                                         "signature", "exit_status", "load_to_ready_seconds", "wall_seconds", "app_sha256", "log")},
                 **{k: ft.get(k) for k in ("p50_ms", "p95_ms", "p99_ms", "max_ms", "late", "over_100ms")},
                 **{k: sh.get(k) for k in ("stage_first_use_configs", "stage_first_use_uncovered", "compiles",
                                           "compile_failures", "blocking_resolves", "blocking_resolve_max_ms")},
+                "file_cache_archives": (r.get("file_cache_archives") or {}).get("resident"),
+                "file_cache_archive_bytes": (r.get("file_cache_archives") or {}).get("bytes"),
+                "file_cache_other_use": (r.get("file_cache_archives") or {}).get("other_use"),
+                "spilled_to_scene_gddr": len((r.get("archive_mounts") or {}).get("scene_gddr", [])),
                 "min_heap_free_pct": min((h.get("min_free_pct", h["free_pct"]) for h in heaps.values()), default=None),
                 **{f"heap_min_free[{name}]": h.get("min_free", h["free"]) for name, h in heaps.items()},
                 **{f"heap_min_free_pct[{name}]": h.get("min_free_pct", h["free_pct"]) for name, h in heaps.items()},
@@ -678,6 +717,11 @@ def main():
     run.add_argument("--lock-wait", type=int, default=7200, help="extra seconds allowed for waiting on the app lock")
     run.add_argument("--frames", type=int, default=12000, help="PETARI_SMOKE_FRAMES")
     run.add_argument("--idle-frames", type=int, default=600, help="PETARI_STAGE_IDLE_FRAMES")
+    run.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                     help="extra app environment for every run (recorded per run; e.g. PETARI_PIPELINE_OWNERS=1 "
+                          "for draw-owner stacks; such runs are not timing data)")
+    run.add_argument("--reuse-from", type=lambda v: [x for x in v.split(",") if x], default=[],
+                     help="comma-separated sweep names whose finished runs on the identical app sha are copied in")
     run.add_argument("--rerun", action="store_true")
     run.add_argument("--refreeze-app", action="store_true",
                      help="copy the app bundle again (default: reuse this sweep's frozen copy)")

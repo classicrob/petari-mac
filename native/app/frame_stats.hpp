@@ -51,6 +51,7 @@ enum Part : unsigned {
     TextureHash,     // GX processor: texture source hashing on cache misses (sum)
     TextureUpload,   // GX processor: static texture creation, conversion, upload (sum)
     TokenBarrierWait,// game thread, inside game work: waiting for the previous frame's tokens (sum)
+    StagePrepWait,   // game thread, inside game work: stage shader preparation before a scene starts (sum)
     PartCount
 };
 const char* partName(unsigned part);

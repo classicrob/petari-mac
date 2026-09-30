@@ -12,10 +12,13 @@
 // 4. a queued speaker packet is delivered;
 // 5. the channel's report is built and the sampling callback runs (KPAD's
 //    KPADiSamplingCallback, which calls WPADRead).
+// 6. activity keeps the screen from dimming, as WPADiCheckContInputs does on
+//    the Wii (see noteActivity).
 
 #include <revolution/kpad.h>
 #include <revolution/os.h>
 #include <revolution/sc.h>
+#include <revolution/vi.h>
 #include <revolution/wpad.h>
 
 #include <algorithm>
@@ -124,6 +127,11 @@ std::atomic<bool> gWantConnected[kChannels] = {true, false, false, false};
 std::atomic<bool> gWantNunchuk[kChannels] = {true, true, true, true};
 std::atomic<bool> gRumble[kChannels] = {};
 std::atomic<Clock> gClock{Clock::Alarm};
+// A host input event (any key, including unbound keys and OS repeats, a mouse
+// button, mouse motion) since the last report tick.
+std::atomic<bool> gHostActivity{false};
+// The previous report of channel 0, for the change test (interrupt lock).
+Report gLastReport;
 
 // Host input: guarded by gHostMutex. Lock order: interrupt lock, then
 // gHostMutex; host event functions take only gHostMutex.
@@ -374,6 +382,37 @@ void snapshotCalibration(s32 chan, Channel& ch) {
     ch.calibration = c;
 }
 
+bool sameReport(const Report& a, const Report& b) {
+    if (a.buttons != b.buttons || a.stickX != b.stickX || a.stickY != b.stickY || a.dotCount != b.dotCount) {
+        return false;
+    }
+    for (int i = 0; i < 3; ++i) {
+        if (a.acc[i] != b.acc[i] || a.nunchukAcc[i] != b.nunchukAcc[i]) {
+            return false;
+        }
+    }
+    for (int i = 0; i < a.dotCount; ++i) {
+        if (a.dots[i].x != b.dots[i].x || a.dots[i].y != b.dots[i].y) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The screen saver. On the Wii, WPADiCheckContInputs compares each report
+// with the previous one and, on any change, calls __VIResetRFIdle, so VI
+// never dims while the remote is in use. Here a changed report of the virtual
+// remote does the same, and so does any host input event, which also covers
+// keys the bindings do not use and mouse motion over the letterbox bars.
+// VIResetDimmingCount takes effect at the next retrace.
+void noteActivity(const Report& report) {
+    const bool changed = !sameReport(report, gLastReport);
+    gLastReport = report;
+    if (gHostActivity.exchange(false) || changed) {
+        VIResetDimmingCount();
+    }
+}
+
 void tickChannel(s32 chan) {
     Channel& ch = gChannels[chan];
 
@@ -389,6 +428,10 @@ void tickChannel(s32 chan) {
             input = model().nextReport(ch.calibration);
             activity = model().takeActivity();
         }
+    }
+
+    if (chan == 0) {
+        noteActivity(input);
     }
 
     if (activity && ch.poweredOff) {
@@ -486,16 +529,39 @@ Settings settings() {
 }
 
 void keyEvent(KeyCode code, bool down, bool repeat) {
+    gHostActivity = true;
     std::lock_guard<std::mutex> lock(gHostMutex);
     model().keyEvent(code, down, repeat);
 }
 
 void mouseButtonEvent(MouseButton button, bool down) {
+    gHostActivity = true;
     std::lock_guard<std::mutex> lock(gHostMutex);
     model().mouseButtonEvent(button, down);
 }
 
+void padButtonEvent(PadButton button, bool down) {
+    gHostActivity = true;
+    std::lock_guard<std::mutex> lock(gHostMutex);
+    model().padButtonEvent(button, down);
+}
+
+void padAxisEvent(PadAxis axis, float value) {
+    // A resting stick's noise is not activity; a deliberate push is.
+    if (std::fabs(value) > 0.25f) {
+        gHostActivity = true;
+    }
+    std::lock_guard<std::mutex> lock(gHostMutex);
+    model().padAxisEvent(axis, value);
+}
+
+void padDisconnected() {
+    std::lock_guard<std::mutex> lock(gHostMutex);
+    model().padDisconnected();
+}
+
 void mouseMoved(float x, float y) {
+    gHostActivity = true;
     std::lock_guard<std::mutex> lock(gHostMutex);
     model().mouseMoved(x, y);
 }
@@ -528,6 +594,11 @@ Posture posture() {
 void titlePromptShown() {
     std::lock_guard<std::mutex> lock(gHostMutex);
     model().titlePromptShown();
+}
+
+bool titlePromptActive() {
+    std::lock_guard<std::mutex> lock(gHostMutex);
+    return model().titlePromptActive();
 }
 
 void motionControlShown(Steering steering) {
@@ -609,6 +680,8 @@ void resetForTesting() {
             gRumble[i] = false;
         }
         gClock = Clock::Alarm;
+        gHostActivity = false;
+        gLastReport = Report();
     }
     HostAllocationScope scope;
     std::lock_guard<std::mutex> lock(gHostMutex);

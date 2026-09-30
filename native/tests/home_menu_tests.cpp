@@ -846,6 +846,55 @@ void testImGuiOverlay() {
         check(smallest >= 8.0f, "controls text readable at 480 lines (" + std::to_string(smallest) + " px)");
     }
 
+    // The title hint: a bar above the logo (top 8% of the image), text inside
+    // it and readable at 480 lines; nothing without text.
+    {
+        HM::publish(HM::View{});
+        const char* hint = "Keyboard: Return starts   |   F1: all controls";
+        for (int wide = 0; wide < 2; wide++) {
+            const float w = wide ? 854.0f : 640.0f;
+            const float h = 480.0f;
+            ImGuiIO& hintIo = ImGui::GetIO();
+            hintIo.DisplaySize = ImVec2(1280.0f, 800.0f);
+            hintIo.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            HM::drawTitleHint(hint, 0.0f, 0.0f, w, h);
+            ImGui::Render();
+            const HM::Rect r = HM::titleHintRect();
+            const float bx0 = (r.x0 + 1.0f) * 0.5f * w, bx1 = (r.x1 + 1.0f) * 0.5f * w;
+            const float by0 = (r.y0 + 1.0f) * 0.5f * h, by1 = (r.y1 + 1.0f) * 0.5f * h;
+            float textTop = 1e9f, textBottom = -1e9f;
+            bool inside = true;
+            int vertices = 0;
+            const ImDrawData* data = ImGui::GetDrawData();
+            for (int i = 0; i < data->CmdListsCount; i++) {
+                for (const ImDrawVert& v : data->CmdLists[i]->VtxBuffer) {
+                    ++vertices;
+                    inside = inside && v.pos.x >= bx0 - 1.0f && v.pos.x <= bx1 + 1.0f && v.pos.y >= by0 - 1.0f &&
+                             v.pos.y <= by1 + 1.0f;
+                    const ImVec4 c = ImGui::ColorConvertU32ToFloat4(v.col);
+                    if (c.x > 0.99f && c.y > 0.99f && c.z > 0.99f) {  // the white text
+                        textTop = std::fmin(textTop, v.pos.y);
+                        textBottom = std::fmax(textBottom, v.pos.y);
+                    }
+                }
+            }
+            check(vertices > 100 && inside, "title hint drawn inside its bar");
+            check(by1 <= 0.08f * h, "title hint above the logo (top 8% of the image)");
+            check(textBottom - textTop >= 8.0f,
+                  "title hint readable at 480 lines (" + std::to_string(textBottom - textTop) + " px)");
+        }
+        ImGui::NewFrame();
+        HM::drawTitleHint(nullptr, 0.0f, 0.0f, 640.0f, 480.0f);
+        HM::drawTitleHint("", 0.0f, 0.0f, 640.0f, 480.0f);
+        ImGui::Render();
+        int none = 0;
+        for (int i = 0; i < ImGui::GetDrawData()->CmdListsCount; i++) {
+            none += ImGui::GetDrawData()->CmdLists[i]->VtxBuffer.Size;
+        }
+        check(none == 0, "no title hint without text");
+    }
+
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(A));

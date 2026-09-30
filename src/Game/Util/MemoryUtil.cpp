@@ -52,7 +52,13 @@ namespace MR {
         JKRHeap* pFileCacheHeap = SingletonHolder< HeapMemoryWatcher >::get()->mFileCacheHeap;
 
         if (pFileCacheHeap != nullptr) {
+#ifdef PETARI_NATIVE
+            // The Wii rule on the Wii-sized part of the file cache; the native allowance on top
+            // stays for resource objects (HeapMemoryWatcher::createFileCacheHeapOnGameHeap).
+            if (SingletonHolder< HeapMemoryWatcher >::get()->getFileCachePlacementFreeRatio() < maxFreeSizeRate) {
+#else
             if (getHeapFreeRatio(pFileCacheHeap) < maxFreeSizeRate) {
+#endif
                 pFileCacheHeap = SingletonHolder< HeapMemoryWatcher >::get()->mSceneHeapGDDR;
             }
         }

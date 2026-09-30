@@ -23,12 +23,18 @@ guard let record = try JSONSerialization.jsonObject(with: data) as? [String: Any
       let app = NSRunningApplication(processIdentifier: pid_t(rawPid)),
       app.bundleURL?.standardizedFileURL.path == URL(fileURLWithPath: appPath).standardizedFileURL.path,
       NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+    let front = NSWorkspace.shared.frontmostApplication
+    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+       let pid = json["pid"] as? Int {
+        let target = NSRunningApplication(processIdentifier: pid_t(pid))
+        FileHandle.standardError.write(Data(("target PID=\(pid) bundle=\(target?.bundleURL?.path ?? "nil") front PID=\(front?.processIdentifier ?? -1) bundle=\(front?.bundleURL?.path ?? "nil")\n").utf8))
+    }
     fail("The recorded playtest app must be alive and frontmost")
 }
 let root = recordURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 for name in [".petari-app.lock", ".petari-sweep-lane.lock"] {
     let owner = try String(contentsOf: root.appendingPathComponent("build/" + name + "/owner"), encoding: .utf8)
-    guard owner.trimmingCharacters(in: .whitespacesAndNewlines) == "cu-playtest" else { fail("Playtest must own both app locks") }
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines) == "cu-playtest" else { fail("Playtest must own app and sweep locks") }
 }
 guard CGPreflightPostEventAccess() else { fail("macOS event-post permission is not available; no permission prompt was opened") }
 let source = CGEventSource(stateID: .hidSystemState)

@@ -85,6 +85,9 @@ public:
 
     void keyEvent(KeyCode code, bool down, bool repeat);
     void mouseButtonEvent(MouseButton button, bool down);
+    void padButtonEvent(PadButton button, bool down);
+    void padAxisEvent(PadAxis axis, float value);
+    void padDisconnected();
     void mouseMoved(float x, float y);
     void mouseLeft();
     void setViewport(const Viewport& viewport) { mViewport = viewport; }
@@ -119,11 +122,21 @@ private:
     void updateOutput();
     void updateMotion(float stickX, float stickY);
     void stickVector(float* x, float* y) const;
+    // A stick's position past the dead zone, rescaled to 0..1 length; y up.
+    bool padStick(PadAxis xAxis, PadAxis yAxis, float* x, float* y) const;
+    void updatePadPointer();
 
     Bindings mBindings;
     Settings mSettings;
     std::array<bool, Key::Max> mKeys{};
     std::array<bool, static_cast<int>(MouseButton::Count)> mMouse{};
+    std::array<bool, static_cast<int>(PadButton::Count)> mPad{};
+    std::array<float, static_cast<int>(PadAxis::Count)> mPadAxes{};
+    // The controller's Star Pointer, in KPAD space, while it (rather than the
+    // mouse) last moved the pointer.
+    bool mPadPointer = false;
+    float mPadPointerX = 0.0f;
+    float mPadPointerY = 0.0f;
     bool mFocused = true;
     bool mMouseInWindow = false;
     float mMouseX = 0.0f;

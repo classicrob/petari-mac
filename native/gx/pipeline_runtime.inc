@@ -92,8 +92,8 @@ static void petari_pipeline_summary() {
   }
   std::fprintf(stderr,
       "[gx pipeline summary] policy=%s skipped_draws=%llu missed_configs=%llu unfinished=%llu "
-      "failed_compiles=%llu max_first_skip_to_terminal_or_exit_ms=%.3f\n",
+      "failed_compiles=%llu pending_compiles=%zu terminal_compiles=%zu max_first_skip_to_terminal_or_exit_ms=%.3f\n",
       PetariPipeline::asynchronous() ? "async" : "blocking", static_cast<unsigned long long>(skipped),
       static_cast<unsigned long long>(missedConfigs), static_cast<unsigned long long>(unfinished),
-      static_cast<unsigned long long>(failed), maxPendingMs);
+      static_cast<unsigned long long>(failed), g_pendingPipelines.size(), g_pipelines.size(), maxPendingMs);
 }

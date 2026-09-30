@@ -178,6 +178,12 @@ struct Observation {
     // route steers relative to them.
     float camXx = 1.0f, camXy = 0.0f, camXz = 0.0f;
     float camZx = 0.0f, camZy = 0.0f, camZz = 1.0f;
+    // Camera rotation, with playerValid: the game's D-pad left/right triggers
+    // this frame, and whether the active camera allows rotation
+    // (CameraDirector::isEnableToRound*; when it does not, the game plays its
+    // "can't" sound, SE_SY_CAMERA_NG, instead of rotating).
+    bool padLeftTrigger = false, padRightTrigger = false;
+    bool camRoundLeft = false, camRoundRight = false;
     bool talkActive = false;  // MR::isSystemTalking: a talk window is open (story route FAILs)
     bool playerDead = false;  // MR::isPlayerDead
     PhysicalInputs physical;  // filled by the seam (Events::physicalInputs)

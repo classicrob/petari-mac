@@ -129,6 +129,21 @@ endforeach()
 target_sources(aurora_gx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/efb_snapshot.cpp")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/efb_snapshot.cpp" TARGET_DIRECTORY aurora_gx PROPERTIES
     COMPILE_OPTIONS "-iquote${aurora_SOURCE_DIR}/lib")
+# Create ImGui's device objects (its render pipeline) during Aurora initialization, before the
+# game holds the CPU, instead of lazily on the first frame.
+set(_imgui_source "${aurora_SOURCE_DIR}/lib/imgui.cpp")
+set(_imgui_output "${CMAKE_CURRENT_BINARY_DIR}/pipeline-imgui.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline_imgui.py" "${_imgui_source}")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_aurora_pipeline_imgui.py"
+    "${_imgui_source}" "${_imgui_output}" COMMAND_ERROR_IS_FATAL ANY)
+get_target_property(_sources aurora_core SOURCES)
+list(REMOVE_ITEM _sources lib/imgui.cpp "${_imgui_source}")
+list(APPEND _sources "${_imgui_output}")
+set_property(TARGET aurora_core PROPERTY SOURCES "${_sources}")
+set_source_files_properties("${_imgui_output}" TARGET_DIRECTORY aurora_core PROPERTIES
+    COMPILE_OPTIONS "-iquote${aurora_SOURCE_DIR}/lib")
+
 set(_pipeline_source "${aurora_SOURCE_DIR}/lib/gfx/pipeline_cache.cpp")
 set(_pipeline_output "${CMAKE_CURRENT_BINARY_DIR}/aurora-pipeline-cache.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -234,6 +249,22 @@ if(_petari_build_testing)
             --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
         set_tests_properties(native_file_cache_heap_assets PROPERTIES TIMEOUT 120)
     endif()
+    # Every scene archive's native resource-object cost on the file cache, and the per-stage
+    # projection against the file cache's reserve (native/tests/file_cache_demand_tests.cpp).
+    add_executable(petari_file_cache_demand_tests EXCLUDE_FROM_ALL
+        "${CMAKE_SOURCE_DIR}/native/tests/file_cache_demand_tests.cpp"
+        "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/System/HeapMemoryWatcher.cpp"
+        "${CMAKE_SOURCE_DIR}/src/Game/Util/MemoryUtil.cpp")
+    petari_encode_target_sources(petari_file_cache_demand_tests)
+    target_link_libraries(petari_file_cache_demand_tests PRIVATE petari_j3d)
+    target_link_options(petari_file_cache_demand_tests PRIVATE -Wl,-dead_strip)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files")
+        add_test(NAME native_file_cache_demand COMMAND petari_file_cache_demand_tests
+            --assets "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files"
+            --stages "${CMAKE_SOURCE_DIR}/native/tests/data/file_cache_stage_archives.txt")
+        set_tests_properties(native_file_cache_demand PROPERTIES TIMEOUT 300)
+    endif()
     file(GLOB PETARI_JPA_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/JSystem/JParticle/*.cpp")
     add_executable(petari_jpa_load_tests EXCLUDE_FROM_ALL
         "${CMAKE_SOURCE_DIR}/native/tests/jpa_load_tests.cpp" "${CMAKE_SOURCE_DIR}/native/tests/heap_diagnostics.cpp"
@@ -325,13 +356,22 @@ foreach(_pair "${CMAKE_CURRENT_BINARY_DIR}/indirect/shader.cpp|shader.cpp" "${au
         COMPILE_OPTIONS "-iquote${aurora_SOURCE_DIR}/lib/gx")
 endforeach()
 
-add_executable(petari_gx_shader_tests EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/native/tests/gx_shader_tests.cpp")
+add_executable(petari_gx_shader_tests "${CMAKE_SOURCE_DIR}/native/tests/gx_shader_tests.cpp")
 target_compile_features(petari_gx_shader_tests PRIVATE cxx_std_20)
 target_include_directories(petari_gx_shader_tests PRIVATE "${aurora_SOURCE_DIR}/lib")
 target_link_libraries(petari_gx_shader_tests PRIVATE aurora::gx aurora::core)
 target_link_options(petari_gx_shader_tests PRIVATE -Wl,-dead_strip)
 if(_petari_build_testing)
     add_test(NAME native_gx_shader COMMAND petari_gx_shader_tests)
+endif()
+
+add_executable(petari_texture_format_tests "${CMAKE_SOURCE_DIR}/native/tools/texture_format_tests.cpp")
+target_compile_features(petari_texture_format_tests PRIVATE cxx_std_20)
+target_include_directories(petari_texture_format_tests PRIVATE "${aurora_SOURCE_DIR}/lib")
+target_link_libraries(petari_texture_format_tests PRIVATE aurora::gx aurora::core)
+target_link_options(petari_texture_format_tests PRIVATE -Wl,-dead_strip)
+if(_petari_build_testing)
+    add_test(NAME native_texture_format COMMAND petari_texture_format_tests)
 endif()
 
 add_executable(petari_pipeline_cache_inspect EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/native/tools/pipeline_cache_inspect.cpp")
@@ -344,6 +384,52 @@ if(_petari_build_testing AND EXISTS "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/
     add_test(NAME native_galaxy_name_plate COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/native/tests/galaxy_name_plate_tests.py"
         "${CMAKE_SOURCE_DIR}/build/game-data/RMGE01/files/LayoutData/GalaxyNamePlate.arc")
+endif()
+
+if(_petari_build_testing)
+    # ImGui device objects must be created during Aurora initialization, not on the first frame.
+    if(DEFINED imgui_SOURCE_DIR)
+        set(_petari_imgui_wgpu "${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp")
+    else()
+        set(_petari_imgui_wgpu "${CMAKE_SOURCE_DIR}/build/aurora/_deps/imgui-src/backends/imgui_impl_wgpu.cpp")
+    endif()
+    if(EXISTS "${_petari_imgui_wgpu}")
+        add_test(NAME native_pipeline_imgui COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/native/tools/pipeline_imgui_tests.py"
+            --aurora "${aurora_SOURCE_DIR}" --backend "${_petari_imgui_wgpu}")
+        set_tests_properties(native_pipeline_imgui PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" TIMEOUT 60)
+    endif()
+
+    # These regressions use synthetic inputs and CPU stubs, without disc data or a GPU.
+    find_package(Threads REQUIRED)
+    foreach(_kind worker stage seed_sort)
+        add_executable(petari_pipeline_${_kind}_tests
+            "${CMAKE_SOURCE_DIR}/native/tools/pipeline_${_kind}_tests.cpp")
+        target_compile_features(petari_pipeline_${_kind}_tests PRIVATE cxx_std_20)
+        target_include_directories(petari_pipeline_${_kind}_tests PRIVATE "${CMAKE_SOURCE_DIR}/native/include")
+        target_link_libraries(petari_pipeline_${_kind}_tests PRIVATE Threads::Threads)
+    endforeach()
+    target_link_libraries(petari_pipeline_stage_tests PRIVATE SQLite::SQLite3)
+    target_link_libraries(petari_pipeline_seed_sort_tests PRIVATE SQLite::SQLite3)
+
+    add_test(NAME native_pipeline_worker COMMAND "${CMAKE_COMMAND}" -E env
+        --unset=PETARI_PIPELINE_POLICY --unset=PETARI_PIPELINE_GLOBAL_PRECOMPILE
+        $<TARGET_FILE:petari_pipeline_worker_tests>)
+    add_test(NAME native_pipeline_worker_async COMMAND "${CMAKE_COMMAND}" -E env
+        --unset=PETARI_PIPELINE_GLOBAL_PRECOMPILE PETARI_PIPELINE_POLICY=async
+        $<TARGET_FILE:petari_pipeline_worker_tests> async)
+    add_test(NAME native_pipeline_stage COMMAND petari_pipeline_stage_tests)
+    add_test(NAME native_pipeline_seed COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tools/pipeline_seed_tests.py" --aurora "${aurora_SOURCE_DIR}")
+    add_test(NAME native_pipeline_replay COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tools/pipeline_replay_tests.py")
+    add_test(NAME native_pipeline_seed_sort COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/native/tools/pipeline_seed_sort_tests.py"
+        $<TARGET_FILE:petari_pipeline_seed_sort_tests>)
+    set_tests_properties(native_pipeline_worker native_pipeline_worker_async native_pipeline_stage
+        native_pipeline_seed native_pipeline_replay native_pipeline_seed_sort PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" TIMEOUT 60)
 endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/pipeline_replay.cmake")

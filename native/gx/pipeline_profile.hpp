@@ -59,6 +59,10 @@ inline bool globalPrecompile() {
     const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
     return value && std::strcmp(value, "1") == 0;
 }
+inline bool backgroundGlobalPrecompile() {
+    const char* value = std::getenv("PETARI_PIPELINE_GLOBAL_PRECOMPILE");
+    return value && std::strcmp(value, "background") == 0;
+}
 inline void compilationQoS(bool background) {
 #if defined(__APPLE__)
     pthread_set_qos_class_self_np(background ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INITIATED, 0);
