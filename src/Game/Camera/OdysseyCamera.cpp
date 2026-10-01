@@ -11,6 +11,7 @@
 #include "Game/Util/DemoUtil.hpp"
 #include "Game/Util/MapUtil.hpp"
 #include "Game/Util/PlayerUtil.hpp"
+#include "Game/Util/TriangleFilter.hpp"
 #include <petari/camera_input.h>
 
 #include <cmath>
@@ -71,6 +72,9 @@ namespace {
     constexpr float kMaxTurn = 20.0f * kDeg;  // per frame; Mario snaps his camera frame above 30
     constexpr float kMaxUpTurn = 4.0f * kDeg; // gravity changes are followed at most this fast
     constexpr float kWallMargin = 60.0f;
+    constexpr float kNearDist = 320.0f;      // closer than this the eye is in or at Mario
+    constexpr float kFloorLift = 5.0f * kDeg; // pitch steps tried when the floor would pull it that close
+    constexpr int kFloorLiftSteps = 12;
 
     struct Orbit {
         bool active = false;
@@ -117,6 +121,10 @@ namespace {
         return nullptr;
     }
 }  // namespace
+
+extern "C" int petari_camera_orbit_active(void) {
+    return gOrbit.active ? 1 : 0;
+}
 
 void petariOdysseyCameraApply(CameraDirector* pDirector) {
     PetariCameraInput in;
@@ -246,24 +254,56 @@ void petariOdysseyCameraApply(CameraDirector* pDirector) {
     // Zoom (eased) and line of sight to the eye.
     gOrbit.wantDist = clampf(gOrbit.wantDist + in.zoomSteps * 150.0f + in.zoomHold * 25.0f, kMinDist, kMaxDist);
     gOrbit.dist += (gOrbit.wantDist - gOrbit.dist) * 0.15f;
-    float allowed = gOrbit.dist;
-    TVec3f hit;
+    // Polygons with the camera-through code (grates, foliage, glass) don't block,
+    // as for the game's own cameras (CameraFollow, CameraInwardSphere).
+    TriangleFilterFunc cameraThrough(&MR::isCameraCodeThrough);
     const TVec3f from = tvec(target);
-    const TVec3f ray = tvec(mul(gOrbit.dir, gOrbit.dist));
-    if (MR::getFirstPolyOnLineToMap(&hit, nullptr, from, ray)) {
-        const float wall = len(sub(vec(hit), target)) - kWallMargin;
-        allowed = clampf(wall, 120.0f, gOrbit.dist);
+    // Line of sight from the target: the distance the map allows, and whether the
+    // blocking point lies below the target (the floor under Mario).
+    auto lineOfSight = [&](const V& dir, bool* pBelow) {
+        TVec3f hit;
+        *pBelow = false;
+        if (!MR::getFirstPolyOnLineToMap(&hit, nullptr, from, tvec(mul(dir, gOrbit.dist)), nullptr, &cameraThrough)) {
+            return gOrbit.dist;
+        }
+        *pBelow = dot(sub(vec(hit), target), up) < -kWallMargin;
+        return clampf(len(sub(vec(hit), target)) - kWallMargin, 120.0f, gOrbit.dist);
+    };
+    bool below = false;
+    float allowed = lineOfSight(gOrbit.dir, &below);
+    // Pitched down into the floor: rather than pulling the eye into Mario, raise
+    // the orbit until the floor no longer cuts the view (kept, so it is steady).
+    for (int step = 1; below && allowed < kNearDist && step <= kFloorLiftSteps; step++) {
+        const float lifted = clampf(elevation + step * kFloorLift, kMinElev, kMaxElev);
+        const V dir = add(mul(horizontal, std::cos(lifted)), mul(up, std::sin(lifted)));
+        bool liftedBelow = false;
+        const float liftedAllowed = lineOfSight(dir, &liftedBelow);
+        if (liftedAllowed >= kNearDist || step == kFloorLiftSteps) {
+            if (liftedAllowed > allowed) {
+                gOrbit.dir = dir;
+                elevation = lifted;
+                allowed = liftedAllowed;
+            }
+            break;
+        }
     }
     // Pull in at once, ease back out.
     gOrbit.shownDist = allowed < gOrbit.shownDist ? allowed : gOrbit.shownDist + (allowed - gOrbit.shownDist) * 0.1f;
 
     const V eye = add(target, mul(gOrbit.dir, gOrbit.shownDist));
     static const bool sTrace = std::getenv("PETARI_CAMERA_TRACE") != nullptr;
-    static unsigned sTraceFrames = 0;
+    static unsigned sTraceFrames = 0, sLimitedFrames = 0;
+    static float sNearest = kMaxDist;
+    sLimitedFrames += allowed < gOrbit.dist ? 1 : 0;
+    sNearest = allowed < sNearest ? allowed : sNearest;
     if (sTrace && ++sTraceFrames % 60 == 0) {
-        std::fprintf(stderr, "[odyssey camera] distance %.0f (wanted %.0f, wall-limited %d), elevation %.1f deg, heading (%.2f, %.2f, %.2f)\n",
-                     gOrbit.shownDist, gOrbit.wantDist, allowed < gOrbit.dist ? 1 : 0, elevation / kDeg, horizontal.x,
-                     horizontal.y, horizontal.z);
+        std::fprintf(stderr,
+                     "[odyssey camera] distance %.0f (wanted %.0f, wall-limited %d, %u/60 frames, nearest %.0f), elevation %.1f deg, "
+                     "heading (%.2f, %.2f, %.2f)\n",
+                     gOrbit.shownDist, gOrbit.wantDist, allowed < gOrbit.dist ? 1 : 0, sLimitedFrames, sNearest, elevation / kDeg,
+                     horizontal.x, horizontal.y, horizontal.z);
+        sLimitedFrames = 0;
+        sNearest = kMaxDist;
     }
     pPose->mWatchPos.set(target.x, target.y, target.z);
     pPose->mPos.set(eye.x, eye.y, eye.z);

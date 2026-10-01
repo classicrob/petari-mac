@@ -25,6 +25,7 @@
 #include <petari/pipeline_startup.hpp>
 #include <petari/mods.hpp>
 #include <petari/progress.hpp>
+#include <petari/camera_input.h>
 #include <petari/camera_settings.hpp>
 #include <petari/efb_dump_mark.hpp>
 #include <petari/input.hpp>
@@ -268,31 +269,35 @@ App::FrameStats::Phase framePhaseForPipelines() {
         }
         testWarp.clear();
     }
-    // Test driver (PETARI_CAMERA_TEST=1, with the Odyssey camera mod on): a fixed
-    // script of right-stick orbit, pitch, zoom, mouse drag and recentre during gameplay,
-    // then a collision sweep: farthest zoom, camera below Mario, one full turn (the
-    // line of sight must hit the floor and nearby walls; XFB label "camera-sweep").
+    // Test driver (PETARI_CAMERA_TEST=1, with the Odyssey camera mod on), counted only
+    // while the orbit is active (scripted cameras leave it alone): first a collision
+    // sweep (farthest zoom, camera below Mario, one full turn: the line of sight must
+    // hit the floor and nearby walls; XFB label "camera-sweep"), then right-stick orbit,
+    // pitch, zoom, mouse drag and recentre. PETARI_CAMERA_TEST_DELAY=N waits N orbit
+    // frames first (e.g. until a smoke's movement checks, which read the camera, are over).
     static const bool cameraTest = std::getenv("PETARI_CAMERA_TEST") != nullptr;
+    static const long cameraDelay = std::getenv("PETARI_CAMERA_TEST_DELAY") ? std::atol(std::getenv("PETARI_CAMERA_TEST_DELAY")) : 0;
     static long cameraFrames = 0;
-    if (cameraTest && gameplay && PetariNative::CameraSettings::enabled()) {
+    if (cameraTest && gameplay && PetariNative::CameraSettings::enabled() && petari_camera_orbit_active() &&
+        ++cameraFrames > cameraDelay) {
         namespace Camera = PetariNative::CameraSettings;
-        const long f = ++cameraFrames % 900;
-        if (f == 60) std::fputs("[camera-test] orbit right\n", stderr);
-        if (f == 300) std::fputs("[camera-test] pitch, zoom, drag, recentre\n", stderr);
-        Camera::stick(f >= 60 && f < 180 ? 0.7f : 0.0f, f >= 240 && f < 300 ? 0.6f : 0.0f);
-        if (f == 320) Camera::zoomSteps(4.0f);
-        if (f == 380) Camera::zoomSteps(-6.0f);
-        if (f >= 420 && f < 450) Camera::mouseDrag(-8.0f, 2.0f);
-        if (f == 600) Camera::recenter();
-        if (f == 650) {
+        const long f = (cameraFrames - cameraDelay) % 900;
+        if (f == 30) {
             std::fputs("[camera-test] collision sweep\n", stderr);
             PetariNative::EfbDump::mark("camera-sweep");
             Camera::zoomSteps(20.0f);
         }
-        if (f >= 650 && f < 700) Camera::stick(0.0f, -1.0f);
-        if (f >= 700 && f < 820) Camera::stick(1.0f, 0.0f);
-        if (f == 820) Camera::stick(0.0f, 0.0f);
-        if (f == 860) Camera::recenter();
+        if (f == 300) std::fputs("[camera-test] orbit right\n", stderr);
+        if (f == 540) std::fputs("[camera-test] pitch, zoom, drag, recentre\n", stderr);
+        const float sweepX = f >= 80 && f < 200 ? 1.0f : 0.0f, sweepY = f >= 30 && f < 80 ? -1.0f : 0.0f;
+        Camera::stick(f >= 300 && f < 420 ? 0.7f : sweepX, f >= 480 && f < 540 ? 0.6f : sweepY);
+        if (f == 240) Camera::recenter();
+        if (f == 560) Camera::zoomSteps(4.0f);
+        if (f == 620) Camera::zoomSteps(-6.0f);
+        if (f >= 660 && f < 690) Camera::mouseDrag(-8.0f, 2.0f);
+        if (f == 840) Camera::recenter();
+    } else if (cameraTest) {
+        PetariNative::CameraSettings::stick(0.0f, 0.0f);
     }
     static long gameplayFrames = 0;
     if (period > 1 && gameplay) {

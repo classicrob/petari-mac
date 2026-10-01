@@ -27,6 +27,9 @@ typedef struct PetariCameraInput {
 /* Game thread, once per frame: the input since the last call. */
 void petari_camera_take_input(PetariCameraInput* out);
 
+/* Whether the orbit currently drives the camera (game side; for test drivers). */
+int petari_camera_orbit_active(void);
+
 #ifdef __cplusplus
 }
 #endif

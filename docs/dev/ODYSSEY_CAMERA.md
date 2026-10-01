@@ -91,9 +91,13 @@ space, and the previous up vector.
 - **Recentre (C):** ease yaw to behind Mario's facing and pitch to 15 deg over
   ~0.3 s. The game's own C reset still runs underneath, which is harmless.
 - **Collision:** a line from target to the desired eye
-  (`MR::getFirstPolyOnLineToMap`, camera-through codes ignored) shortens `r` to
-  the hit minus 60 units; it eases back out when clear. The game's own
-  `CameraViewInterpolator` collision then runs on the result as usual.
+  (`MR::getFirstPolyOnLineToMap` with the `MR::isCameraCodeThrough` filter, as
+  `CameraFollow` uses, so grates, foliage and glass don't block) shortens `r` to
+  the hit minus 60 units; it eases back out when clear. If the hit is the floor
+  below the target and would bring the eye closer than 320 units (into Mario),
+  the pitch is raised in 5 degree steps (up to 60) until the floor no longer cuts
+  the view, and kept there. The game's own `CameraViewInterpolator` collision
+  then runs on the result as usual.
 
 ## Values: SMO-derived vs tuned
 
@@ -114,6 +118,7 @@ distances and angles live in game data files that are not publicly documented. S
 | Auto-follow | after 2 s idle, 0.75 deg/frame | tuned |
 | Recentre | 18 frames (0.3 s) to behind Mario, 15 deg up | tuned (matches the 0.3 s fan re-creations use; not measured) |
 | Collision | line of sight, 60 margin, pull in at once, ease out 10%/frame | tuned (SMO's `CameraArrowCollider` not decompiled) |
+| Floor lift | pitch raised in 5 deg steps when the floor would pull the eye within 320 | tuned (live sweeps 2026-10-01: without it the eye ended inside Mario in Good Egg) |
 | Turn cap | 20 deg/frame | Galaxy: Mario re-frames his stick above 30 deg/frame |
 
 ## Input
@@ -137,6 +142,17 @@ invert vertical; saved in `camera.txt` next to `mods.txt` (`OdysseyCamera`,
 `Speed`, `InvertX`, `InvertY`, `ScrollMode`). `PETARI_ODYSSEY_CAMERA=1|0`
 overrides on/off for a run. The camera and Odyssey movement mods are independent:
 either works alone, or both together.
+
+## Live checks
+
+`PETARI_CAMERA_TEST=1` (with the mod on) drives the camera while the orbit is
+active: a collision sweep first (farthest zoom, pitch to the floor, one full
+turn; XFB label `camera-sweep`), then orbit, pitch, zoom, drag and recentre.
+`PETARI_CAMERA_TEST_DELAY=N` waits N orbit frames first, so a smoke's
+camera-relative movement checks finish before the camera turns.
+`PETARI_CAMERA_TRACE=1` logs every 60 frames: distance, wanted distance, how many
+frames the line of sight was blocked, the nearest allowed distance, elevation.
+Script: `build/camera/run3.sh` (stage smoke, 1200-frame delay, 1500-frame tail).
 
 ## Risks
 
