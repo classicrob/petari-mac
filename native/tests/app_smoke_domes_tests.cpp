@@ -164,6 +164,12 @@ int main() {
     }
     check(done && lander.result() == Result::Running, "landing on the chain's destination level skips the remaining kicks");
     check(landerLogged("continuing to waypoint 5"), "resumes at the nearest point on the landing level");
+    // Walked off the landing level soon after (a corner kick that landed on a cut-off
+    // ledge): retry the chain from its hop instead of looping on the lower level.
+    landObs.playerY = 100; landObs.playerOnGround = true;
+    lander.step(landObs);
+    check(landerLogged("retrying the chain from waypoint 2") && lander.result() == Result::Running,
+          "falling off the chain's landing level retries the chain from its hop");
     DomesDriver farLander(10000, config); Observation farObs;
     enterDome(farLander, farObs, true);
     farLander.step(farObs);

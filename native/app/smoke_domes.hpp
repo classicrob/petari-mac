@@ -149,6 +149,11 @@ private:
     int mKickRetries = 0;                      // wall-kick chain retries since the last walked point
     unsigned long mKickAt = 0;                 // frame of a pending wall-kick press
     unsigned long mKickSettle = 0;             // frames walked into the wall before a kick chain's hop
+    // After a kick chain lands: its Hop (to retry from) and the landing point, for
+    // kChainWatch frames (a corner kick can land on a ledge cut off from the route).
+    size_t mChainHop = static_cast< size_t >(-1);
+    float mChainLandX = 0, mChainLandY = 0, mChainLandZ = 0;
+    unsigned long mChainWatch = 0;
     // dome
     std::vector<Visit> mVisits;
     bool mMapRecorded = false;

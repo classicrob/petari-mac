@@ -49,6 +49,12 @@ constexpr float kKickLandingHeight = 60.0f;  // grounded this near the chain's l
 constexpr size_t kKickResumeWindow = 15;     // route points after the chain considered for resuming
 constexpr float kClingStill = 0.5f;           // per-frame movement of Mario clinging to a wall
 constexpr unsigned long kKickGroundLimit = 20;  // grounded this long: the kick chain fell short
+// After a kick chain lands, grounded this far below its landing level within
+// kChainWatch frames: Mario walked off a ledge the chain should not have ended on
+// (at the Engine Room chimney's corner the second kick can leave along either
+// wall face, depending on a few units of approach); retry the chain from its Hop.
+constexpr float kChainFallHeight = 200.0f;
+constexpr unsigned long kChainWatch = 600;
 constexpr unsigned long kMapSettle = 30;
 constexpr unsigned long kMoveHold = 45;
 constexpr unsigned long kMoveAfter = 15;
@@ -578,6 +584,30 @@ void DomesDriver::route(const Observation& o, Step& step) {
     if (mPhaseFrames % 120 == 0) {
         note("route waypoint " + std::to_string(mWaypoint) + ": " + number(distance) + " away, height " + number(height) + ", at " + text(pos));
     }
+    if (mChainHop != static_cast< size_t >(-1)) {
+        const float drop = dot(Vec{mChainLandX - pos.x, mChainLandY - pos.y, mChainLandZ - pos.z}, u);
+        if (o.playerOnGround && drop > kChainFallHeight) {
+            const size_t hop = mChainHop;
+            mChainHop = static_cast< size_t >(-1);
+            if (++mKickRetries > kRecoveries) {
+                finish(Result::Fail, "fell " + number(drop) + " below the wall-kick chain's landing level at " + text(pos) +
+                                         "; no retries left",
+                       step);
+                return;
+            }
+            note("fell " + number(drop) + " below the wall-kick chain's landing level at " + text(pos) + "; retrying the chain from waypoint " +
+                 std::to_string(hop));
+            mWaypoint = hop;
+            mAwaitJumpLanding = false;
+            mKickGrounded = 0;
+            mBestDistance = 1e30f;
+            mStuckFrames = 0;
+            mRecoveries = 0;
+            mPhaseFrames = 0;
+            return;
+        }
+        if (++mChainWatch > kChainWatch) mChainHop = static_cast< size_t >(-1);
+    }
     const Vec last{mLastX, mLastY, mLastZ};
     mLastX = pos.x; mLastY = pos.y; mLastZ = pos.z;
     const auto steerAlong = [&](Vec leg) {
@@ -653,6 +683,13 @@ void DomesDriver::route(const Observation& o, Step& step) {
                 }
             }
             note("wall-kick chain reached its landing level at " + text(pos) + "; continuing to waypoint " + std::to_string(resume));
+            size_t hop = mWaypoint;
+            while (hop > 0 && points[hop].action != DomeWaypoint::Hop) --hop;
+            if (points[hop].action == DomeWaypoint::Hop) {
+                mChainHop = hop;
+                mChainLandX = pos.x; mChainLandY = pos.y; mChainLandZ = pos.z;
+                mChainWatch = 0;
+            }
             mWaypoint = resume;
             mKickGrounded = 0;
             mAwaitJumpLanding = false;
