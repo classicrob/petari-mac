@@ -21,6 +21,11 @@
 #include "Game/Util/PlayerUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
 #include "Game/Util/StarPointerUtil.hpp"
+#ifdef PETARI_NATIVE
+// StarPieceDirector.cpp: native mods (native/MODS.md).
+bool petariModCollects(StarPiece* pPiece);
+void petariModShotHit(const StarPiece* pPiece, const HitSensor* pReceiver);
+#endif
 #include "Game/Util/TriangleFilter.hpp"
 #include <JSystem/J3DGraphBase/J3DStruct.hpp>
 #include <JSystem/JGeometry/TMatrix.hpp>
@@ -1077,6 +1082,12 @@ void StarPiece::tryGotJudge() {
     if (mGettableDelayCounter < 0) {
         bool isPointing = MR::isStarPointerPointing1Por2P(this, "弱", false, false);
         MR::getStarPointerLastPointedPort(this);
+#ifdef PETARI_NATIVE
+        if (!isPointing && petariModCollects(this)) {
+            *MR::getStarPointerLastPointedPort(this) = WPAD_CHAN0;
+            isPointing = true;
+        }
+#endif
 
         if (isPointing == true) {
             goToPlayer(TVec3f(_8C));
@@ -1147,6 +1158,9 @@ void StarPiece::attackSensor(HitSensor* pSender, HitSensor* pReceiver) {
     }
 
     if (MR::sendMsgStarPieceAttack(pReceiver, pSender)) {
+#ifdef PETARI_NATIVE
+        petariModShotHit(this, pReceiver);
+#endif
         MR::startSound(this, "SE_OJ_STAR_PIECE_HIT_ENEMY");
         kill();
     }

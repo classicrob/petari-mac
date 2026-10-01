@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 
@@ -12,13 +13,13 @@ namespace {
 constexpr float kDimOpacity = 0.5f;
 
 // Layout in KPAD space before the widescreen correction.
-constexpr float kPanelHalfWidth = 0.42f;
-constexpr float kPanelTop = -0.56f;
+constexpr float kPanelHalfWidth = 0.5f;
+constexpr float kPanelTop = -0.66f;
 constexpr float kPanelBottomMargin = 0.06f;  // below the last item
-constexpr float kItemHalfWidth = 0.34f;
-constexpr float kItemTop = -0.2f;
-constexpr float kItemHeight = 0.2f;
-constexpr float kItemSpacing = 0.26f;
+constexpr float kItemHalfWidth = 0.44f;
+constexpr float kItemTop = -0.3f;
+constexpr float kItemHeight = 0.19f;
+constexpr float kItemSpacing = 0.24f;
 
 // The Controls page: a larger panel, the lines, and Back at the bottom.
 constexpr float kControlsHalfWidth = 0.86f;
@@ -32,12 +33,13 @@ constexpr float kControlsBackTop = 0.68f;
 constexpr float kControlsBackHeight = 0.15f;
 constexpr float kControlsBackHalfWidth = 0.2f;
 
-constexpr const char* kListLabels[] = {"Resume", "Controls", "Restart from Title", "Quit"};
-constexpr int kListCount = 4;
+constexpr const char* kListLabels[] = {"Resume", "Controls", "Mods", "Restart from Title", "Quit"};
+constexpr int kListCount = 5;
 constexpr int kListResume = 0;
 constexpr int kListControls = 1;
-constexpr int kListRestart = 2;
-constexpr int kListQuit = 3;
+constexpr int kListMods = 2;
+constexpr int kListRestart = 3;
+constexpr int kListQuit = 4;
 constexpr int kConfirmAccept = 0;
 constexpr int kConfirmCancel = 1;
 
@@ -118,6 +120,7 @@ void Menu::update(const FrameInput& input) {
     case Phase::List:
     case Phase::Confirm:
     case Phase::Controls:
+    case Phase::Mods:
         break;
     }
 
@@ -184,12 +187,27 @@ void Menu::setControls(const ControlsEntry* entries, int count) {
     }
 }
 
+void Menu::setMods(const ModsEntry* entries, int count) {
+    mModCount = std::clamp(count, 0, kMaxMods);
+    for (int i = 0; i < mModCount; i++) {
+        mMods[i] = entries[i];
+        mMods[i].label[sizeof(mMods[i].label) - 1] = '\0';
+    }
+}
+
+std::uint32_t Menu::takeModToggles() {
+    const std::uint32_t toggles = mModToggles;
+    mModToggles = 0;
+    return toggles;
+}
+
 void Menu::startBlackOut() {
     switch (mPhase) {
     case Phase::Opening:
     case Phase::List:
     case Phase::Confirm:
     case Phase::Controls:
+    case Phase::Mods:
     case Phase::Closing:
         blackOut(Selection::Restart);
         break;
@@ -217,6 +235,7 @@ View Menu::view() const {
     case Phase::List:
     case Phase::Confirm:
     case Phase::Controls:
+    case Phase::Mods:
         view.panelOpacity = 1.0f;
         break;
     case Phase::Closing:
@@ -244,6 +263,13 @@ View Menu::view() const {
         }
         view.linesArea = {-kControlsLinesHalfWidth / ax, kControlsLinesTop, kControlsLinesHalfWidth / ax,
                           kControlsLinesBottom};
+    } else if (mPhase == Phase::Mods) {
+        view.title = "Mods";
+        view.message = "Off by default. Saved in mods.txt; keys in controls.txt.";
+        for (int i = 0; i < mModCount; i++) {
+            view.items[i].label = mModLabels[i];
+        }
+        view.items[mModCount].label = "Back";
     } else if (!confirm) {
         view.title = "Super Mario Galaxy";
         view.message = "Paused";
@@ -280,6 +306,9 @@ View Menu::view() const {
 int Menu::itemCount() const {
     if (mPhase == Phase::Controls) {
         return 1;
+    }
+    if (mPhase == Phase::Mods) {
+        return mModCount + 1;
     }
     return mConfirming != Selection::None ? 2 : kListCount;
 }
@@ -342,6 +371,15 @@ void Menu::activate(int index) {
             mFocus = 0;
             mRepeatDir = 0;
             break;
+        case kListMods:
+            play(Sound::Select);
+            for (int i = 0; i < mModCount; i++) {
+                std::snprintf(mModLabels[i], sizeof(mModLabels[i]), "%s: %s", mMods[i].label, mMods[i].on ? "On" : "Off");
+            }
+            mPhase = Phase::Mods;
+            mFocus = 0;
+            mRepeatDir = 0;
+            break;
         case kListRestart:
         case kListQuit:
             play(Sound::Select);
@@ -356,6 +394,19 @@ void Menu::activate(int index) {
         mPhase = Phase::List;
         mFocus = kListControls;
         mRepeatDir = 0;
+    } else if (mPhase == Phase::Mods) {
+        if (index >= 0 && index < mModCount) {
+            play(Sound::Select);
+            mMods[index].on = !mMods[index].on;
+            mModToggles |= 1u << index;
+            std::snprintf(mModLabels[index], sizeof(mModLabels[index]), "%s: %s", mMods[index].label,
+                          mMods[index].on ? "On" : "Off");
+        } else {
+            play(Sound::Cancel);
+            mPhase = Phase::List;
+            mFocus = kListMods;
+            mRepeatDir = 0;
+        }
     } else if (mPhase == Phase::Confirm) {
         if (index == kConfirmAccept) {
             play(mConfirming == Selection::Restart ? Sound::ResetApp : Sound::GotoMenu);
@@ -375,6 +426,8 @@ void Menu::back() {
         activate(kConfirmCancel);
     } else if (mPhase == Phase::Controls) {
         activate(0);
+    } else if (mPhase == Phase::Mods) {
+        activate(mModCount);
     } else {
         play(Sound::ReturnApp);
         close();

@@ -16,7 +16,7 @@ constexpr int kActionCount = static_cast<int>(Action::Count);
 const char* const kActionNames[kActionCount] = {
     "StickUp", "StickDown", "StickLeft", "StickRight", "A",        "B",        "Plus",     "Minus",     "Home",   "One",
     "Two",     "DpadUp",    "DpadDown",  "DpadLeft",   "DpadRight", "NunchukC", "NunchukZ", "Shake",     "TiltHold",
-    "PostureToggle", "Walk",   "Start",
+    "PostureToggle", "Walk",   "Start", "ModCollectStarBits", "ModShootEnemy",
 };
 
 const char* const kMouseNames[static_cast<int>(MouseButton::Count)] = {"Left", "Middle", "Right", "X1", "X2"};
@@ -315,6 +315,9 @@ Bindings Bindings::defaults() {
     // B together; it never sends B elsewhere, where B backs out of menus.
     b.bind(Action::Start, Binding::key(Key::Return));
     b.bind(Action::Start, Binding::key(Key::KeypadEnter));
+    // Mods (off by default, native/MODS.md): keys the game does not use.
+    b.bind(Action::ModCollectStarBits, Binding::key(Key::G));
+    b.bind(Action::ModShootEnemy, Binding::key(Key::V));
     // Game controllers: the usual console layout for this game. The left
     // stick is the Nunchuk stick and the right stick the Star Pointer (not
     // bindings; see RemoteModel). Start and Back would block pausing if they
@@ -334,6 +337,8 @@ Bindings Bindings::defaults() {
     b.bind(Action::Plus, Binding::pad(PadButton::Start));
     b.bind(Action::Minus, Binding::pad(PadButton::Back));
     b.bind(Action::Home, Binding::pad(PadButton::Guide));
+    // The only controller button left free; ModShootEnemy has no controller default.
+    b.bind(Action::ModCollectStarBits, Binding::pad(PadButton::LeftStick));
     return b;
 }
 

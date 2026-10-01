@@ -164,10 +164,13 @@ void testLifecycle() {
     }
     check(menu.phase() == HM::Phase::List, "list after the fade in");
     const HM::View list = menu.view();
-    check(list.itemCount == 4 && std::strcmp(list.items[0].label, "Resume") == 0 &&
-              std::strcmp(list.items[1].label, "Controls") == 0 &&
-              std::strcmp(list.items[2].label, "Restart from Title") == 0 && std::strcmp(list.items[3].label, "Quit") == 0,
-          "list offers Resume, Controls, Restart from Title, Quit");
+    check(list.itemCount == 5 && std::strcmp(list.items[0].label, "Resume") == 0 &&
+              std::strcmp(list.items[1].label, "Controls") == 0 && std::strcmp(list.items[2].label, "Mods") == 0 &&
+              std::strcmp(list.items[3].label, "Restart from Title") == 0 && std::strcmp(list.items[4].label, "Quit") == 0,
+          "list offers Resume, Controls, Mods, Restart from Title, Quit");
+    check(list.panel.y0 >= -1.0f && list.panel.y1 <= 1.0f && list.items[4].rect.y1 < list.panel.y1 &&
+              list.messageY < list.items[0].rect.y0,
+          "five items fit inside the panel and the image");
     check(list.items[0].focused && !list.items[1].focused, "Resume focused first");
 
     for (int i = 0; i < 300; i++) {
@@ -197,6 +200,7 @@ void testSelections() {
         openToList(menu);
         menu.update(press(Down));
         menu.update(press(Down));
+        menu.update(press(Down));
         if (quit) {
             menu.update(press(Down));
         }
@@ -210,7 +214,7 @@ void testSelections() {
         check(std::strcmp(confirm.items[0].label, quit ? "Quit" : "Restart") == 0, "confirm names the action");
         check(menu.focus() == 1, "Cancel focused by default");
         menu.update(press(A));
-        check(menu.phase() == HM::Phase::List && menu.focus() == (quit ? 3 : 2), "A on Cancel returns to the item");
+        check(menu.phase() == HM::Phase::List && menu.focus() == (quit ? 4 : 3), "A on Cancel returns to the item");
 
         menu.update(press(A));
         menu.update(press(Up));
@@ -241,10 +245,11 @@ void testCancellation() {
     openToList(menu);
     menu.update(press(Down));
     menu.update(press(Down));
+    menu.update(press(Down));
     menu.update(press(A));
     sounds.clear();
     menu.update(press(Plus | B));
-    check(menu.phase() == HM::Phase::List && menu.focus() == 2, "Escape in a confirmation goes back");
+    check(menu.phase() == HM::Phase::List && menu.focus() == 3, "Escape in a confirmation goes back");
     check(played(HM::Sound::Cancel), "cancel sound");
 
     menu.update(press(A));
@@ -263,6 +268,7 @@ void testCancellation() {
     check(menu.phase() == HM::Phase::Closing, "a left click outside the items is back");
 
     openToList(menu);
+    menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(A));
@@ -304,6 +310,7 @@ void testBlackOut() {
         if (at == HM::Phase::Confirm) {
             menu.update(press(Down));
             menu.update(press(Down));
+            menu.update(press(Down));
             menu.update(press(A));
         } else if (at == HM::Phase::Closing) {
             menu.update(press(A));
@@ -321,6 +328,7 @@ void testBlackOut() {
 
     // A reset during a Quit fade keeps its timing and becomes the reset result.
     openToList(menu);
+    menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
@@ -379,11 +387,15 @@ void testFocusAndRepeat() {
     check(menu.focus() == 2, "no second repeat before 6 more frames");
     menu.update(hold(Down));
     check(menu.focus() == 3, "second repeat 6 frames later");
+    for (int i = 0; i < 6; i++) {
+        menu.update(hold(Down));
+    }
+    check(menu.focus() == 4, "third repeat reaches the last item");
     sounds.clear();
     for (int i = 0; i < 12; i++) {
         menu.update(hold(Down));
     }
-    check(menu.focus() == 3 && sounds.empty(), "repeats stop at the end without sound");
+    check(menu.focus() == 4 && sounds.empty(), "repeats stop at the end without sound");
 
     // Interval, counted on the Up side: from item 2, press Up at 0 -> 1, repeat at 24 -> 0.
     openToList(menu);
@@ -423,26 +435,26 @@ void testFocusAndRepeat() {
     openToList(menu);
     const HM::View view = menu.view();
     float x, y;
-    center(view.items[3].rect, &x, &y);
+    center(view.items[4].rect, &x, &y);
     sounds.clear();
     menu.update(pointer(x, y));
-    check(menu.focus() == 3 && playedCount(HM::Sound::Focus) == 1, "pointer moving onto Quit focuses it");
+    check(menu.focus() == 4 && playedCount(HM::Sound::Focus) == 1, "pointer moving onto Quit focuses it");
     menu.update(pointer(x, y));
     check(playedCount(HM::Sound::Focus) == 1, "no sound while resting");
     HM::FrameInput up = pointer(x, y, Up);
     menu.update(up);
-    check(menu.focus() == 2, "keyboard moves the focus under a resting pointer");
+    check(menu.focus() == 3, "keyboard moves the focus under a resting pointer");
     menu.update(pointer(x, y));
-    check(menu.focus() == 2, "resting pointer does not steal the focus back");
+    check(menu.focus() == 3, "resting pointer does not steal the focus back");
     menu.update(pointer(x + 0.01f, y));
-    check(menu.focus() == 3, "moving the pointer takes the focus");
+    check(menu.focus() == 4, "moving the pointer takes the focus");
     menu.update(pointer(0.95f, 0.95f));
-    check(menu.focus() == 3, "leaving the items keeps the focus");
+    check(menu.focus() == 4, "leaving the items keeps the focus");
     menu.update(pointer(x, y, B));
     check(menu.phase() == HM::Phase::Confirm && menu.confirming() == HM::Selection::Quit, "left click on Quit");
 
     openToList(menu);
-    center(menu.view().items[2].rect, &x, &y);
+    center(menu.view().items[3].rect, &x, &y);
     menu.update(pointer(x, y));
     menu.update(pointer(0.95f, 0.95f));
     menu.update(press(A));
@@ -660,6 +672,7 @@ void testWrapper() {
     }
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
+    frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_A, WPAD_BUTTON_A);
     check(HM::instance().phase() == HM::Phase::Confirm, "Restart chosen through RSO::HBMCalc");
     frame(WPAD_BUTTON_UP, WPAD_BUTTON_UP);
@@ -688,6 +701,7 @@ void testWrapper() {
     for (int i = 0; i < 10; i++) {
         frame(0, 0);
     }
+    frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
@@ -780,6 +794,7 @@ void testImGuiOverlay() {
             HM::Menu confirm = newMenu();
             confirm.setWidescreen(wide != 0);
             openToList(confirm);
+            confirm.update(press(Down));
             confirm.update(press(Down));
             confirm.update(press(Down));
             if (quit) {
@@ -905,6 +920,7 @@ void testImGuiOverlay() {
 
     menu.update(press(Down));
     menu.update(press(Down));
+    menu.update(press(Down));
     menu.update(press(A));
     menu.update(press(Up));
     menu.update(press(A));
@@ -933,6 +949,46 @@ void testImGuiOverlay() {
 
 }  // namespace
 
+void testModsPage() {
+    HM::Menu menu = newMenu();
+    HM::ModsEntry entries[2];
+    std::strcpy(entries[0].label, "Collect visible Star Bits");
+    std::strcpy(entries[1].label, "Fire a Star Bit at the nearest enemy");
+    entries[1].on = true;
+    menu.setMods(entries, 2);
+    openToList(menu);
+    menu.update(press(Down));
+    menu.update(press(Down));
+    sounds.clear();
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::Mods && menu.focus() == 0 && played(HM::Sound::Select), "Mods opens its page");
+    HM::View view = menu.view();
+    check(std::strcmp(view.title, "Mods") == 0 && view.itemCount == 3 &&
+              std::strcmp(view.items[0].label, "Collect visible Star Bits: Off") == 0 &&
+              std::strcmp(view.items[1].label, "Fire a Star Bit at the nearest enemy: On") == 0 &&
+              std::strcmp(view.items[2].label, "Back") == 0,
+          "Mods page shows each toggle's state and Back");
+    check(menu.takeModToggles() == 0, "nothing toggled yet");
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::Mods && menu.mods()[0].on &&
+              std::strcmp(menu.view().items[0].label, "Collect visible Star Bits: On") == 0,
+          "A toggles the focused mod on and relabels it");
+    check(menu.takeModToggles() == 1u && menu.takeModToggles() == 0, "the toggle is reported once");
+    menu.update(press(Down));
+    menu.update(press(A));
+    check(!menu.mods()[1].on && menu.takeModToggles() == 2u, "second toggle turns off");
+    menu.update(press(Down));
+    check(menu.focus() == 2, "Back is last");
+    sounds.clear();
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::List && menu.focus() == 2 && played(HM::Sound::Cancel), "Back returns to Mods");
+    menu.update(press(A));
+    menu.update(press(Plus | B));
+    check(menu.phase() == HM::Phase::List && menu.focus() == 2 && menu.takeModToggles() == 0, "Escape returns, no toggle");
+    menu.update(press(A));
+    check(std::strcmp(menu.view().items[0].label, "Collect visible Star Bits: On") == 0, "state kept on reopen");
+}
+
 int main() {
     testLifecycle();
     testSelections();
@@ -940,6 +996,7 @@ int main() {
     testBlackOut();
     testFocusAndRepeat();
     testControlsPage();
+    testModsPage();
     testBridgeInput();
     testWrapper();
 #ifdef PETARI_HOME_MENU_TEST_IMGUI

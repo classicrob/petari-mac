@@ -86,6 +86,8 @@ std::uint32_t actionBits(Action action) {
     case Action::PostureToggle: return kBitPostureToggle;
     case Action::Walk: return kBitWalk;
     case Action::Start: return 0x0800;  // plus B while the title prompt is up (RemoteModel::heldBits)
+    case Action::ModCollectStarBits:
+    case Action::ModShootEnemy: return 0;  // not remote buttons (takeActionPresses)
     case Action::Count: break;
     }
     return 0;

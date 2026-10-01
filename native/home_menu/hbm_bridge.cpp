@@ -7,10 +7,13 @@
 
 #ifdef PETARI_HOME_MENU_INPUT
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "petari/host_allocation.hpp"
 #include "petari/input.hpp"
+#include "petari/mods.hpp"
 #endif
 
 namespace PetariNative::HomeMenu {
@@ -127,6 +130,35 @@ void refreshControls() {
     }
     instance().setControls(entries, count);
 }
+
+// The Mods page toggles, from the mod settings in effect now.
+void refreshMods() {
+    ModsEntry entries[kMaxMods];
+    const int count = std::min(static_cast<int>(Mods::Mod::Count), kMaxMods);
+    for (int i = 0; i < count; i++) {
+        const auto mod = static_cast<Mods::Mod>(i);
+        std::strncpy(entries[i].label, Mods::description(mod), sizeof(entries[i].label) - 1);
+        entries[i].on = Mods::enabled(mod);
+    }
+    instance().setMods(entries, count);
+}
+
+// Applies and saves toggles made on the Mods page this frame.
+void applyModToggles() {
+    const std::uint32_t toggles = instance().takeModToggles();
+    if (toggles == 0) {
+        return;
+    }
+    for (int i = 0; i < static_cast<int>(Mods::Mod::Count) && i < kMaxMods; i++) {
+        if (toggles & (1u << i)) {
+            Mods::setEnabled(static_cast<Mods::Mod>(i), instance().mods()[i].on);
+        }
+    }
+    std::string error;
+    if (!Mods::save(&error)) {
+        std::fprintf(stderr, "petari: mods: %s\n", error.c_str());
+    }
+}
 #endif
 
 void init() {
@@ -135,6 +167,7 @@ void init() {
     }
 #ifdef PETARI_HOME_MENU_INPUT
     refreshControls();
+    refreshMods();
 #endif
     instance().open();
 }
@@ -142,6 +175,9 @@ void init() {
 void calc(const HBMControllerData* controllers) {
     Menu& menu = instance();
     menu.update(frameInput(controllers));
+#ifdef PETARI_HOME_MENU_INPUT
+    applyModToggles();
+#endif
     if (menu.selection() != Selection::None) {
         // HomeButtonLayout hides itself this frame and stops calling draw.
         publish(View{});

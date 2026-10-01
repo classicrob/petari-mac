@@ -32,7 +32,8 @@ have input-component tests but have not been approved through gameplay:
 | Input | Action |
 | --- | --- |
 | Arrow keys | D-pad; Up enters first-person view where supported, Down or Space leaves it |
-| F1 | Native Home menu: Resume, Controls (every key as currently bound), Restart from Title, Quit |
+| F1 | Native Home menu: Resume, Controls (every key as currently bound), Mods, Restart from Title, Quit |
+| G / V | Optional mods (off by default; F1 → Mods): collect visible Star Bits / fire a Star Bit at the nearest enemy. See native/MODS.md |
 | Minus | Remote Minus (also pauses) |
 | 1 / 2 | Remote 1 / 2 (the game never needs them) |
 | Keypad Enter | Same as Return |
@@ -62,6 +63,7 @@ played with a physical controller yet.
 | Start | Pause |
 | Back | Minus |
 | Guide | Home menu |
+| L3 (left stick click) | Collect visible Star Bits mod (off by default; native/MODS.md) |
 
 Controller buttons remap in `controls.txt` like keys: for example
 `Shake=Pad:West,Pad:RightShoulder,Key:F`. The names are:

@@ -34,6 +34,7 @@
 #include "Game/System/WPadStick.hpp"
 #include "Game/Util/TriggerChecker.hpp"
 #include "petari/input.hpp"
+#include "petari/mods.hpp"
 #include "petari/platform/sc.hpp"
 #include "petari/platform/vi.hpp"
 #include "../input/remote_model.hpp"
@@ -1941,6 +1942,73 @@ void testSdl3() {
 
 }  // namespace
 
+void testMods() {
+    namespace Mods = PetariNative::Mods;
+    In::resetForTesting();
+    In::setBindings(In::Bindings::defaults());
+    // Presses of the mod keys are counted for the game, never sent to the remote.
+    In::keyEvent(In::Key::G, true, false);
+    check(In::takeActionPresses(In::Action::ModCollectStarBits) == 1, "G counts one collect press");
+    check(In::takeActionPresses(In::Action::ModCollectStarBits) == 0, "a press is taken once");
+    In::keyEvent(In::Key::G, true, true);
+    check(In::takeActionPresses(In::Action::ModCollectStarBits) == 0, "OS key repeat is not a press");
+    In::keyEvent(In::Key::G, false, false);
+    check(!In::boundState().jump && !In::boundState().spin, "mod keys drive no remote action");
+    In::keyEvent(In::Key::V, true, false);
+    In::keyEvent(In::Key::V, false, false);
+    check(In::takeActionPresses(In::Action::ModShootEnemy) == 1 && In::takeActionPresses(In::Action::ModCollectStarBits) == 0,
+          "V counts one shoot press only");
+    In::padButtonEvent(In::PadButton::LeftStick, true);
+    In::padButtonEvent(In::PadButton::LeftStick, false);
+    check(In::takeActionPresses(In::Action::ModCollectStarBits) == 1, "L3 collects");
+    In::keyEvent(In::Key::Space, true, false);
+    In::keyEvent(In::Key::Space, false, false);
+    check(In::takeActionPresses(In::Action::A) == 0 && In::takeActionPresses(In::Action::ModShootEnemy) == 0,
+          "other inputs and actions count nothing");
+    In::Bindings remapped = In::Bindings::defaults();
+    std::string error;
+    check(remapped.parse("ModShootEnemy=Mouse:Middle\nModCollectStarBits=\n", &error), "mod actions remap: " + error);
+    In::setBindings(remapped);
+    In::keyEvent(In::Key::G, true, false);
+    In::mouseButtonEvent(In::MouseButton::Middle, true);
+    check(In::takeActionPresses(In::Action::ModCollectStarBits) == 0 && In::takeActionPresses(In::Action::ModShootEnemy) == 1,
+          "remaps follow controls.txt");
+    In::keyEvent(In::Key::G, false, false);
+    In::mouseButtonEvent(In::MouseButton::Middle, false);
+
+    // Settings: off by default; presses while off are dropped, not queued.
+    Mods::resetForTesting();
+    check(!Mods::enabled(Mods::Mod::CollectStarBits) && !Mods::enabled(Mods::Mod::ShootEnemy), "every mod off by default");
+    In::injectActionPress(In::Action::ModCollectStarBits);
+    check(!petari_mod_take_press(0), "no press while the mod is off");
+    Mods::setEnabled(Mods::Mod::CollectStarBits, true);
+    check(!petari_mod_take_press(0), "a press made while off does not fire later");
+    In::injectActionPress(In::Action::ModCollectStarBits);
+    check(petari_mod_take_press(0) && !petari_mod_take_press(0), "a press while on fires once");
+    check(!petari_mod_take_press(7) && !petari_mod_enabled(-1), "unknown mods do nothing");
+    check(Mods::parse("# comment\nShootEnemy=on\nCollectStarBits=off\n", &error) &&
+              Mods::enabled(Mods::Mod::ShootEnemy) && !Mods::enabled(Mods::Mod::CollectStarBits),
+          "mods.txt parses");
+    check(!Mods::parse("ShootEnemy=yes\n", &error) && Mods::enabled(Mods::Mod::ShootEnemy), "bad value rejected, nothing changes");
+    check(!Mods::parse("Fly=on\n", &error), "unknown mod rejected");
+    const std::string text = Mods::serialize();
+    Mods::resetForTesting();
+    check(Mods::parse(text, &error) && Mods::enabled(Mods::Mod::ShootEnemy) && !Mods::enabled(Mods::Mod::CollectStarBits),
+          "serialize round-trips");
+    Mods::resetForTesting();
+    unsetenv("PETARI_MODS");
+    check(Mods::load("/nonexistent/petari-mods.txt", &error) && !Mods::enabled(Mods::Mod::ShootEnemy), "missing file: all off");
+    setenv("PETARI_MODS", "CollectStarBits", 1);
+    check(Mods::load("/nonexistent/petari-mods.txt", &error) && Mods::enabled(Mods::Mod::CollectStarBits) &&
+              !Mods::enabled(Mods::Mod::ShootEnemy),
+          "PETARI_MODS turns on the named mods");
+    setenv("PETARI_MODS", "Teleport", 1);
+    check(!Mods::load("/nonexistent/petari-mods.txt", &error), "PETARI_MODS rejects unknown mods");
+    unsetenv("PETARI_MODS");
+    Mods::resetForTesting();
+    In::resetForTesting();
+}
+
 int main() {
     __OSThreadInit();
     testBindings();
@@ -1959,6 +2027,7 @@ int main() {
     testSteering();
     testGamepad();
     testDevice();
+    testMods();
 #ifdef PETARI_INPUT_TEST_SDL3
     testSdl3();
 #endif

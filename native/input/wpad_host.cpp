@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <mutex>
 #include <thread>
 
@@ -533,21 +534,62 @@ Settings settings() {
     return model().settings();
 }
 
+namespace {
+constexpr Action kModActions[] = {Action::ModCollectStarBits, Action::ModShootEnemy};
+std::atomic<int> gModPresses[std::size(kModActions)];
+
+// Counts a down edge of an input bound to a mod action. Caller holds gHostMutex.
+void countModPress(Binding input) {
+    for (std::size_t i = 0; i < std::size(kModActions); ++i) {
+        const auto& bound = model().bindings().inputs(kModActions[i]);
+        if (std::find(bound.begin(), bound.end(), input) != bound.end()) {
+            gModPresses[i].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+}  // namespace
+
+int takeActionPresses(Action action) {
+    for (std::size_t i = 0; i < std::size(kModActions); ++i) {
+        if (kModActions[i] == action) {
+            return gModPresses[i].exchange(0, std::memory_order_relaxed);
+        }
+    }
+    return 0;
+}
+
+void injectActionPress(Action action) {
+    for (std::size_t i = 0; i < std::size(kModActions); ++i) {
+        if (kModActions[i] == action) {
+            gModPresses[i].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
 void keyEvent(KeyCode code, bool down, bool repeat) {
     gHostActivity = true;
     std::lock_guard<std::mutex> lock(gHostMutex);
+    if (down && !repeat) {
+        countModPress(Binding::key(code));
+    }
     model().keyEvent(code, down, repeat);
 }
 
 void mouseButtonEvent(MouseButton button, bool down) {
     gHostActivity = true;
     std::lock_guard<std::mutex> lock(gHostMutex);
+    if (down) {
+        countModPress(Binding::mouse(button));
+    }
     model().mouseButtonEvent(button, down);
 }
 
 void padButtonEvent(PadButton button, bool down) {
     gHostActivity = true;
     std::lock_guard<std::mutex> lock(gHostMutex);
+    if (down) {
+        countModPress(Binding::pad(button));
+    }
     model().padButtonEvent(button, down);
 }
 
@@ -671,6 +713,9 @@ void resetForTesting() {
             ch = Channel{};
         }
         gInitialized = false;
+        for (auto& presses : gModPresses) {
+            presses.store(0, std::memory_order_relaxed);
+        }
         gSensorBarPosition = WPAD_SENSOR_BAR_POS_BOTTOM;
         gDpdSensitivity = 3;
         gSpeakerVolume = 0x58;

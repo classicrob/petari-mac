@@ -5,6 +5,13 @@
 #include "Game/Scene/SceneObjHolder.hpp"
 #include "Game/Screen/StarPointerDirector.hpp"
 #include "Game/Util.hpp"
+#ifdef PETARI_NATIVE
+#include "Game/LiveActor/AllLiveActorGroup.hpp"
+#include "Game/LiveActor/HitSensorInfo.hpp"
+#include "Game/LiveActor/HitSensorKeeper.hpp"
+#include <petari/mods.hpp>
+#include <revolution/os.h>
+#endif
 
 void StarPieceDirector_FORCE_MATCH_SDATA2() {
     (void)0.0f;
@@ -227,9 +234,149 @@ bool StarPieceDirector::gotByPlayer() {
     return true;
 }
 
+#ifdef PETARI_NATIVE
+// Native mods (native/MODS.md), both off unless the player turns them on.
+// They act only where the game itself would let the pointer collect or shoot
+// Star Bits, and go through the game's own collect and shot paths.
+namespace {
+    constexpr int kModCollectFrames = 4;  // frames every on-screen Star Bit counts as pointed at
+    s32 sModCollectFrames = 0;
+    s32 sModCollected = 0;
+    s32 sModCountBefore = 0;
+    s32 sModReportFrames = 0;  // reports the Star Bit count once the sent ones have arrived
+    const StarPiece* sModShot = nullptr;
+
+    bool isPointerUsable() {
+        return !MR::isDemoActive() && MR::isStarPointerValid(WPAD_CHAN0) && !MR::isStarPointer1PInvalid2PValidMode();
+    }
+
+    // The nearest (to Mario) enemy sensor on screen and in view of the camera.
+    HitSensor* findNearestEnemySensor() {
+        AllLiveActorGroup* pGroup = MR::getAllLiveActorGroup();
+        if (pGroup == nullptr) {
+            return nullptr;
+        }
+
+        const TVec3f& rPlayer = *MR::getPlayerCenterPos();
+        const TVec3f& rCamera = MR::getCamPos();
+        HitSensor* pBest = nullptr;
+        f32 bestDist = 0.0f;
+
+        for (s32 i = 0; i < pGroup->getObjNum(); i++) {
+            LiveActor* pActor = pGroup->getActor(i);
+            if (pActor == nullptr || MR::isDead(pActor) || MR::isClipped(pActor) || MR::isHiddenModel(pActor)) {
+                continue;
+            }
+
+            HitSensorKeeper* pKeeper = pActor->getSensorKeeper();
+            if (pKeeper == nullptr) {
+                continue;
+            }
+
+            for (s32 j = 0; j < pKeeper->mSensorCount; j++) {
+                HitSensorInfo* pInfo = pKeeper->getNthSensorInfo(j);
+                HitSensor* pSensor = pInfo != nullptr ? pInfo->mSensor : nullptr;
+                if (pSensor == nullptr || !pSensor->isValid() || !MR::isSensorEnemy(pSensor) ||
+                    MR::isJudgedToClipFrustum(pSensor->mPosition, pSensor->mRadius)) {
+                    continue;
+                }
+
+                const f32 dist = (pSensor->mPosition - rPlayer).squared();
+                if (pBest != nullptr && dist >= bestDist) {
+                    continue;
+                }
+
+                TVec3f hit;
+                TVec3f toSensor(pSensor->mPosition - rCamera);
+                if (MR::getFirstPolyOnLineToMap(&hit, nullptr, rCamera, toSensor) &&
+                    hit.squared(rCamera) < toSensor.squared() * 0.95f) {
+                    continue;  // behind a wall
+                }
+
+                pBest = pSensor;
+                bestDist = dist;
+            }
+        }
+
+        return pBest;
+    }
+
+    // StarPieceShooter::shoot's path, aimed at a sensor instead of the pointer.
+    void tryModShoot(StarPieceDirector* pDirector) {
+        if (!isPointerUsable() || !MR::isEnableStarPointerShootStarPiece(WPAD_CHAN0)) {
+            OSReport("[mods] shoot: not allowed now\n");
+            return;
+        }
+        if (MR::getStarPieceNum() <= 0) {
+            MR::startCSSound("CS_NO_SPIECE", "SE_SY_CS_NO_PIECE", WPAD_CHAN0);  // as StarPieceShooter::tryShoot
+            OSReport("[mods] shoot: no star bits\n");
+            return;
+        }
+
+        HitSensor* pTarget = findNearestEnemySensor();
+        if (pTarget == nullptr) {
+            OSReport("[mods] shoot: no enemy on screen\n");
+            return;
+        }
+
+        StarPiece* pPiece = MR::getDeadStarPiece();
+        if (pPiece == nullptr) {
+            return;
+        }
+
+        const s32 before = MR::getStarPieceNum();
+        pPiece->throwToTarget(pTarget, pDirector->calcPosCameraShoot(0), *MR::getPlayerGravity(), 400.0f);
+        MR::startCSSound("CS_STARDUST_SHOOT", "SE_SY_CS_STAR_PIECE_SHOOT", WPAD_CHAN0);
+        sModShot = pPiece;
+        OSReport("[mods] shoot: %s at %.0f units, star bits %d -> %d\n", pTarget->mHost->mName,
+                 (pTarget->mPosition - *MR::getPlayerCenterPos()).length(), before, MR::getStarPieceNum());
+    }
+}  // namespace
+
+// StarPiece::tryGotJudge: every on-screen Star Bit counts as pointed at while
+// the collect mod's button was just pressed.
+bool petariModCollects(StarPiece* pPiece) {
+    if (sModCollectFrames <= 0 || MR::isClipped(pPiece) || MR::isHiddenModel(pPiece) ||
+        MR::isJudgedToClipFrustum(pPiece->mPosition, 28.0f)) {
+        return false;
+    }
+    sModCollected++;
+    return true;
+}
+
+// StarPiece::attackSensor: the mod's shot hit something that took the Star Bit.
+void petariModShotHit(const StarPiece* pPiece, const HitSensor* pReceiver) {
+    if (pPiece == sModShot) {
+        OSReport("[mods] shoot: hit %s\n", pReceiver->mHost->mName);
+        sModShot = nullptr;
+    }
+}
+#endif
+
 void StarPieceDirector::movement() {
     mResetChasingStarPiece = false;
     updateSound();
+#ifdef PETARI_NATIVE
+    if (sModCollectFrames > 0 && --sModCollectFrames == 0) {
+        OSReport("[mods] collect: %d star bits sent to Mario\n", sModCollected);
+        sModReportFrames = sModCollected > 0 ? 180 : 0;
+    }
+    if (sModReportFrames > 0 && --sModReportFrames == 0) {
+        OSReport("[mods] collect: star bits %d -> %d\n", sModCountBefore, MR::getStarPieceNum());
+    }
+    if (petari_mod_take_press(static_cast< int >(PetariNative::Mods::Mod::CollectStarBits))) {
+        if (isPointerUsable()) {
+            sModCollectFrames = kModCollectFrames;
+            sModCollected = 0;
+            sModCountBefore = MR::getStarPieceNum();
+        } else {
+            OSReport("[mods] collect: not allowed now\n");
+        }
+    }
+    if (petari_mod_take_press(static_cast< int >(PetariNative::Mods::Mod::ShootEnemy))) {
+        tryModShoot(this);
+    }
+#endif
 }
 
 void StarPieceDirector::updateSound() {

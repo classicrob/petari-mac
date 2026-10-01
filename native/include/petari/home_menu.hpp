@@ -19,7 +19,7 @@
 //   and reports HBM_SELECT_BTN2; the layout's _25 flag only matters for that
 //   result. While the menu is closed it has no effect.
 //
-// The menu offers Mac actions (Resume, Controls, Restart from Title, Quit) and
+// The menu offers Mac actions (Resume, Controls, Mods, Restart from Title, Quit) and
 // does not present Wii system features. Controls lists the keyboard and mouse
 // controls as currently bound (setControls; the bridge refreshes them from the
 // input layer each time the menu opens, so controls.txt remaps show). Rendering is a Dear ImGui overlay drawn in the
@@ -47,9 +47,10 @@ enum class Selection : int { None = -1, Resume = 0, Quit = 1, Restart = 2 };
 enum class Phase : std::uint8_t {
     Closed,    // before the first open
     Opening,   // fade in; input ignored
-    List,      // Resume / Controls / Restart from Title / Quit
+    List,      // Resume / Controls / Mods / Restart from Title / Quit
     Confirm,   // confirming Restart or Quit
     Controls,  // the controls page, with Back
+    Mods,      // on/off toggles for the native mods, with Back
     Closing,   // fade out before reporting Resume
     BlackOut,  // fade to black before reporting Restart or Quit
     Finished,  // selection() reports the result
@@ -114,8 +115,15 @@ struct Rect {
     bool contains(float x, float y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
 };
 
-constexpr int kMaxItems = 4;
+constexpr int kMaxItems = 5;
 constexpr int kMaxControls = 20;
+constexpr int kMaxMods = 4;
+
+// One toggle of the Mods page: what the mod does, and whether it is on.
+struct ModsEntry {
+    char label[48] = {};
+    bool on = false;
+};
 
 // One line of the Controls page: what the player does, the keyboard and
 // mouse inputs, and the game controller's (empty: none). An empty action
@@ -163,6 +171,12 @@ public:
     // The Controls page contents (at most kMaxControls lines; longer text is
     // cut). Kept across opens.
     void setControls(const ControlsEntry* entries, int count);
+    // The Mods page toggles (at most kMaxMods). Kept across opens.
+    void setMods(const ModsEntry* entries, int count);
+    // Toggles the player activated since the last call: bit i is entry i,
+    // whose new state is in mods()[i]. The caller applies and saves them.
+    std::uint32_t takeModToggles();
+    const ModsEntry* mods() const { return mMods; }
     Selection selection() const { return mPhase == Phase::Finished ? mResult : Selection::None; }  // HBMGetSelectBtnNum
 
     Phase phase() const { return mPhase; }
@@ -203,6 +217,10 @@ private:
     float mPointerY = 0.0f;
     int mControlCount = 0;
     ControlsEntry mControls[kMaxControls];
+    int mModCount = 0;
+    ModsEntry mMods[kMaxMods];
+    char mModLabels[kMaxMods][64] = {};
+    std::uint32_t mModToggles = 0;
 };
 
 // --- The game's menu instance (HomeButtonMenuWrapper.cpp's native branch) ---

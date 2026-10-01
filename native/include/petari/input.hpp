@@ -91,6 +91,10 @@ enum class Action : std::uint8_t {
     PostureToggle,   // switch the remote between pointing at the screen and upright
     Walk,            // while held, the stick moves at Settings::walkStickScale
     Start,           // A; A and B together while the title asks for both (titlePromptShown)
+    // Native mods (native/MODS.md). Not remote buttons: each press is counted
+    // for the game side (takeActionPresses) and does nothing unless its mod is on.
+    ModCollectStarBits,
+    ModShootEnemy,
     Count
 };
 
@@ -262,6 +266,12 @@ enum class Steering : std::uint8_t {
     Ray,   // Ray surfing (SurfRay::updateRide): level, A/D twist, W/S ignored
 };
 void motionControlShown(Steering steering);
+
+// Presses (down edges, OS repeats ignored) of an input bound to a mod action
+// since the last call, then zero. Any thread. Other actions always return 0.
+int takeActionPresses(Action action);
+// Adds one press of a mod action, as if its key went down (tests and drivers).
+void injectActionPress(Action action);
 
 // Read-only bound output for route recording, including controller axes.
 struct BoundState {

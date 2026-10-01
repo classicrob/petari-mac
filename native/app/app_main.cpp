@@ -23,6 +23,8 @@
 #include <petari/test_fixture.hpp>
 #include <petari/unlocked_save.hpp>
 #include <petari/pipeline_startup.hpp>
+#include <petari/mods.hpp>
+#include <petari/input.hpp>
 
 #include "host.hpp"
 #include "smoke_background.hpp"
@@ -190,7 +192,26 @@ bool prepareKnownPipelines(SDL_Window* window) {
 // must yield to gameplay (menus, file select, loading and pause run them at full speed).
 App::FrameStats::Phase framePhaseForPipelines() {
     const App::FrameStats::Phase phase = App::Host::framePhase();
-    petari_gx_pipeline_set_gameplay(phase == App::FrameStats::Phase::Gameplay && !App::Host::pauseMenuActive());
+    const bool gameplay = phase == App::FrameStats::Phase::Gameplay && !App::Host::pauseMenuActive();
+    petari_gx_pipeline_set_gameplay(gameplay);
+    // Test driver (PETARI_MODS_AUTOPRESS=<frames>): during gameplay, press the
+    // collect mod's button every <frames> frames and the shoot mod's halfway
+    // between. The mods still decide whether a press does anything.
+    static const long period = [] {
+        const char* value = std::getenv("PETARI_MODS_AUTOPRESS");
+        return value != nullptr ? std::strtol(value, nullptr, 10) : 0L;
+    }();
+    static long gameplayFrames = 0;
+    if (period > 1 && gameplay) {
+        ++gameplayFrames;
+        if (gameplayFrames % period == 0) {
+            PetariNative::Input::injectActionPress(PetariNative::Input::Action::ModCollectStarBits);
+            std::fprintf(stderr, "[mods-test] collect press at gameplay frame %ld\n", gameplayFrames);
+        } else if (gameplayFrames % period == period / 2) {
+            PetariNative::Input::injectActionPress(PetariNative::Input::Action::ModShootEnemy);
+            std::fprintf(stderr, "[mods-test] shoot press at gameplay frame %ld\n", gameplayFrames);
+        }
+    }
     return phase;
 }
 
@@ -222,6 +243,14 @@ int main(int argc, char** argv) {
     if (!App::Events::loadControls(paths.user / "controls.txt", &error)) {
         std::fprintf(stderr, "petari: controls: %s\n", error.c_str());
         return 1;
+    }
+    if (!PetariNative::Mods::load(paths.user / "mods.txt", &error)) {
+        std::fprintf(stderr, "petari: mods: %s\n", error.c_str());
+        return 1;
+    }
+    for (int m = 0; m < static_cast<int>(PetariNative::Mods::Mod::Count); ++m) {
+        const auto mod = static_cast<PetariNative::Mods::Mod>(m);
+        if (PetariNative::Mods::enabled(mod)) std::fprintf(stderr, "PETARI MODS: %s on\n", PetariNative::Mods::name(mod));
     }
 
     SDL_SetHintWithPriority("PETARI_SMOKE_BACKGROUND", App::SmokeBackground::enabled ? "1" : "0", SDL_HINT_OVERRIDE);
