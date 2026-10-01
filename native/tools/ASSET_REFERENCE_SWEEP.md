@@ -6,7 +6,7 @@ Run from the repository root; this never launches the game:
 python3 native/tools/asset_reference_sweep.py \
   --output build/asset-reference-sweep.json \
   --inventory build/asset-reference-inventory.json
-build/locked-build.sh asset-sweep ctest --test-dir build/macos-gx \
+ctest --test-dir build/macos-gx \
   -R '^native_(asset_reference_sweep|galaxy_name_plate)$' --output-on-failure
 ```
 

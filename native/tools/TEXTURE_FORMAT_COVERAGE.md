@@ -13,7 +13,7 @@ format/path coverage, not an image-fidelity or exhaustive decoder proof.
 
 ## Disc inventory
 
-Run `texture_format_inventory.py` under `build/locked-build.sh`. It parses BTI,
+Run `texture_format_inventory.py` with no concurrent builds (it is CPU heavy). It parses BTI,
 J3D TEX1, JPA TEX1, TPL and RFNT/TGLP headers inside nested RARC archives, retains
 input SHA-256 hashes and resource offsets, and records source-level GX calls.
 BTK animation blocks are not texture blocks. The AudioRes/Info/JaiMe.arc

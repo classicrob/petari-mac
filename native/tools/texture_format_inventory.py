@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Inventory serialized texture formats and source-level runtime format uses.
 
-Run the full corpus under locked-build.sh. This reads original disc bytes;
+Run the full corpus with no concurrent builds. This reads original disc bytes;
 it does not launch a GPU or claim dynamic source expressions are resolved.
 """
 import argparse

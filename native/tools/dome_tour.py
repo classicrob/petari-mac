@@ -14,8 +14,8 @@ missing reference logged between that galaxy's selection and its return. A
 session that crashes (crash report, signal) or hangs (watchdog exit 124,
 petari-hang-*.sample.txt kept) fails the visit in progress.
 
-In the shared checkout run it under the app lock:
-  build/locked-app.sh NAME python3 native/tools/dome_tour.py --app APP --output DIR
+Example (run one app at a time):
+  python3 native/tools/dome_tour.py --app APP --output DIR
 """
 import argparse
 import json

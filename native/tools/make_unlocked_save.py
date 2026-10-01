@@ -13,8 +13,8 @@ Variants (native/SAVES.md):
   complete-luigi  all-missions plus the 120-star ending: Luigi playable (fresh).
   grand-finale    120 stars for Mario and Luigi: Grand Finale Galaxy open too.
 
-Example (in this shared checkout, run the whole script under the app lock):
-  build/locked-app.sh my-name python3 native/tools/make_unlocked_save.py --variant all-missions
+Example (run one app at a time):
+  python3 native/tools/make_unlocked_save.py --variant all-missions
 """
 import argparse
 import hashlib
