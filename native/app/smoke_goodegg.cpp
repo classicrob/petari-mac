@@ -19,6 +19,9 @@ constexpr unsigned long kTapFrames = 6;
 constexpr unsigned long kSpinInterval = 30;     // a spin lasts about this long; more taps are ignored
 constexpr unsigned long kVineSpinInterval = 20;
 constexpr unsigned long kTalkTapInterval = 45;
+constexpr unsigned long kNoticeRead = 45;    // frames an information notice is read before A
+constexpr unsigned long kNoticeRetap = 60;   // A again if it is still open after this
+constexpr int kNoticeTaps = 5;               // then FAIL: a notice that ignores A is a fault
 constexpr unsigned long kTalkStartInterval = 60;
 constexpr unsigned long kMissionLimit = 90000;  // 25 minutes of play (restarts included)
 constexpr int kMaxDeaths = 2;                   // the game's own restart after a death, as a player retries
@@ -443,19 +446,45 @@ bool GoodEggDriver::followRoute(const Observation& o, const std::vector<Point3>&
 }
 
 StickKeys stickKeysForWorld(const Observation& o, const Point3& direction) {
+    // Mario::calcMoveDir (src/Game/Player/MarioMove.cpp), 3D case: the stick maps to
+    // groundX * x - groundY * y, with groundY = camX x up and groundX built from the
+    // camera's up (camera looking along Mario's up) or its view direction; camera
+    // axes as MarioActor::updateCameraInfo caches them (MR::getCam?dir; Z is the view).
+    // The stick is the least-squares solution for the wanted direction across the ground.
     const Vec u = up(o);
     const Vec d = across(vec(direction), u);
-    const Vec camX{o.camXx, o.camXy, o.camXz};
-    const Vec camZ{o.camZx, o.camZy, o.camZz};  // MR::getCamZdir: the view direction
-    const Vec camY = cross(camZ * -1.0f, camX);  // the camera's up (X right, Y up, -Z view)
-    const Vec right = normalized(across(camX, u));
-    // Screen-up on the ground: the view direction when the camera looks along
-    // the ground, its up when it looks down on Mario; their sum covers both.
-    const Vec forward = normalized(across(camZ, u) + across(camY, u));
-    if (length(d) < 1e-3f || length(right) < 0.5f || length(forward) < 0.5f) {
+    const Vec screenX{o.camXx, o.camXy, o.camXz};
+    const Vec camZ{o.camZx, o.camZy, o.camZz};
+    const Vec screenZ = camZ * -1.0f;
+    const Vec screenY = cross(screenZ, screenX);  // MR::getCamYdir
+    if (length(d) < 1e-3f) {
         return {};
     }
-    return stickKeysFor(dot(d, right), dot(d, forward));
+    const float sy = dot(screenY, u), sz = dot(screenZ, u);
+    Vec groundX, groundYOrtho;
+    if (std::fabs(sz) > std::fabs(sy)) {
+        groundYOrtho = sz < 0.0f ? screenY * -1.0f : screenY;
+        groundX = cross(groundYOrtho, u);
+    } else {
+        groundYOrtho = camZ;
+        if (sy < 0.0f) {
+            groundYOrtho = groundYOrtho * -1.0f;
+            groundX = cross(screenZ, u);
+        } else {
+            groundX = cross(camZ, u);
+        }
+    }
+    Vec groundY = cross(screenX, u);
+    if (length(groundX) < 1e-4f) return {};  // the game falls back to camera X: too uncertain to steer
+    if (length(groundY) < 1e-4f) groundY = groundYOrtho;
+    groundX = normalized(groundX);
+    groundY = normalized(groundY) * -1.0f;  // the stick-up axis
+    // Solve groundX * x + groundY * y = d (least squares).
+    const float a = dot(groundX, groundX), b = dot(groundX, groundY), c = dot(groundY, groundY);
+    const float p = dot(groundX, d), q = dot(groundY, d);
+    const float det = a * c - b * b;
+    if (std::fabs(det) < 0.25f) return {};  // nearly parallel axes: no reliable direction
+    return stickKeysFor((c * p - b * q) / det, (a * q - b * p) / det);
 }
 
 bool goodEggEnabledFromEnvironment(GoodEggConfig* config) {
@@ -675,6 +704,13 @@ Step GoodEggDriver::step(const Observation& o) {
     for (const std::string& milestone : o.milestones) {
         note("milestone " + milestone);
         mSeen.push_back(milestone);
+        if (milestone == "InformationObserver.Close") {
+            mNotice.clear();
+        } else if (milestone.rfind("InformationObserver", 0) == 0) {
+            mNotice = milestone;
+            mNoticeFrame = mFrame;
+            mNoticeTaps = 0;
+        }
     }
     if (mFrame >= mFrameLimit) {
         finish(Result::Fail, "frame limit " + std::to_string(mFrameLimit) + " reached while " + phase(), step);
@@ -699,6 +735,23 @@ Step GoodEggDriver::step(const Observation& o) {
         }
     }
 
+    if (!mNotice.empty()) {
+        // The notice takes A after its 30-frame minimum (InformationObserver::exeDisp);
+        // read it, then press A as a player would, again if it stays open.
+        steer({}, step);
+        if (mFrame - mNoticeFrame >= kNoticeRead && (mNoticeTaps == 0 || mFrame - mNoticeTapFrame >= kNoticeRetap)) {
+            if (mNoticeTaps >= kNoticeTaps) {
+                finish(Result::Fail, "information notice " + mNotice + " did not close after " + std::to_string(kNoticeTaps) + " A presses",
+                       step);
+                return step;
+            }
+            ++mNoticeTaps;
+            mNoticeTapFrame = mFrame;
+            note("tap A: information notice " + mNotice);
+            tap(Button::A, kTapFrames, step);
+        }
+        return step;
+    }
     switch (mPhase) {
     case Phase::Mission:
         mission(o, step);

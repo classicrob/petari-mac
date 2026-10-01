@@ -229,6 +229,8 @@ void recordRouteFrame(bool background) {
                 const auto* ground = actor->getMario()->mGroundPolygon;
                 if (ground && ground->isValid()) row.zone = ground->getHostPlacementZoneID();
                 row.bound = MR::isPlayerInBind();
+                row.dead = MR::isPlayerDead();
+                row.powerStars = GameDataFunction::calcCurrentPowerStarNum();
             }
         }
     }

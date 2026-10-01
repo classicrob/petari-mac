@@ -43,6 +43,8 @@ int main(int argc,char** argv) {
             self.assertEqual(rows[0]['up_y'],'1.000000')
             self.assertEqual(rows[0]['spin'],'1')
             self.assertEqual(rows[0]['jump'],'1')
+            self.assertEqual(rows[0]['power_stars'],'-1')
+            self.assertEqual(rows[0]['dead'],'0')
             self.assertNotIn(None,rows[0])
 
     def test_jump_spin_landing_and_multiple_visits(self):
@@ -60,17 +62,40 @@ int main(int argc,char** argv) {
         def row(frame,x,y,ground,jump=0,spin=0,bound=0):
             return dict(frame=str(frame),stage='AstroGalaxy',valid='1',x=str(x),y=str(y),z='0',
                         grounded=str(ground),jump=str(jump),spin=str(spin),bound=str(bound))
-        rows=[row(0,0,0,1),row(1,0,20,0,1),row(2,5,100,0),row(3,5,100,0,1),row(4,50,200,0),
-              row(5,90,200,0,1),row(6,90,300,0),row(7,100,300,1),row(8,110,300,1),
+        rows=[row(0,0,0,1),row(1,0,20,0,1),row(2,5,100,0),row(3,5,100,0),row(3,5,100,0,1),row(4,50,200,0),
+              row(5,90,200,0),row(5,90,200,0),row(5,90,200,0,1),row(6,90,300,0),row(7,100,300,1),row(8,110,300,1),
               row(9,120,310,0,0,0,1),row(10,130,320,0,0,1,1),row(11,2000,320,0,0,0,1),row(12,2000,300,1)]
         points=convert(rows)
         self.assertEqual([a for *_,a in points if a!='Walk'],['Hop','Kick','Kick','Launch'])
         self.assertIn((5.,100.,0.,'Kick'),points)
         self.assertIn((110.,300.,0.,'Launch'),points)
         self.assertNotIn('Spin',[a for *_,a in points])
-        warp=[dict(r,spin='0') for r in rows[6:]]
+        flying=[row(0,0,0,1),row(1,0,20,0,1),row(2,40,100,0),row(3,80,180,0,1),row(4,120,0,1)]
+        self.assertNotIn('Kick',[a for *_,a in convert(flying)])
+        warp=[dict(r,spin='0') for r in rows[9:]]
         self.assertIn((110.,300.,0.,'Warp'),convert(warp))
         with self.assertRaises(ValueError): convert([])
+
+class SpinBeforeBindTests(unittest.TestCase):
+    def test_spin_just_before_the_bind_is_a_launch(self):
+        def row(frame,x,ground,spin=0,bound=0):
+            return dict(frame=str(frame),stage='AstroGalaxy',valid='1',x=str(x),y='0',z='0',
+                        grounded=str(ground),jump='0',spin=str(spin),bound=str(bound))
+        rows=[row(0,0,1),row(1,50,1),row(2,50,1,1),row(3,50,1,1),row(4,60,0,1,1),row(5,3000,0,0,1),row(6,3000,1)]
+        self.assertIn((50.,0.,0.,'Launch'),convert(rows))
+        self.assertNotIn('Warp',[a for *_,a in convert(rows)])
+
+class RetryErasureTests(unittest.TestCase):
+    def test_respawn_keeps_final_attempt_and_scripted_warp(self):
+        from recorded_route import erase_retries
+        a,b,c,far=((0,0,0),"Walk"),((500,0,0),"Walk"),((1000,0,0),"Walk"),((5000,0,0),"Walk")
+        # walk a->b->c, die (teleport back near a), walk a->b->c->far
+        points=[a,b,c,((1000,0,0),"Warp"),((10,0,0),"Walk"),b,c,far]
+        self.assertEqual(erase_retries(points),[a,((10,0,0),"Walk"),b,c,far])
+        hub=[a,((0,0,0),"Launch"),((8000,0,0),"Walk"),((8000,0,0),"Launch"),((20,0,0),"Walk"),((0,0,0),"Launch"),((8000,0,0),"Walk"),far]
+        self.assertEqual(erase_retries(hub),[a,((20,0,0),"Walk"),((0,0,0),"Launch"),((8000,0,0),"Walk"),far])
+        scripted=[a,b,((500,0,0),"Warp"),((9000,0,0),"Walk")]
+        self.assertEqual(erase_retries(scripted),scripted)
 
 class RouteTableTests(unittest.TestCase):
     def test_generator_cannot_overwrite_verified_routes(self):

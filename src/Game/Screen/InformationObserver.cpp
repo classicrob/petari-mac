@@ -11,6 +11,14 @@
 #include "Game/Util/ScreenUtil.hpp"
 #include "Game/Util/SoundUtil.hpp"
 
+#ifdef PETARI_NATIVE
+// Progress telemetry and the automated smoke run (native/app); observation only.
+#include <petari/milestone.hpp>
+#define NATIVE_MILESTONE(name) petari_milestone(name)
+#else
+#define NATIVE_MILESTONE(name)
+#endif
+
 struct InformationObserverAttribute {
     /* 0x00 */ const char* mMessageId;
     /* 0x04 */ bool _4;
@@ -78,6 +86,7 @@ void InformationObserver::exeWait() {
 
 void InformationObserver::exeDisp() {
     if (MR::isFirstStep(this)) {
+        NATIVE_MILESTONE(sAttr[mType].mMessageId);  // the notice shown ("InformationObserverOneUp", ...)
         if (mType == Type_LifeUp && MR::isPlayerLuigi()) {
             MR::appearInformationMessage(MR::getLayoutMessageDirect("InformationObserverLifeUpLuigi"), true);
         } else {
@@ -117,6 +126,7 @@ void InformationObserver::exeDisp() {
 
     MR::startSystemSE("SE_SY_TALK_OK");
     MR::disappearInformationMessage();
+    NATIVE_MILESTONE("InformationObserver.Close");
 
     switch (mType) {
     case Type_Bee:

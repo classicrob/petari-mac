@@ -164,6 +164,11 @@ private:
     unsigned long mLastSpin = 0;
     unsigned long mLastHammerSpin = 0;
     unsigned long mLastA = 0;
+    // A first-time information notice ("You earned one additional Mario!", ...):
+    // shown by its InformationObserver milestone, closed by InformationObserver.Close.
+    std::string mNotice;
+    unsigned long mNoticeFrame = 0, mNoticeTapFrame = 0;
+    int mNoticeTaps = 0;
     unsigned long mTalkFrames = 0;     // frames with a talk shown (since asking the Luma)
     bool mLumaAsked = false;           // A pressed next to the Disk Garden Luma
     bool mTalked = false;              // the Disk Garden Luma's talk ended

@@ -21,6 +21,7 @@ extern "C" void petari_gx_pipeline_report();
 #include "smoke.hpp"
 #include "route_record.hpp"
 #include "smoke_domes.hpp"
+#include "smoke_replay.hpp"
 #include "smoke_goodegg.hpp"
 #include "smoke_soak.hpp"
 #include "smoke_stage.hpp"
@@ -221,6 +222,7 @@ Smoke::GoodEggDriver* gGoodEgg = nullptr;
 Smoke::SoakDriver* gSoak = nullptr;
 // Or the dome tour (smoke_domes.hpp), PETARI_SMOKE=domes.
 Smoke::DomesDriver* gDomes = nullptr;
+Smoke::ReplayDriver* gReplay = nullptr;
 
 unsigned long environmentNumber(const char* name, unsigned long fallback) {
     const char* value = std::getenv(name);
@@ -252,6 +254,17 @@ void startSmoke() {
         gSoak = new Smoke::SoakDriver(frames, soak);
         std::fprintf(stderr, "PETARI SMOKE: script soak (%zu stage(s), %.0f minutes), stage frame limit %lu, stall limit %lu s\n",
                      soak.stages.size(), soak.minutes, frames, stall);
+        std::fflush(stderr);
+        Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
+        return;
+    }
+    Smoke::ReplayConfig replay;
+    if (Smoke::replayEnabledFromEnvironment(&replay)) {
+        const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 108000);
+        const unsigned long stall = environmentNumber("PETARI_SMOKE_STALL_SECONDS", 60);
+        gReplay = new Smoke::ReplayDriver(frames, replay);
+        std::fprintf(stderr, "PETARI SMOKE: script replay (%s scenario %d, %zu route points from %s), frame limit %lu, stall limit %lu s\n",
+                     replay.stage.c_str(), replay.scenario, replay.route.size(), replay.routePath.c_str(), frames, stall);
         std::fflush(stderr);
         Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
         return;
@@ -594,6 +607,8 @@ extern "C" void petari_host_frame_seam(void) {
         runSmoke(gGoodEgg);
     } else if (gDomes != nullptr) {
         runSmoke(gDomes);
+    } else if (gReplay != nullptr) {
+        runSmoke(gReplay);
     }
     if (Soak::telemetryActive()) {  // PETARI_SOAK_CSV: frame times and, periodically, the JKR heaps
         static unsigned long frames = 0;

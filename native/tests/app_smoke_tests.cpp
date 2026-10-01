@@ -12,6 +12,7 @@
 
 #include "../app/smoke.hpp"
 #include "../app/smoke_goodegg.hpp"
+#include "../app/smoke_replay.hpp"
 #include "petari/milestone.hpp"
 
 namespace Smoke = PetariNative::App::Smoke;
@@ -1931,13 +1932,26 @@ void testGoodEggGeometry() {
     down.camZx = 0; down.camZy = -1; down.camZz = 0;  // looking straight down, screen-up is -z
     k = Smoke::stickKeysForWorld(down, {0, 0, -1});
     check(k.up && !k.down, "a camera above Mario: screen-up is stick up");
+    // Upside down under a level camera, Mario::calcMoveDir's ground Y axis (camera X
+    // x Mario's up) flips: stick up moves toward the camera, right stays right.
     Observation under = egg(0, 0, 0, true);  // standing under a disk, camera level
     k = Smoke::stickKeysForWorld(under, {-1, 0, -1});
-    check(k.up && k.left, "upside down, a level camera still maps screen directions");
+    check(k.down && k.left && !k.up && !k.right, "upside down under a level camera: stick up moves toward the camera");
+    k = Smoke::stickKeysForWorld(under, {0, 0, 1});
+    check(k.up && !k.down && !k.left && !k.right, "upside down: +z (toward the camera) is stick up");
+    k = Smoke::stickKeysForWorld(under, {1, 0, 0});
+    check(k.right && !k.left && !k.up && !k.down, "upside down: camera right is still stick right");
+    // Camera rolled with Mario (its up along Mario's up, view level): screen up is away again.
+    Observation rolled = under;
+    rolled.camXx = -1.0f;  // X flips when the camera rolls 180 degrees about its view
+    k = Smoke::stickKeysForWorld(rolled, {0, 0, -1});
+    check(k.up && !k.down, "a camera rolled with Mario: away is stick up");
     Observation degenerate = o;
     degenerate.camXx = 0; degenerate.camXy = 1;  // camera right along gravity
+    // calcMoveDir: groundY (camera X x up) vanishes and falls back to the view
+    // direction; groundX (view x up) is still +x.
     k = Smoke::stickKeysForWorld(degenerate, {1, 0, 0});
-    check(!k.up && !k.down && !k.left && !k.right, "degenerate camera axes give no keys");
+    check(k.right && !k.left && !k.up && !k.down, "camera right along gravity: the game's fallback axes still steer");
 }
 
 void testGoodEggMission() {
@@ -1952,6 +1966,32 @@ void testGoodEggMission() {
     check(run.logged("stars at mission start: 1"), "stars counted at the start");
     check(run.logged("on Disk Garden") && run.held(Button::StickUp) && run.held(Button::StickLeft),
           "walks toward the rail with the stick");
+    // A first-time information notice (InformationObserver): read it, then A;
+    // A again only while it stays open; its close ends the handling.
+    {
+        EggRun notice;
+        toGoodEgg(notice);
+        notice.frames(egg(-3265, -13081, -15332), 3);
+        const int a0 = notice.count(Button::A, true);
+        notice.frame(with(egg(-3265, -13081, -15332), "InformationObserverOneUp"));
+        notice.frames(egg(-3265, -13081, -15332), 40);
+        check(notice.count(Button::A, true) == a0 && !notice.held(Button::StickUp), "a notice is read first, stick released");
+        notice.frames(egg(-3265, -13081, -15332), 10);
+        check(notice.count(Button::A, true) == a0 + 1 && notice.logged("information notice InformationObserverOneUp"),
+              "A dismisses the notice");
+        notice.frames(egg(-3265, -13081, -15332), 60);
+        check(notice.count(Button::A, true) == a0 + 2, "A again while the notice stays open");
+        notice.frame(with(egg(-3265, -13081, -15332), "InformationObserver.Close"));
+        notice.frames(egg(-3265, -13081, -15332), 120);
+        check(notice.count(Button::A, true) == a0 + 2 && notice.driver.result() == Result::Running, "no presses after it closes");
+        EggRun stuck;
+        toGoodEgg(stuck);
+        stuck.frames(egg(-3265, -13081, -15332), 3);
+        stuck.frame(with(egg(-3265, -13081, -15332), "InformationObserverOneUp"));
+        stuck.frames(egg(-3265, -13081, -15332), 400);
+        check(stuck.driver.result() == Result::Fail && stuck.driver.reason().find("did not close") != std::string::npos,
+              "a notice that ignores A fails instead of looping");
+    }
     // A demo stops input.
     Observation demo = egg(-3265, -13081, -15332);
     demo.demoActive = true;
@@ -2245,6 +2285,191 @@ void testGoodEggObjectives() {
 
 }  // namespace
 
+
+// --- Recorded-mission replay (smoke_replay.hpp) ---
+
+struct ReplayRun {
+    Smoke::ReplayDriver driver;
+    std::vector<Event> events;
+    std::vector<std::string> log;
+    int quits = 0;
+    ReplayRun(const std::string& route, int scenario = 2)
+        : driver(1000000, config(route, scenario)) {}
+    static Smoke::ReplayConfig config(const std::string& route, int scenario) {
+        Smoke::ReplayConfig c;
+        c.stage = "EggStarGalaxy";
+        c.scenario = scenario;
+        c.routePath = "test";
+        c.route = Smoke::parseReplayRoute(route);
+        return c;
+    }
+    Smoke::Step frame(const Observation& o) {
+        const Smoke::Step step = driver.step(o);
+        for (const Smoke::Press& p : step.presses) events.push_back({driver.frame(), p.button, p.down, step.assertFocus});
+        for (const std::string& line : driver.log()) log.push_back(line);
+        quits += step.requestQuit ? 1 : 0;
+        return step;
+    }
+    void frames(const Observation& o, unsigned long n) {
+        for (unsigned long i = 0; i < n; ++i) frame(o);
+    }
+    int count(Button b, bool down) const {
+        int n = 0;
+        for (const Event& e : events) n += e.button == b && e.down == down;
+        return n;
+    }
+    bool logged(const char* text) const {
+        for (const std::string& line : log) if (line.find(text) != std::string::npos) return true;
+        return false;
+    }
+};
+
+template <class Run>
+void toStage(Run& run) {
+    run.frames(Observation{}, 10);
+    run.frames(logo(false), 30);
+    run.frames(logo(true), 200);
+    run.frames(fileSelect(false), 50);
+    run.frame(with(fileSelect(true), "FileSelector.Title"));
+    run.frame(with(fileSelect(true), "TitleSequence.BgmPrepare"));
+    run.frames(fileSelect(true), 30);
+    run.frame(with(fileSelect(true), "TitleSequence.LogoDisplay"));
+    run.frames(fileSelect(true), 31);
+    run.frame(with(fileSelect(true), "FileSelector.TitleEnd"));
+    run.frame(with(fileSelect(true), "FileSelector.FileSelect"));
+    run.frames(target(fileSelect(true), "FileSelect.Slot", 0, .3f, .5f, kSel | kPoint), 3);
+    run.frame(with(fileSelect(true), "FileSelector.FileConfirm"));
+    run.frames(target(fileSelect(true), "FileSelect.Start", 0, .5f, .5f, kSel | kPoint), 3);
+    Observation loading = egg(0, 0, 0);
+    loading.stage = "FileSelect";
+    run.frame(with(loading, "FileSelector.DemoStartWait"));
+}
+
+Observation eggAt(float x, float y, float z, int scenario = 2) {
+    Observation o = egg(x, y, z);
+    o.scenario = scenario;
+    return o;
+}
+
+void testReplay() {
+    const auto parsed = Smoke::parseReplayRoute("0,0,0,Walk\nbad line\n1,2,3,Launch\n4,5,6,Kick\n7,8,9,Mystery\nnan,0,0,Walk\n");
+    check(parsed.size() == 4 && parsed[1].action == Smoke::DomeWaypoint::Launch && parsed[2].action == Smoke::DomeWaypoint::Kick &&
+              parsed[3].action == Smoke::DomeWaypoint::Walk,
+          "replay routes parse actions and skip bad rows");
+
+    // The wrong scenario fails at once.
+    ReplayRun wrong("0,0,0,Walk\n0,0,-500,Walk\n");
+    toStage(wrong);
+    wrong.frames(eggAt(0, 0, 0, 1), 2);
+    check(wrong.driver.result() == Result::Fail && wrong.driver.reason().find("not the recorded 2") != std::string::npos,
+          "replay checks the entered scenario");
+
+    // Walk, hop, launch; the star; the observatory.
+    ReplayRun run("0,0,0,Walk\n0,0,-500,Hop\n0,0,-1000,Launch\n0,0,-5000,Walk\n");
+    toStage(run);
+    run.frames(eggAt(0, 0, 0), 61);
+    check(run.logged("replay of test (4 points)") && run.logged("resync (start): route point 0"),
+          "replay takes over once Mario stands playable in the recorded stage, from the nearest point");
+    ReplayRun intro("0,0,0,Walk\n0,0,-500,Walk\n");
+    toStage(intro);
+    Observation flying = eggAt(39281, -38635, 2094);
+    flying.playerOnGround = false;
+    intro.frames(flying, 200);
+    check(!intro.logged("replay of"), "no takeover during the arrival (Mario not standing)");
+    run.frames(eggAt(0, 0, -30), 5);  // at point 0: on to point 1, away from the camera
+    check(run.count(Button::StickUp, true) >= 1 && run.count(Button::StickDown, true) == 0,
+          "walks toward the next point with the game's stick mapping");
+    const int a0 = run.count(Button::A, true);
+    run.frame(eggAt(0, 0, -490));
+    check(run.count(Button::A, true) == a0 + 1, "a Hop point jumps");
+    Observation air = eggAt(0, 100, -700);
+    air.playerOnGround = false;
+    run.frames(air, 3);
+    run.frame(eggAt(0, 0, -990));
+    check(std::string(run.driver.phase()) == "replay: using a Launch Star", "a Launch point starts the launch");
+    const int spins = run.count(Button::Spin, true);
+    Observation bound = eggAt(0, 50, -1000);
+    bound.playerInBind = true;
+    bound.playerOnGround = false;
+    run.frames(bound, 40);
+    check(run.count(Button::Spin, true) > spins, "the launch spins");
+    run.frame(eggAt(0, 0, -4990));
+    check(std::string(run.driver.phase()) == "replay: following the recorded route" && run.logged("launch landed"),
+          "a landing far away ends the launch");
+    run.frame(eggAt(0, 0, -4995));
+    run.frames(eggAt(0, 0, -4995), 5);
+    check(run.logged("route finished; waiting for the star") || run.driver.waypoint() >= 4, "the route ends at the star");
+    run.frame(with(eggAt(0, 0, -4995), "PowerStar.Get"));
+    check(run.logged("star collected"), "PowerStar.Get is the star");
+    Observation away = egg(0, 0, 0);
+    away.stage = "";
+    away.scene = "Intermission";
+    run.frames(away, 50);
+    check(run.driver.result() == Result::Running, "no PASS before the observatory");
+    Observation dome = egg(0, 0, 0);
+    dome.stage = "AstroDome";
+    dome.saveSequence = true;
+    run.frames(dome, 150);
+    check(run.driver.result() == Result::Running, "no PASS while saving");
+    dome.saveSequence = false;
+    run.frames(dome, 121);
+    check(run.driver.result() == Result::Pass && run.quits == 1, "PASS: star, then a playable observatory");
+
+    // No star: the route's end is not a PASS.
+    ReplayRun nostar("0,0,0,Walk\n0,0,-500,Walk\n");
+    toStage(nostar);
+    nostar.frames(eggAt(0, 0, 0), 61);
+    nostar.frames(eggAt(0, 0, -500), 5000);
+    check(nostar.driver.result() == Result::Fail && nostar.driver.reason().find("without PowerStar.Get") != std::string::npos,
+          "finishing the route without the star FAILs");
+
+    // A different stage after the star FAILs.
+    ReplayRun elsewhere("0,0,0,Walk\n0,0,-500,Walk\n");
+    toStage(elsewhere);
+    elsewhere.frames(eggAt(0, 0, 0), 61);
+    elsewhere.frame(with(eggAt(0, 0, 0), "PowerStar.Get"));
+    Observation other = egg(0, 0, 0);
+    other.stage = "HoneyBeeKingdomGalaxy";
+    elsewhere.frame(other);
+    check(elsewhere.driver.result() == Result::Fail, "after the star only the observatory counts");
+
+    // A death: resume from the route point nearest the respawn.
+    ReplayRun death("0,0,0,Walk\n0,0,-400,Walk\n0,0,-800,Walk\n0,0,-1200,Walk\n");
+    toStage(death);
+    death.frames(eggAt(0, 0, 0), 61);
+    death.frames(eggAt(0, 0, -790), 3);
+    Observation dead = eggAt(0, 0, -900);
+    dead.playerDead = true;
+    death.frames(dead, 10);
+    check(death.logged("Mario died at") && death.logged("(death 1)"), "a death is noticed");
+    death.frame(eggAt(0, 0, -395));
+    check(death.logged("resync (respawn): route point 1"), "after a respawn the nearest route point is next");
+
+    // A hostile actor nearby: spin; a hit is logged with it.
+    ReplayRun enemy("0,0,0,Walk\n0,0,-2000,Walk\n");
+    toStage(enemy);
+    enemy.frames(eggAt(0, 0, 0), 61);
+    Observation goomba = actor(eggAt(0, 0, -100), "Goomba", 0, 0, -250, 0, Smoke::kActorHostile);
+    const int sp = enemy.count(Button::Spin, true);
+    enemy.frame(goomba);
+    check(enemy.count(Button::Spin, true) == sp + 1 && enemy.logged("spin at Goomba"), "spins at a nearby hostile");
+    goomba.playerLife = 2;
+    enemy.frame(goomba);
+    check(enemy.logged("life 3 -> 2") && enemy.logged("nearest hostile Goomba"), "a hit is logged with the nearest hostile");
+
+    // A yes/no prompt: point at Yes, then A.
+    ReplayRun prompt("0,0,0,Walk\n0,0,-500,Walk\n");
+    toStage(prompt);
+    prompt.frames(eggAt(0, 0, 0), 61);
+    Observation ask = eggAt(0, 0, -100);
+    ask.prompts = {{"SomeLumaOffer", 2}};
+    prompt.frame(ask);
+    ask.prompts.clear();
+    const int pa = prompt.count(Button::A, true);
+    prompt.frames(target(ask, "Prompt.Yes", 0, .4f, .6f, kSel | kPoint), 4);
+    check(prompt.count(Button::A, true) == pa + 1, "a yes/no prompt is answered Yes");
+}
+
 int main() {
     testHappyPath();
     testTitleRetries();
@@ -2275,6 +2500,7 @@ int main() {
     testGoodEggMission();
     testGoodEggReturn();
     testGoodEggObjectives();
+    testReplay();
     std::printf("native app smoke tests passed (%d checks)\n", checks);
     return 0;
 }

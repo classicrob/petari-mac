@@ -26,6 +26,12 @@ def convert(rows, stage="AstroGalaxy", spacing=150.0):
             selected.append(row)
         elif started:
             ended = True
+    return convert_selected(selected, spacing)
+
+
+def convert_selected(selected, spacing=150.0, keep_loops=False):
+    """Waypoints for consecutive valid rows of one stage visit (recording_segments.py
+    joins short same-stage gaps; a teleport across one becomes a Warp)."""
     if len(selected) < 2:
         raise ValueError("need at least two valid frames in the selected stage")
     def pos(row):
@@ -36,12 +42,23 @@ def convert(rows, stage="AstroGalaxy", spacing=150.0):
     last_ground = selected[0]
     bind_start = None
     bind_spun = False
+    last_spin = -100
     for i, row in enumerate(selected):
         previous = selected[max(0, i-1)]
         grounded = row["grounded"] == "1"
         bound = row.get("bound") == "1"
+        # A teleport between two unbound frames (a joined gap, a scripted move):
+        # wait where it happened for the game to move Mario.
+        if i > 0 and not bound and previous.get("bound") != "1" and bind_start is None \
+                and math.dist(pos(previous), pos(row)) >= 800:
+            points.append((pos(previous), "Warp"))
+            last_ground = row
+        if row["spin"] == "1" and previous["spin"] != "1":
+            last_spin = i
         if bound and bind_start is None:
-            bind_start, bind_spun = pos(previous if previous.get("bound") != "1" else row), False
+            # The spin that fires a star lands a frame or two before the bind.
+            bind_start = pos(previous if previous.get("bound") != "1" else row)
+            bind_spun = i - last_spin <= 6
         if bound:
             bind_spun = bind_spun or (row["spin"] == "1" and previous["spin"] != "1")
             continue
@@ -51,7 +68,10 @@ def convert(rows, stage="AstroGalaxy", spacing=150.0):
             bind_start = None
         if row["jump"] == "1" and previous["jump"] != "1":
             if previous["grounded"] == "1" or grounded or i == 0: points.append((pos(last_ground), "Hop"))
-            else: points.append((pos(row), "Kick"))
+            elif i >= 2 and math.dist(pos(selected[i-2]), pos(previous)) < 0.5 and math.dist(pos(previous), pos(row)) < 0.5:
+                # Clinging to a wall (still in the air): a wall kick. Other mid-air
+                # presses do nothing in the game and are not route actions.
+                points.append((pos(row), "Kick"))
         if row["spin"] == "1" and previous["spin"] != "1":
             points.append((pos(row), "Spin"))
         landed = grounded and previous["grounded"] != "1"
@@ -67,7 +87,27 @@ def convert(rows, stage="AstroGalaxy", spacing=150.0):
             if points[-1][0] != pos(row): points.append((pos(row), "Walk"))
         if grounded: last_ground = row
     if points[-1][0] != pos(selected[-1]): points.append((pos(selected[-1]), "Walk"))
-    return [(*point, action) for point,action in points]
+    return [(*point, action) for point,action in (points if keep_loops else erase_retries(points))]
+
+
+def erase_retries(points, reach=300.0):
+    """A teleport or launch back to where the route already went (a death's
+    respawn at a checkpoint, a star back to a hub after a failed or exploratory
+    loop) repeats a section: keep only the final attempt. Teleports and launches
+    to new places stay. (A loop that collected something needed later would be
+    lost; recording_segments.py --keep-loops disables this.)"""
+    points = list(points)
+    i = 0
+    while i < len(points) - 1:
+        if points[i][1] in ("Warp", "Launch"):
+            dest = points[i + 1][0]
+            back = next((j for j in range(i) if points[j][1] == "Walk" and math.dist(points[j][0], dest) < reach), None)
+            if back is not None:
+                del points[back + 1:i + 1]  # the failed attempt and its Warp
+                i = back
+                continue
+        i += 1
+    return points
 
 
 def main():
