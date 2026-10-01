@@ -596,6 +596,7 @@ extern "C" void petari_host_frame_seam(void) {
     const std::uint64_t entry = Telemetry::nowNs();
     PetariNative::HostAllocationScope host;
     recordRouteFrame(SmokeBackground::enabled);
+    observeProgressFrame();
     // Game state is readable here, before the CPU is released.
     recordFrame(entry, gTiming.probe != nullptr ? gTiming.probe() : FrameStats::Phase::Gameplay);
     if (gSmoke != nullptr) {
@@ -607,7 +608,6 @@ extern "C" void petari_host_frame_seam(void) {
     } else if (gGoodEgg != nullptr) {
         runSmoke(gGoodEgg);
     } else if (gDomes != nullptr) {
-    observeProgressFrame();
         runSmoke(gDomes);
     } else if (gReplay != nullptr) {
         runSmoke(gReplay);
