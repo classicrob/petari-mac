@@ -30,6 +30,8 @@
 #include "smoke_background.hpp"
 #include "smoke_storage.hpp"
 #include "pipeline_cache_dir.hpp"
+#include "launch_stage.hpp"
+#include <petari/player_launch.hpp>
 #include <petari/host_allocation.hpp>
 
 extern "C" void petari_gx_pipeline_background_begin();
@@ -47,11 +49,14 @@ void logMessage(AuroraLogLevel level, const char* module, const char* message, u
 }
 
 void usage() {
-    std::fputs("Usage: petari [--disc DIR] [--user DIR] [--test-fixture observatory|stage]\n"
+    std::fputs("Usage: petari [--disc DIR] [--user DIR] [--stage GALAXY [--scenario N]] [--test-fixture observatory|stage]\n"
                "  --disc DIR  extracted disc (containing files/); default: $PETARI_GAME_DIR,\n"
                "              else build/game-data/RMGE01 under the working directory\n"
                "  --user DIR  saves, settings, controls and crash reports;\n"
                "              default: ~/Library/Application Support/Petari\n"
+               "  --stage GALAXY [--scenario N]  after you load a file (past the tutorial), go straight to\n"
+               "              this galaxy and mission (default 1) instead of the observatory; once per session.\n"
+               "              GALAXY: an alias such as good-egg, or an internal name. --stage list prints them\n"
                "  --test-fixture observatory  post-tutorial test progression; requires a marked isolated --user\n"
                "  --test-fixture stage  synthetic entry to $PETARI_STAGE scenario $PETARI_SCENARIO after the file\n"
                "              loads (observatory progression otherwise); requires --user marked \"stage\"\n"
@@ -91,8 +96,22 @@ bool resolvePaths(int argc, char** argv, App::Paths* paths) {
     bool fixture = false;
     bool stageFixture = false;
     std::string unlockedSave;
+    std::string launchStage;
+    int launchScenario = 1;
+    bool launchScenarioGiven = false;
     for (int i = 1; i < argc; i++) {
-        if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
+        if (std::strcmp(argv[i], "--stage") == 0 && i + 1 < argc) {
+            launchStage = argv[++i];
+        } else if (std::strcmp(argv[i], "--scenario") == 0 && i + 1 < argc) {
+            char* end = nullptr;
+            const long value = std::strtol(argv[++i], &end, 10);
+            if (end == argv[i] || *end != '\0' || value < 1 || value > 99) {
+                std::fprintf(stderr, "petari: --scenario expects a mission number, got %s\n", argv[i]);
+                return false;
+            }
+            launchScenario = static_cast<int>(value);
+            launchScenarioGiven = true;
+        } else if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
             paths->disc = argv[++i];
         } else if (std::strcmp(argv[i], "--user") == 0 && i + 1 < argc) {
             paths->user = argv[++i];
@@ -111,6 +130,24 @@ bool resolvePaths(int argc, char** argv, App::Paths* paths) {
         } else {
             return false;
         }
+    }
+    if (launchScenarioGiven && launchStage.empty()) {
+        std::fputs("petari: --scenario needs --stage\n", stderr);
+        return false;
+    }
+    if (!launchStage.empty()) {
+        if (fixture || !unlockedSave.empty()) {
+            std::fputs("petari: --stage is for normal play; test fixtures use PETARI_STAGE\n", stderr);
+            return false;
+        }
+        std::string stage, error;
+        if (!App::LaunchStage::resolve(launchStage, launchScenario, &stage, &error)) {
+            std::fprintf(stderr, "petari: --stage: %s\n", error.c_str());
+            return false;
+        }
+        PetariNative::PlayerLaunch::stage = stage;
+        PetariNative::PlayerLaunch::scenario = launchScenario;
+        std::fprintf(stderr, "PETARI LAUNCH: after a file loads, going to %s mission %d\n", stage.c_str(), launchScenario);
     }
     if (!unlockedSave.empty()) {
         // Rewrites a saved file: only an explicit, marked, isolated directory.
@@ -222,6 +259,12 @@ int main(int argc, char** argv) {
     // (building it on a first game allocation would be a startup hitch).
     PetariNative::prepareAllocationSymbols();
     App::Paths paths;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::strcmp(argv[i], "--stage") == 0 && std::strcmp(argv[i + 1], "list") == 0) {
+            App::LaunchStage::printList(stdout);
+            return 0;
+        }
+    }
     if (!resolvePaths(argc, argv, &paths)) {
         usage();
         return 2;

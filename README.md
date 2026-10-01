@@ -107,14 +107,19 @@ build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari --disc build/game-dat
   `~/Library/Application Support/Petari`. Use `--user DIR` for a separate save
   location. Native saves are not compatible with Wii saves.
 - At the title screen press **Return** (the game's "press A and B").
+- To go straight into a galaxy after loading your file, add `--stage` and
+  `--scenario`, e.g. `./Play\ Petari.command --stage good-egg --scenario 2`.
+  Names, missions and rules: [native/LEVEL_SELECT.md](native/LEVEL_SELECT.md).
 
 ## Controls
 
 Keyboard and mouse by default, with game controller support. The main keys:
 **WASD** move, **Space** jump, **F** spin, **Shift** crouch, mouse aims the Star
 Pointer, left click shoots Star Bits, **Q/E** rotate the camera, **Escape**
-pauses. Everything is listed, and remappable, in
-[native/CONTROLS.md](native/CONTROLS.md).
+pauses, and **`** (the key under Escape) or **F1** opens the native Home menu
+(Controls, Mods, Restart, Quit). Everything is listed, and remappable, in
+[native/CONTROLS.md](native/CONTROLS.md). Controller support follows SDL3's
+standard layout but has not yet been tested with physical hardware.
 
 ## Saves
 
@@ -125,16 +130,30 @@ backup: [native/SAVES.md](native/SAVES.md).
 
 ## Mods
 
-Optional gameplay helpers, all **off by default**: see
-[native/MODS.md](native/MODS.md). With every mod off the game behaves as the
-original.
+Optional gameplay helpers, all **off by default**; turn them on in the Home
+menu (**`** or **F1**, then **Mods**):
+
+- **Collect Star Bits** (**G**, or **L3** on a controller): the Star Pointer
+  collects every Star Bit currently on screen.
+- **Shoot nearest enemy** (**V**): fires a Star Bit at the nearest enemy in view.
+
+Both use the game's own collection and shooting, so counters, sounds and stuns
+behave normally. Details: [native/MODS.md](native/MODS.md). With every mod off
+the game behaves as the original.
 
 ## Known issues
 
-- This is a development build. Early game (the opening, the observatory, the
-  domes and missions that have been played) works; complete story progression,
-  every galaxy, boss and effect has not been verified.
-- New areas can hitch on first visit while shaders compile.
+- This is a development build. Automated testing enters every one of the 135
+  galaxy missions and checks that each loads and plays (move, jump, spin,
+  camera, pause) without a crash, hang or renderer error; every observatory
+  dome has been toured from unlocked saves; and full missions have been played
+  to the Power Star by hand. Not every mission has been played to completion,
+  and the ending sequence has not been played through.
+- The first time a Mac runs the game it compiles shaders in the background, so
+  the first few minutes can stutter and objects may pop in briefly. After that
+  the shader cache in `~/Library/Caches/Petari` makes launches immediate and
+  smooth, including with other save files.
+- Physical game controllers have not been tested yet.
 - Visual fidelity is close but not yet systematically compared with the Wii;
   some effects may differ.
 - The original small UI textures are low resolution by design.

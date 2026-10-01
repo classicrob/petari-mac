@@ -220,7 +220,8 @@ if(PETARI_BUILD_GX_PROBE)
     # builds every test executable registered with ctest that `all` skips.
     add_custom_target(petari_tests)
     foreach(_petari_test petari_j3d_material_anm_tests petari_app_smoke_storage_tests petari_app_smoke_domes_tests
-            petari_app_seam_tests petari_app_input_events_tests petari_app_smoke_tests petari_app_smoke_stage_tests)
+            petari_app_seam_tests petari_app_input_events_tests petari_app_smoke_tests petari_app_smoke_stage_tests
+            petari_app_launch_stage_tests)
         if(TARGET ${_petari_test})
             add_dependencies(petari_tests ${_petari_test})
         endif()
