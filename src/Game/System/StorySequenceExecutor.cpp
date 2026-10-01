@@ -22,6 +22,8 @@
 #include "Game/Util/StringUtil.hpp"
 #include <cstdio>
 #ifdef PETARI_NATIVE
+#include <cstdlib>
+#include <cstring>
 #include <petari/test_fixture.hpp>
 #include <petari/player_launch.hpp>
 #include "Game/System/GameDataHolder.hpp"
@@ -646,6 +648,14 @@ void StorySequenceExecutor::exePlayDemoSequence() {
     const StorySequenceExecutorType::DemoSequenceInfo* pDemoInfo = getCurrentDemoInfo();
 
     if (MR::isFirstStep(this)) {
+#ifdef PETARI_NATIVE
+        // PETARI_ENDING_TEST (or PETARI_STORY_TRACE): each step of a story demo sequence.
+        static const bool sTrace = std::getenv("PETARI_ENDING_TEST") != nullptr || std::getenv("PETARI_STORY_TRACE") != nullptr;
+        if (sTrace) {
+            std::fprintf(stderr, "[story] demo step: kind %d, id %d, %s\n", static_cast< int >(pDemoInfo->_0),
+                         static_cast< int >(pDemoInfo->_2), pDemoInfo->_4 != nullptr ? pDemoInfo->_4 : "");
+        }
+#endif
     }
 
     switch (pDemoInfo->_0) {
@@ -1084,6 +1094,18 @@ void StorySequenceExecutor::overwriteGalaxyNameAfterLoading(GalaxyMoveArgument* 
     if (!PetariNative::TestFixture::stage.empty() &&
         enterStageDirectly(pMoveArgument, PetariNative::TestFixture::stage.c_str(), PetariNative::TestFixture::stageScenario,
                            "PETARI FIXTURE: synthetic stage entry")) {
+        return;
+    }
+    if (const char* ending = std::getenv("PETARI_ENDING_TEST"); ending != nullptr && ending[0] != '\0') {
+        // Test: what follows a cleared Bowser's Galaxy Reactor (decideNextEventForClearGalaxy),
+        // straight after the file loads: epilogue, ending movies, staff roll. The fight
+        // and the Grand Star are not played. "complete" adds the 120-star ending.
+        const bool complete = std::strcmp(ending, "complete") == 0;
+        prepareDemoSequence(complete ? ::cDemoEpilogueComplete : ::cDemoEpilogueNormal);
+        pMoveArgument->mStageName = "EpilogueDemoStage";
+        pMoveArgument->mScenarioNo = 1;
+        std::fprintf(stderr, "PETARI ENDING TEST: %s ending sequence from the file load (Bowser fight and Grand Star skipped)\n",
+                     complete ? "120-star" : "normal");
         return;
     }
     if (!PetariNative::PlayerLaunch::stage.empty()) {

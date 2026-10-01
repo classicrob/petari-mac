@@ -246,7 +246,9 @@ constexpr unsigned kTargetPointing = 1u;
 constexpr unsigned kTargetEmpty = 2u;
 constexpr unsigned kTargetSelectable = 4u;
 
-enum class Script { Title, Playable, Gameplay, Reload, Story, Galaxy };
+// Observe: load the saved file, then only watch (scene and stage changes, prompts)
+// until the frame limit; for long non-interactive sequences such as the ending.
+enum class Script { Title, Playable, Gameplay, Reload, Story, Galaxy, Observe };
 
 // Spin (the Shake binding) and CameraLeft/CameraRight (D-pad left/right, the
 // camera rotation bindings) are used by the stage script (smoke_stage.hpp).
@@ -327,7 +329,9 @@ private:
     void gameplay(const Observation& observation, Step& step);
     void story(const Observation& observation, Step& step);
     bool galaxy(const Observation& observation, Step& step);
-    bool loadsSave() const { return mScript == Script::Reload || mScript == Script::Story || mScript == Script::Galaxy; }
+    bool loadsSave() const {
+        return mScript == Script::Reload || mScript == Script::Story || mScript == Script::Galaxy || mScript == Script::Observe;
+    }
     // Holds exactly these steering keys (presses for the changes).
     void steer(const StickKeys& keys, Step& step);
     void startSegment(int segment);
@@ -370,6 +374,8 @@ private:
     Script mScript;
     std::vector<std::string> mSeen;
     std::string mPrompt;          // allowed prompt being answered
+    std::string mObserved;        // Observe: the scene/stage last logged
+    unsigned long mObserveTalkFrames = 0, mObserveTaps = 0;
     bool mIconConfirmed = false;  // System_FileSelect013 answered Yes
     unsigned long mAimFrames = 0;
     unsigned long mAimMissing = 0;

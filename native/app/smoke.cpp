@@ -371,6 +371,12 @@ void Driver::playable(const Observation& observation, Step& step) {
         mSinceProgress = 0;
         break;
     case Phase::Prologue:
+        if (mScript == Script::Observe) {
+            note("observe: file started; watching until the frame limit");
+            mPhase = Phase::Ready;
+            mPhaseFrames = 0;
+            break;
+        }
         if (mScript == Script::Galaxy && observation.scene == "Game" && observation.sceneReady &&
             observation.stage != "FileSelect") {
             mPhase = Phase::Ready;
@@ -672,6 +678,20 @@ bool Driver::galaxy(const Observation& observation, Step& step) {
 }
 
 void Driver::gameplay(const Observation& observation, Step& step) {
+    if (mScript == Script::Observe) {
+        // Only watch: each scene or stage change is logged; the frame limit passes.
+        const std::string where = observation.scene + "/" + observation.stage + " scenario " + std::to_string(observation.scenario);
+        if (where != mObserved) {
+            note("observe: now in " + where + (observation.playerValid ? "" : " (no player)"));
+            mObserved = where;
+        }
+        // Dialogue (the epilogue's talks) waits for A, as a player reads it: once a second.
+        if (observation.talkActive && ++mObserveTalkFrames % 60 == 0) {
+            if (mObserveTaps++ % 20 == 0) note("observe: tap A to advance a talk");
+            tap(Button::A, kTapFrames, step);
+        }
+        return;
+    }
     if (mScript == Script::Galaxy && mGalaxyPhase == GalaxyPhase::Complete &&
         (observation.scene != "Game" || observation.stage != "EggStarGalaxy" || observation.scenario != 1)) {
         finish(Result::Fail, "left Good Egg mission 1 during gameplay checks", step);
@@ -1437,6 +1457,12 @@ Step Driver::step(const Observation& observation) {
                 note("saving window System_Save01 during the story: no input");
                 continue;
             }
+            if (mScript == Script::Observe && seen("FileSelector.DemoStartWait")) {
+                finish(Result::Pass, "observed up to prompt " + prompt.messageId + " (type " + std::to_string(prompt.type) +
+                                         ") in " + observation.scene + "/" + observation.stage,
+                       step);
+                return step;
+            }
             if (mScript == Script::Reload && prompt.messageId == "System_Save01") {
                 finish(Result::Fail, "the reload rewrote the save (System_Save01 appeared)", step);
                 return step;
@@ -1476,6 +1502,10 @@ Step Driver::step(const Observation& observation) {
                std::string("save-data sequence active for ") + std::to_string(kSaveBlockedFrames) +
                    " frames while " + phase() + "; a prompt probably waits (Yes/No needs the pointer)",
                step);
+        return step;
+    }
+    if (mFrame >= mFrameLimit && mScript == Script::Observe && seen("FileSelector.DemoStartWait")) {
+        finish(Result::Pass, "observed " + std::to_string(mFrameLimit) + " frames, last in " + mObserved, step);
         return step;
     }
     if (mFrame >= mFrameLimit) {
@@ -1682,7 +1712,11 @@ bool enabledFromEnvironment(Script* script) {
         *script = Script::Story;
         return true;
     }
-    std::fprintf(stderr, "PETARI SMOKE: unknown script \"%s\" (known: title, playable, gameplay, reload, story); not running\n", value);
+    if (std::strcmp(value, "observe") == 0) {
+        *script = Script::Observe;
+        return true;
+    }
+    std::fprintf(stderr, "PETARI SMOKE: unknown script \"%s\" (known: title, playable, gameplay, reload, story, observe); not running\n", value);
     return false;
 }
 

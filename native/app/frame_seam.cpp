@@ -329,6 +329,7 @@ void startSmoke() {
     case Smoke::Script::Reload: scriptName = "reload"; break;
     case Smoke::Script::Story: scriptName = "story"; break;
     case Smoke::Script::Galaxy: scriptName = "galaxy"; break;
+    case Smoke::Script::Observe: scriptName = "observe"; break;
     }
     std::fprintf(stderr, "PETARI SMOKE: script %s, frame limit %lu, stall limit %lu s\n", scriptName, frames, stall);
     std::fflush(stderr);
