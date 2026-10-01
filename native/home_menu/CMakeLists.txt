@@ -42,7 +42,7 @@ endif()
 
 # The menu and the HBM entry points. home_menu.cpp has no SDK dependency; the
 # bridge reads the SDK's HBM and KPAD structures.
-add_library(petari_home_menu STATIC home_menu.cpp hbm_bridge.cpp)
+add_library(petari_home_menu STATIC home_menu.cpp hbm_bridge.cpp launch_stage.cpp)
 target_include_directories(petari_home_menu PUBLIC include ${PETARI_REPO_ROOT}/native/include)
 target_link_libraries(petari_home_menu PUBLIC petari_native_config)
 target_compile_features(petari_home_menu PUBLIC cxx_std_17)

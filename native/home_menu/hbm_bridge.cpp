@@ -2,6 +2,9 @@
 // Compiled with the SDK headers; home_menu.cpp stays free of them.
 
 #include "petari/home_menu_hbm.hpp"
+#include "petari/player_launch.hpp"
+
+#include <cstdio>
 
 #include <revolution/wpad.h>
 
@@ -49,6 +52,12 @@ std::uint32_t buttons(u32 wpad) {
     if (wpad & WPAD_BUTTON_DOWN) {
         bits |= Button::Down;
     }
+    if (wpad & WPAD_BUTTON_LEFT) {
+        bits |= Button::Left;
+    }
+    if (wpad & WPAD_BUTTON_RIGHT) {
+        bits |= Button::Right;
+    }
     if (wpad & WPAD_BUTTON_A) {
         bits |= Button::A;
     }
@@ -83,11 +92,16 @@ FrameInput frameInput(const HBMControllerData* controllers) {
 
         std::uint32_t stick = 0;
         if (pad.use_devtype == WPAD_DEV_FREESTYLE) {
+            const float x = status->ex_status.fs.stick.x;
             const float y = status->ex_status.fs.stick.y;
             if (y > kStickThreshold) {
                 stick = Button::Up;
             } else if (y < -kStickThreshold) {
                 stick = Button::Down;
+            } else if (x < -kStickThreshold) {
+                stick = Button::Left;
+            } else if (x > kStickThreshold) {
+                stick = Button::Right;
             }
         }
         input.hold |= stick;
@@ -178,6 +192,15 @@ void calc(const HBMControllerData* controllers) {
 #ifdef PETARI_HOME_MENU_INPUT
     applyModToggles();
 #endif
+    // Level Select's Go, once the menu has closed: the game starts the warp
+    // at its next normal gameplay frame (GameScene::update).
+    const char* stage = nullptr;
+    int mission = 0;
+    if (menu.takeLevelRequest(&stage, &mission)) {
+        std::snprintf(PlayerLaunch::warpStage, sizeof(PlayerLaunch::warpStage), "%s", stage);
+        PlayerLaunch::warpScenario = mission;
+        PlayerLaunch::warpPending.store(true);
+    }
     if (menu.selection() != Selection::None) {
         // HomeButtonLayout hides itself this frame and stops calling draw.
         publish(View{});

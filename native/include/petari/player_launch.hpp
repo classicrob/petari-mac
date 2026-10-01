@@ -8,6 +8,7 @@
 // destination is kept. Everything after that, including saving stars, is the
 // game's own logic.
 
+#include <atomic>
 #include <string>
 
 namespace PetariNative::PlayerLaunch {
@@ -15,4 +16,11 @@ namespace PetariNative::PlayerLaunch {
 // before the game starts, cleared by the game once the jump is taken or refused.
 inline std::string stage;
 inline int scenario = 0;
+
+// The Home menu's Level Select (native/LEVEL_SELECT.md): a warp the game
+// starts at its next normal gameplay frame (GameScene::update), through the
+// game's own galaxy move, and then clears. Game threads only.
+inline char warpStage[64] = {};
+inline int warpScenario = 0;
+inline std::atomic<bool> warpPending{false};
 }  // namespace PetariNative::PlayerLaunch

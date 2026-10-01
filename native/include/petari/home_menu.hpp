@@ -50,7 +50,8 @@ enum class Phase : std::uint8_t {
     List,      // Resume / Controls / Mods / Restart from Title / Quit
     Confirm,   // confirming Restart or Quit
     Controls,  // the controls page, with Back
-    Mods,      // on/off toggles for the native mods, with Back
+    Mods,      // on/off toggles for the native mods, Level Select, Back
+    Levels,    // Level Select: galaxy, mission, Go, Back (native/LEVEL_SELECT.md)
     Closing,   // fade out before reporting Resume
     BlackOut,  // fade to black before reporting Restart or Quit
     Finished,  // selection() reports the result
@@ -64,6 +65,8 @@ constexpr std::uint32_t A = 1u << 2;
 constexpr std::uint32_t B = 1u << 3;
 constexpr std::uint32_t Plus = 1u << 4;
 constexpr std::uint32_t Home = 1u << 5;
+constexpr std::uint32_t Left = 1u << 6;   // change a value (Level Select)
+constexpr std::uint32_t Right = 1u << 7;
 }  // namespace Button
 
 // One frame of controller input, all controllers combined.
@@ -177,6 +180,11 @@ public:
     // whose new state is in mods()[i]. The caller applies and saves them.
     std::uint32_t takeModToggles();
     const ModsEntry* mods() const { return mMods; }
+    // Level Select's Go, reported once after the menu has closed: the
+    // internal stage name and mission. The caller starts the warp.
+    bool takeLevelRequest(const char** stage, int* mission);
+    int levelGalaxy() const { return mLevelGalaxy; }
+    int levelMission() const { return mLevelMission; }
     Selection selection() const { return mPhase == Phase::Finished ? mResult : Selection::None; }  // HBMGetSelectBtnNum
 
     Phase phase() const { return mPhase; }
@@ -221,6 +229,13 @@ private:
     ModsEntry mMods[kMaxMods];
     char mModLabels[kMaxMods][64] = {};
     std::uint32_t mModToggles = 0;
+    int mLevelGalaxy = 0;   // index into LaunchStage::galaxies
+    int mLevelMission = 1;
+    bool mLevelPending = false;
+    char mLevelLabels[2][80] = {};
+    char mLevelMessage[96] = {};
+    void refreshLevelLabels();
+    void changeLevelValue(int item, int delta);
 };
 
 // --- The game's menu instance (HomeButtonMenuWrapper.cpp's native branch) ---

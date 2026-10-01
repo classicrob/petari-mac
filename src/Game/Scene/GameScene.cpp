@@ -43,6 +43,11 @@
 #ifdef PETARI_NATIVE
 // native/platform/include/petari/platform/os_host.hpp
 extern "C" void petari_os_preemption_point(void);
+#include "Game/System/GalaxyMoveArgument.hpp"
+#include "Game/System/GameSequenceFunction.hpp"
+#include <petari/player_launch.hpp>
+// StorySequenceExecutor.cpp
+bool petariDirectStageMove(GalaxyMoveArgument* pMoveArgument, const char* pStage, s32 selected, const char* pLabel);
 #endif
 
 namespace {
@@ -172,6 +177,19 @@ void GameScene::start() {
 void GameScene::update() {
     mPauseCtrl->updateNerve();
     updateNerve();
+
+#ifdef PETARI_NATIVE
+    // Home menu Level Select: warp once normal play allows a pause (no demo,
+    // wipe, death or damage), through the game's own galaxy move.
+    if (PetariNative::PlayerLaunch::warpPending.load() && isPermitToPauseMenu()) {
+        PetariNative::PlayerLaunch::warpPending.store(false);
+        GalaxyMoveArgument argument(0, nullptr, 1, nullptr);
+        if (petariDirectStageMove(&argument, PetariNative::PlayerLaunch::warpStage, PetariNative::PlayerLaunch::warpScenario,
+                                  "PETARI LEVEL SELECT: warping to")) {
+            GameSequenceFunction::requestGalaxyMove(argument);
+        }
+    }
+#endif
 
     bool isTimeUp = MR::isGlobalTimerEnd() && !isNerve(GET_NERVE(GameScene, GameSceneTimeUp)) && MR::isGreaterEqualStep(this, 2);
 

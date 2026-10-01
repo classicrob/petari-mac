@@ -1031,29 +1031,34 @@ void StorySequenceExecutor::decideNextStageForGalaxyOut(GalaxyMoveArgument* pMov
 }
 
 #ifdef PETARI_NATIVE
+// Direct entry to a stage and scenario (test fixture, --stage after a file
+// loads, the Home menu's Level Select): the scenario as ScenarioSelectScene::
+// trySetCurrentScenarioNo would set it (hidden stars placed in their host
+// scenario). pStage must outlive the move. False: no such scenario.
+bool petariDirectStageMove(GalaxyMoveArgument* pMoveArgument, const char* pStage, s32 selected, const char* pLabel) {
+    GalaxyStatusAccessor accessor = MR::makeGalaxyStatusAccessor(pStage);
+    // getScenarioNum() counts only non-hidden scenarios (hidden stars are
+    // numbered after them); getPowerStarNum() counts scenarios with a star
+    // (hubs such as AstroDome have none). Every scenario row is one or both.
+    const s32 scenarioNum = accessor.getScenarioNum() > accessor.getPowerStarNum() ? accessor.getScenarioNum()
+                                                                                    : accessor.getPowerStarNum();
+    if (selected < 1 || selected > scenarioNum) {
+        std::fprintf(stderr, "%s: %s has %d scenarios; scenario %d does not exist, entry not applied\n", pLabel, pStage,
+                     static_cast< int >(scenarioNum), static_cast< int >(selected));
+        return false;
+    }
+    const s32 placed = accessor.isHiddenStar(selected) ? MR::getPlacedHiddenStarScenarioNo(pStage, selected) : selected;
+    pMoveArgument->mStageName = pStage;
+    pMoveArgument->mScenarioNo = placed;
+    pMoveArgument->_C = selected;
+    std::fprintf(stderr, "%s %s scenario %d (placed %d); not earned progression\n", pLabel, pStage,
+                 static_cast< int >(selected), static_cast< int >(placed));
+    return true;
+}
+
 namespace {
-    // Direct entry to a stage and scenario, carried by the galaxy move after a
-    // file loads: the scenario as ScenarioSelectScene::trySetCurrentScenarioNo
-    // would set it (hidden stars placed in their host scenario).
     bool enterStageDirectly(GalaxyMoveArgument* pMoveArgument, const char* pStage, s32 selected, const char* pLabel) {
-        GalaxyStatusAccessor accessor = MR::makeGalaxyStatusAccessor(pStage);
-        // getScenarioNum() counts only non-hidden scenarios (hidden stars are
-        // numbered after them); getPowerStarNum() counts scenarios with a star
-        // (hubs such as AstroDome have none). Every scenario row is one or both.
-        const s32 scenarioNum = accessor.getScenarioNum() > accessor.getPowerStarNum() ? accessor.getScenarioNum()
-                                                                                        : accessor.getPowerStarNum();
-        if (selected < 1 || selected > scenarioNum) {
-            std::fprintf(stderr, "%s: %s has %d scenarios; scenario %d does not exist, entry not applied\n", pLabel, pStage,
-                         static_cast< int >(scenarioNum), static_cast< int >(selected));
-            return false;
-        }
-        const s32 placed = accessor.isHiddenStar(selected) ? MR::getPlacedHiddenStarScenarioNo(pStage, selected) : selected;
-        pMoveArgument->mStageName = pStage;
-        pMoveArgument->mScenarioNo = placed;
-        pMoveArgument->_C = selected;
-        std::fprintf(stderr, "%s %s scenario %d (placed %d); not earned progression\n", pLabel, pStage,
-                     static_cast< int >(selected), static_cast< int >(placed));
-        return true;
+        return petariDirectStageMove(pMoveArgument, pStage, selected, pLabel);
     }
 }  // namespace
 #endif

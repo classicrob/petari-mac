@@ -32,7 +32,7 @@ have input-component tests but have not been approved through gameplay:
 | Input | Action |
 | --- | --- |
 | Arrow keys | D-pad; Up enters first-person view where supported, Down or Space leaves it |
-| F1 or ` | Native Home menu: Resume, Controls (every key as currently bound), Mods, Restart from Title, Quit |
+| F1 or ` | Native Home menu: Resume, Controls (every key as currently bound), Mods (with Level Select, native/LEVEL_SELECT.md), Restart from Title, Quit |
 | G / V | Optional mods (off by default; F1 → Mods): collect visible Star Bits / fire a Star Bit at the nearest enemy. See native/MODS.md |
 | Minus | Remote Minus (also pauses) |
 | 1 / 2 | Remote 1 / 2 (the game never needs them) |

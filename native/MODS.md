@@ -11,7 +11,8 @@ unmodified game and every test run behave exactly as before.
 ## Turning mods on
 
 - In the game: F1, then **Mods**. Each line shows On or Off; choose it to switch.
-  The choice is saved at once in `mods.txt` in the user directory.
+  The choice is saved at once in `mods.txt` in the user directory. The same
+  page leads to **Level Select** (native/LEVEL_SELECT.md).
 - Or edit `mods.txt` (next to `controls.txt`):
 
   ```

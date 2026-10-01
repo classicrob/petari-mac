@@ -1,5 +1,5 @@
-// --stage name resolution and mission range checks (native/app/launch_stage.cpp).
-#include "../app/launch_stage.hpp"
+// --stage name resolution and mission range checks (native/home_menu/launch_stage.cpp).
+#include "petari/launch_stage.hpp"
 
 #include <cstdio>
 #include <cstring>

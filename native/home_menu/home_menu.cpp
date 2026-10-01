@@ -1,4 +1,5 @@
 #include "petari/home_menu.hpp"
+#include "petari/launch_stage.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -73,6 +74,7 @@ void Menu::open() {
     mPhase = Phase::Opening;
     mResult = Selection::None;
     mConfirming = Selection::None;
+    mLevelPending = false;
     mFocus = kListResume;
     mTime = 0.0f;
     mBlackStart = 0.0f;
@@ -121,6 +123,7 @@ void Menu::update(const FrameInput& input) {
     case Phase::Confirm:
     case Phase::Controls:
     case Phase::Mods:
+    case Phase::Levels:
         break;
     }
 
@@ -152,6 +155,14 @@ void Menu::update(const FrameInput& input) {
 
     if (pointerMoved && hovered >= 0) {
         setFocus(hovered, true);
+    }
+
+    if (mPhase == Phase::Levels && (mFocus == 0 || mFocus == 1)) {
+        const std::uint32_t side = input.trigger & (Button::Left | Button::Right);
+        if (side == Button::Left || side == Button::Right) {
+            changeLevelValue(mFocus, side == Button::Left ? -1 : 1);
+            return;
+        }
     }
 
     std::uint32_t dir = input.hold & (Button::Up | Button::Down);
@@ -195,6 +206,45 @@ void Menu::setMods(const ModsEntry* entries, int count) {
     }
 }
 
+bool Menu::takeLevelRequest(const char** stage, int* mission) {
+    if (!mLevelPending || mPhase != Phase::Finished) {
+        return false;
+    }
+    mLevelPending = false;
+    int count = 0;
+    const App::LaunchStage::Galaxy* galaxies = App::LaunchStage::galaxies(&count);
+    *stage = galaxies[mLevelGalaxy].stage;
+    *mission = mLevelMission;
+    return true;
+}
+
+void Menu::refreshLevelLabels() {
+    int count = 0;
+    const App::LaunchStage::Galaxy& galaxy = App::LaunchStage::galaxies(&count)[mLevelGalaxy];
+    const char digit = static_cast<char>('0' + mLevelMission);
+    const bool comet = std::strchr(galaxy.comets, digit) != nullptr;
+    const bool hidden = std::strchr(galaxy.hidden, digit) != nullptr;
+    std::snprintf(mLevelLabels[0], sizeof(mLevelLabels[0]), "%s", galaxy.name);
+    std::snprintf(mLevelLabels[1], sizeof(mLevelLabels[1]), "Mission %d of %d%s", mLevelMission, galaxy.missions,
+                  comet ? " (comet)" : hidden ? " (hidden star)" : "");
+    std::snprintf(mLevelMessage, sizeof(mLevelMessage), "%s. Left/Right changes; your save is not changed.",
+                  App::LaunchStage::domeName(galaxy.dome));
+}
+
+void Menu::changeLevelValue(int item, int delta) {
+    int count = 0;
+    const App::LaunchStage::Galaxy* galaxies = App::LaunchStage::galaxies(&count);
+    if (item == 0) {
+        mLevelGalaxy = (mLevelGalaxy + delta + count) % count;
+        mLevelMission = 1;
+    } else {
+        const int missions = galaxies[mLevelGalaxy].missions;
+        mLevelMission = (mLevelMission - 1 + delta + missions) % missions + 1;
+    }
+    refreshLevelLabels();
+    play(Sound::Focus);
+}
+
 std::uint32_t Menu::takeModToggles() {
     const std::uint32_t toggles = mModToggles;
     mModToggles = 0;
@@ -208,6 +258,7 @@ void Menu::startBlackOut() {
     case Phase::Confirm:
     case Phase::Controls:
     case Phase::Mods:
+    case Phase::Levels:
     case Phase::Closing:
         blackOut(Selection::Restart);
         break;
@@ -236,6 +287,7 @@ View Menu::view() const {
     case Phase::Confirm:
     case Phase::Controls:
     case Phase::Mods:
+    case Phase::Levels:
         view.panelOpacity = 1.0f;
         break;
     case Phase::Closing:
@@ -269,7 +321,15 @@ View Menu::view() const {
         for (int i = 0; i < mModCount; i++) {
             view.items[i].label = mModLabels[i];
         }
-        view.items[mModCount].label = "Back";
+        view.items[mModCount].label = "Level Select";
+        view.items[mModCount + 1].label = "Back";
+    } else if (mPhase == Phase::Levels) {
+        view.title = "Level Select";
+        view.message = mLevelMessage;
+        view.items[0].label = mLevelLabels[0];
+        view.items[1].label = mLevelLabels[1];
+        view.items[2].label = "Go";
+        view.items[3].label = "Back";
     } else if (!confirm) {
         view.title = "Super Mario Galaxy";
         view.message = "Paused";
@@ -308,7 +368,10 @@ int Menu::itemCount() const {
         return 1;
     }
     if (mPhase == Phase::Mods) {
-        return mModCount + 1;
+        return mModCount + 2;
+    }
+    if (mPhase == Phase::Levels) {
+        return 4;
     }
     return mConfirming != Selection::None ? 2 : kListCount;
 }
@@ -394,8 +457,27 @@ void Menu::activate(int index) {
         mPhase = Phase::List;
         mFocus = kListControls;
         mRepeatDir = 0;
+    } else if (mPhase == Phase::Levels) {
+        if (index == 0 || index == 1) {
+            changeLevelValue(index, 1);
+        } else if (index == 2) {
+            play(Sound::Select);
+            mLevelPending = true;
+            close();
+        } else {
+            play(Sound::Cancel);
+            mPhase = Phase::Mods;
+            mFocus = mModCount;
+            mRepeatDir = 0;
+        }
     } else if (mPhase == Phase::Mods) {
-        if (index >= 0 && index < mModCount) {
+        if (index == mModCount) {
+            play(Sound::Select);
+            refreshLevelLabels();
+            mPhase = Phase::Levels;
+            mFocus = 0;
+            mRepeatDir = 0;
+        } else if (index >= 0 && index < mModCount) {
             play(Sound::Select);
             mMods[index].on = !mMods[index].on;
             mModToggles |= 1u << index;
@@ -427,7 +509,9 @@ void Menu::back() {
     } else if (mPhase == Phase::Controls) {
         activate(0);
     } else if (mPhase == Phase::Mods) {
-        activate(mModCount);
+        activate(mModCount + 1);
+    } else if (mPhase == Phase::Levels) {
+        activate(3);
     } else {
         play(Sound::ReturnApp);
         close();

@@ -48,7 +48,7 @@ if(NOT _petari_app_standalone)
     target_link_libraries(petari_app_host PUBLIC aurora::core petari_input_sdl3 petari_home_menu_imgui
         petari_host_runtime petari_app_smoke)
 
-    add_executable(petari MACOSX_BUNDLE app_main.cpp smoke_storage.cpp pipeline_cache_dir.cpp launch_stage.cpp)
+    add_executable(petari MACOSX_BUNDLE app_main.cpp smoke_storage.cpp pipeline_cache_dir.cpp)
     target_link_libraries(petari PRIVATE petari_app_host petari_app_platform aurora::core aurora::main SQLite::SQLite3)
     # A real bundle identity: macOS uses it for the Dock/menu name, window state,
     # permissions and app identification. User data stays at the explicit path in app_main.
@@ -96,7 +96,9 @@ if(BUILD_TESTING)
         target_link_libraries(petari_app_smoke_storage_tests PRIVATE SQLite::SQLite3)
         add_test(NAME native_app_smoke_storage COMMAND petari_app_smoke_storage_tests)
     endif()
-    add_executable(petari_app_launch_stage_tests ${PETARI_REPO_ROOT}/native/tests/app_launch_stage_tests.cpp launch_stage.cpp)
+    add_executable(petari_app_launch_stage_tests ${PETARI_REPO_ROOT}/native/tests/app_launch_stage_tests.cpp
+        ${PETARI_REPO_ROOT}/native/home_menu/launch_stage.cpp)
+    target_include_directories(petari_app_launch_stage_tests PRIVATE ${PETARI_REPO_ROOT}/native/home_menu/include)
     add_test(NAME native_app_launch_stage COMMAND petari_app_launch_stage_tests)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME native_stage_sweep_parallel COMMAND "${Python3_EXECUTABLE}" "${PETARI_REPO_ROOT}/native/tests/stage_sweep_parallel_tests.py")

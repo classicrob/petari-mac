@@ -27,6 +27,19 @@ leaving the galaxy (or collecting its star) returns you to the observatory.
   case, spaces and punctuation are ignored). `--stage list` prints this table.
 - A wrong name or mission number stops at launch with a message.
 
+## In the game: Level Select
+
+Open the Home menu (F1 or the backtick key), choose **Mods**, then **Level
+Select**. Pick a galaxy and a mission with Left/Right (the arrow keys or Q/E,
+the D-pad, or the stick) or A, then **Go**. The menu closes and the game moves
+there at the next moment it would let you pause (not during a cutscene, a
+screen wipe, or while Mario is hurt or dying), with the same rules as
+`--stage`: no progress or unlock changes, comet and hidden-star missions
+included, and stars saved as usual. Level Select lists the galaxies below in
+the same order; it needs no mod switched on.
+
+## Galaxies
+
 | Dome | Galaxy | `--stage` alias | Internal name | Missions |
 | --- | --- | --- | --- | --- |
 | Terrace | Bowser Jr.'s Robot Reactor | `bowser-jrs-robot-reactor` | TriLegLv1Galaxy | 1 |

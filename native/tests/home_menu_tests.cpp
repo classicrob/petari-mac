@@ -16,6 +16,7 @@
 
 #include "Game/System/HomeButtonMenuWrapper.hpp"
 #include "petari/home_menu.hpp"
+#include "petari/launch_stage.hpp"
 #include "petari/home_menu_hbm.hpp"
 
 #ifdef PETARI_HOME_MENU_TEST_IMGUI
@@ -963,11 +964,11 @@ void testModsPage() {
     menu.update(press(A));
     check(menu.phase() == HM::Phase::Mods && menu.focus() == 0 && played(HM::Sound::Select), "Mods opens its page");
     HM::View view = menu.view();
-    check(std::strcmp(view.title, "Mods") == 0 && view.itemCount == 3 &&
+    check(std::strcmp(view.title, "Mods") == 0 && view.itemCount == 4 &&
               std::strcmp(view.items[0].label, "Collect visible Star Bits: Off") == 0 &&
               std::strcmp(view.items[1].label, "Fire a Star Bit at the nearest enemy: On") == 0 &&
-              std::strcmp(view.items[2].label, "Back") == 0,
-          "Mods page shows each toggle's state and Back");
+              std::strcmp(view.items[2].label, "Level Select") == 0 && std::strcmp(view.items[3].label, "Back") == 0,
+          "Mods page shows each toggle's state, Level Select and Back");
     check(menu.takeModToggles() == 0, "nothing toggled yet");
     menu.update(press(A));
     check(menu.phase() == HM::Phase::Mods && menu.mods()[0].on &&
@@ -978,7 +979,8 @@ void testModsPage() {
     menu.update(press(A));
     check(!menu.mods()[1].on && menu.takeModToggles() == 2u, "second toggle turns off");
     menu.update(press(Down));
-    check(menu.focus() == 2, "Back is last");
+    menu.update(press(Down));
+    check(menu.focus() == 3, "Back is last");
     sounds.clear();
     menu.update(press(A));
     check(menu.phase() == HM::Phase::List && menu.focus() == 2 && played(HM::Sound::Cancel), "Back returns to Mods");
@@ -989,6 +991,80 @@ void testModsPage() {
     check(std::strcmp(menu.view().items[0].label, "Collect visible Star Bits: On") == 0, "state kept on reopen");
 }
 
+void testLevelSelect() {
+    namespace LS = PetariNative::App::LaunchStage;
+    HM::Menu menu = newMenu();
+    HM::ModsEntry entries[2];
+    std::strcpy(entries[0].label, "Collect visible Star Bits");
+    std::strcpy(entries[1].label, "Fire a Star Bit at the nearest enemy");
+    menu.setMods(entries, 2);
+    openToList(menu);
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(A));
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::Levels && menu.focus() == 0, "Level Select opens from the Mods page");
+    int count = 0;
+    const LS::Galaxy* galaxies = LS::galaxies(&count);
+    HM::View view = menu.view();
+    check(std::strcmp(view.title, "Level Select") == 0 && view.itemCount == 4 &&
+              std::strcmp(view.items[0].label, galaxies[0].name) == 0 &&
+              std::strcmp(view.items[1].label, "Mission 1 of 1") == 0 && std::strcmp(view.items[2].label, "Go") == 0 &&
+              std::strcmp(view.items[3].label, "Back") == 0 && std::strstr(view.message, "Terrace") != nullptr,
+          "Level Select shows galaxy, mission, Go and Back");
+    // Right steps through galaxies; Left wraps backward.
+    int goodEgg = -1;
+    for (int i = 0; i < count; i++) {
+        if (std::strcmp(galaxies[i].stage, "EggStarGalaxy") == 0) goodEgg = i;
+    }
+    for (int i = 0; i < goodEgg; i++) {
+        menu.update(press(HM::Button::Right));
+    }
+    check(menu.levelGalaxy() == goodEgg && std::strcmp(menu.view().items[0].label, "Good Egg Galaxy") == 0, "Right steps galaxies");
+    menu.update(press(HM::Button::Left));
+    menu.update(press(HM::Button::Right));
+    check(menu.levelGalaxy() == goodEgg, "Left steps back");
+    menu.update(press(Down));
+    for (int i = 0; i < 3; i++) {
+        menu.update(press(HM::Button::Right));
+    }
+    check(menu.levelMission() == 4 && std::strcmp(menu.view().items[1].label, "Mission 4 of 6 (comet)") == 0,
+          "mission steps, comet marked");
+    menu.update(press(A));
+    menu.update(press(A));
+    check(std::strcmp(menu.view().items[1].label, "Mission 6 of 6 (hidden star)") == 0, "A also steps; hidden star marked");
+    menu.update(press(HM::Button::Right));
+    check(menu.levelMission() == 1, "missions wrap");
+    menu.update(press(HM::Button::Left));
+    check(menu.levelMission() == 6, "missions wrap backward");
+    const char* stage = nullptr;
+    int mission = 0;
+    check(!menu.takeLevelRequest(&stage, &mission), "no request before Go");
+    menu.update(press(Down));
+    sounds.clear();
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::Closing && played(HM::Sound::Select), "Go closes the menu");
+    check(!menu.takeLevelRequest(&stage, &mission), "request waits for the menu to finish closing");
+    check(framesUntilSelection(menu) == 10 && menu.selection() == HM::Selection::Resume, "Go resumes the game");
+    check(menu.takeLevelRequest(&stage, &mission) && std::strcmp(stage, "EggStarGalaxy") == 0 && mission == 6,
+          "the warp is reported once the menu is closed");
+    check(!menu.takeLevelRequest(&stage, &mission), "reported once");
+    // Back and Escape return to the Mods page without a request.
+    menu.open();
+    for (int i = 0; i < 10; i++) menu.update(none());
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(A));
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(A));
+    menu.update(press(Plus | B));
+    check(menu.phase() == HM::Phase::Mods && menu.focus() == 2, "Escape returns to the Mods page");
+    check(!menu.takeLevelRequest(&stage, &mission), "no request after Back");
+}
+
 int main() {
     testLifecycle();
     testSelections();
@@ -997,6 +1073,7 @@ int main() {
     testFocusAndRepeat();
     testControlsPage();
     testModsPage();
+    testLevelSelect();
     testBridgeInput();
     testWrapper();
 #ifdef PETARI_HOME_MENU_TEST_IMGUI

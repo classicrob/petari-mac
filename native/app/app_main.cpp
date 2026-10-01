@@ -30,7 +30,7 @@
 #include "smoke_background.hpp"
 #include "smoke_storage.hpp"
 #include "pipeline_cache_dir.hpp"
-#include "launch_stage.hpp"
+#include <petari/launch_stage.hpp>
 #include <petari/player_launch.hpp>
 #include <petari/host_allocation.hpp>
 
@@ -238,6 +238,28 @@ App::FrameStats::Phase framePhaseForPipelines() {
         const char* value = std::getenv("PETARI_MODS_AUTOPRESS");
         return value != nullptr ? std::strtol(value, nullptr, 10) : 0L;
     }();
+    // Test driver (PETARI_TEST_WARP=<galaxy>:<mission>): once, 30 gameplay frames
+    // in, queue the warp the Home menu's Level Select Go would (its UI is
+    // covered by native_home_menu); the game takes it at its next permitted frame.
+    static std::string testWarp = [] {
+        const char* value = std::getenv("PETARI_TEST_WARP");
+        return std::string(value != nullptr ? value : "");
+    }();
+    static long warpFrames = 0;
+    if (!testWarp.empty() && gameplay && ++warpFrames == 30) {
+        const auto colon = testWarp.find(':');
+        std::string stage, error;
+        const int mission = colon == std::string::npos ? 1 : std::atoi(testWarp.c_str() + colon + 1);
+        if (App::LaunchStage::resolve(testWarp.substr(0, colon), mission, &stage, &error)) {
+            std::snprintf(PetariNative::PlayerLaunch::warpStage, sizeof(PetariNative::PlayerLaunch::warpStage), "%s", stage.c_str());
+            PetariNative::PlayerLaunch::warpScenario = mission;
+            PetariNative::PlayerLaunch::warpPending.store(true);
+            std::fprintf(stderr, "[level-select-test] queued warp to %s mission %d\n", stage.c_str(), mission);
+        } else {
+            std::fprintf(stderr, "[level-select-test] %s\n", error.c_str());
+        }
+        testWarp.clear();
+    }
     static long gameplayFrames = 0;
     if (period > 1 && gameplay) {
         ++gameplayFrames;
