@@ -4,7 +4,7 @@ name: Native macOS (Apple Silicon)
 # full-game runs. Game data is never available in CI.
 on:
   push:
-    branches: [port/macos-arm64]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
