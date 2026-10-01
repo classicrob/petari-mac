@@ -30,6 +30,7 @@
 #include "smoke_background.hpp"
 #include "smoke_storage.hpp"
 #include "pipeline_cache_dir.hpp"
+#include "latency_report.hpp"
 #include <petari/launch_stage.hpp>
 #include <petari/player_launch.hpp>
 #include <petari/host_allocation.hpp>
@@ -231,6 +232,7 @@ App::FrameStats::Phase framePhaseForPipelines() {
     const App::FrameStats::Phase phase = App::Host::framePhase();
     const bool gameplay = phase == App::FrameStats::Phase::Gameplay && !App::Host::pauseMenuActive();
     petari_gx_pipeline_set_gameplay(gameplay);
+    App::LatencyReport::frame(gameplay);
     // Test driver (PETARI_MODS_AUTOPRESS=<frames>): during gameplay, press the
     // collect mod's button every <frames> frames and the shoot mod's halfway
     // between. The mods still decide whether a press does anything.
@@ -414,6 +416,7 @@ int main(int argc, char** argv) {
                      x, y, static_cast<unsigned long long>(SDL_GetWindowFlags(window)));
         App::Events::assertFocus();
     }
+    App::LatencyReport::configureLayer(info.window);
     if (!prepareKnownPipelines(static_cast<SDL_Window*>(info.window))) {
         aurora_shutdown();
         return 0;
@@ -430,6 +433,7 @@ int main(int argc, char** argv) {
 
     App::Seam::attach(info.window);
     App::Seam::setPhaseProbe(framePhaseForPipelines);
+    App::LatencyReport::startTestDriver();
     App::Host::startOS();
     App::Seam::openFirstFrame();
     App::Host::runGame();

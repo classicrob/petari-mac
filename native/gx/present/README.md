@@ -35,7 +35,13 @@ when Aurora ends its frame.
    The XFB copy has `lines = GXGetNumXfbLines(source height, Y scale)` rows.
 3. **Choosing what to present.** At the frame seam, the app calls
    `composeFrame` (`present_host.cpp`, SDK side). It reads `VI::displayState()`:
-   the XFB latched at the last retrace, black, configured, dimmed. It also
+   the XFB latched at the last retrace, black, configured, dimmed. By default
+   it then presents the newest display copy (`GXCopyDisp`) instead of the
+   latched XFB: that copy is in the frame's FIFO, drained before Aurora
+   presents, and VI would only latch it about two frames later. Measured
+   (`PETARI_LATENCY_PROBE=1`, `petari/latency_probe.hpp`): press to present
+   p50 81 -> 48 ms with the same frame pacing. `PETARI_PRESENT_XFB=latched`
+   restores the Wii's own scan-out timing. VI black and dimming apply either way. It also
    reads the SC aspect (16:9 or 4:3), and hands everything over through
    `present.h` (plain C, so Aurora's and the SDK's GX headers never meet).
 4. **Present.** The patched `aurora_end_frame` calls `petari_present::take()`

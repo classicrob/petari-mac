@@ -141,6 +141,8 @@ void GXSetDispCopyGamma(GXGamma gamma) { sDisplayCopy.gamma = gamma; }
 void GXSetCopyClamp(GXFBClamp clamp) { sDisplayCopy.clamp = clamp; }
 
 void GXCopyDisp(void* dest, GXBool clear) {
+  PetariNative::LatencyProbe::noteCopy(dest, PetariNative::LatencyProbe::frame.load(std::memory_order_relaxed));
+  PetariNative::PresentTiming::lastDisplayCopy.store(dest, std::memory_order_relaxed);
   if (sDisplayCopy.gamma != GX_GM_1_0) {
     static bool warned = false;
     if (!warned) {
@@ -174,7 +176,8 @@ void GXCopyDisp(void* dest, GXBool clear) {
 
 def patch_framebuffer(text):
     text = replace_once(text, '#include <algorithm>\n#include <cmath>\n',
-                        '#include <algorithm>\n#include <cmath>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n')
+                        '#include <algorithm>\n#include <cmath>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n'
+                        '#include <petari/latency_probe.hpp>\n')
     text = replace_once(text, 'void GXCopyTex(void* dest, GXBool clear) {\n',
                         'void GXCopyTex(void* dest, GXBool clear) {\n'
                         '  traceCopy("texture", sTexCopy.width, sTexCopy.height, sTexCopy.dstWidth, sTexCopy.dstHeight,\n'
@@ -262,7 +265,8 @@ def patch_aurora(text):
     text = replace_once(text,
                         '  gfx::end_frame([rmlBindGroup = std::move(rmlBindGroup), rmlOverlay, viewport,\n',
                         '  gfx::end_frame([rmlBindGroup = std::move(rmlBindGroup), rmlOverlay, viewport,\n'
-                        '                  petariPresent = std::move(petariPresent),\n')
+                        '                  petariPresent = std::move(petariPresent),\n'
+                        '                  petariProbeFrame = PetariNative::LatencyProbe::frame.load() - 1,\n')
     text = replace_once(
         text,
         '      wgpu::BindGroup presentBindGroup;\n'
@@ -300,7 +304,7 @@ def patch_aurora(text):
     # Frame telemetry (petari/frame_telemetry.hpp): render-worker wall time of
     # the drawable acquisition, the frame's queue submit and the present call.
     text = replace_once(text, '#include "present_aurora.hpp"\n',
-                        '#include "present_aurora.hpp"\n#include <petari/frame_telemetry.hpp>\n')
+                        '#include "present_aurora.hpp"\n#include <petari/frame_telemetry.hpp>\n#include <petari/latency_probe.hpp>\n')
     text = replace_once(text, '        g_surface.GetCurrentTexture(&surfaceTexture);\n',
                         '        {\n'
                         '          PetariNative::FrameTelemetry::Scope petariTiming{PetariNative::FrameTelemetry::DrawableAcquire};\n'
@@ -311,7 +315,8 @@ def patch_aurora(text):
                         '      g_queue.Submit(1, &buffer);\n')
     text = replace_once(text, '          status = g_surface.Present();\n',
                         '          PetariNative::FrameTelemetry::Scope petariTiming{PetariNative::FrameTelemetry::PresentCall};\n'
-                        '          status = g_surface.Present();\n')
+                        '          status = g_surface.Present();\n'
+                        '          PetariNative::LatencyProbe::notePresent(petariProbeFrame);\n')
     return text
 
 

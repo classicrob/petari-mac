@@ -33,6 +33,7 @@
 
 #include "petari/host_allocation.hpp"
 #include "petari/input.hpp"
+#include "petari/latency_probe.hpp"
 #include "remote_model.hpp"
 
 namespace PetariNative::Input {
@@ -332,6 +333,9 @@ void buildReport(Channel& ch, const Report& input) {
     const bool nunchuk = ch.devType == WPAD_DEV_FREESTYLE;
 
     u16 buttons = input.buttons;
+    if ((buttons & WPAD_BUTTON_A) != 0) {
+        LatencyProbe::noteReport();
+    }
     if (!(nunchuk && isFsFormat(fmt))) {
         buttons &= static_cast<u16>(~kNunchukButtons);
     }
@@ -538,6 +542,19 @@ namespace {
 constexpr Action kModActions[] = {Action::ModCollectStarBits, Action::ModShootEnemy};
 std::atomic<int> gModPresses[std::size(kModActions)];
 
+// Latency probe (petari/latency_probe.hpp): a down edge of an input bound to A
+// or Start. Caller holds gHostMutex.
+void notePressForProbe(Binding input) {
+    if (!LatencyProbe::enabled()) return;
+    for (const Action action : {Action::A, Action::Start}) {
+        const auto& bound = model().bindings().inputs(action);
+        if (std::find(bound.begin(), bound.end(), input) != bound.end()) {
+            LatencyProbe::notePress();
+            return;
+        }
+    }
+}
+
 // Counts a down edge of an input bound to a mod action. Caller holds gHostMutex.
 void countModPress(Binding input) {
     for (std::size_t i = 0; i < std::size(kModActions); ++i) {
@@ -571,6 +588,7 @@ void keyEvent(KeyCode code, bool down, bool repeat) {
     std::lock_guard<std::mutex> lock(gHostMutex);
     if (down && !repeat) {
         countModPress(Binding::key(code));
+        notePressForProbe(Binding::key(code));
     }
     model().keyEvent(code, down, repeat);
 }
@@ -580,6 +598,7 @@ void mouseButtonEvent(MouseButton button, bool down) {
     std::lock_guard<std::mutex> lock(gHostMutex);
     if (down) {
         countModPress(Binding::mouse(button));
+        notePressForProbe(Binding::mouse(button));
     }
     model().mouseButtonEvent(button, down);
 }
@@ -589,6 +608,7 @@ void padButtonEvent(PadButton button, bool down) {
     std::lock_guard<std::mutex> lock(gHostMutex);
     if (down) {
         countModPress(Binding::pad(button));
+        notePressForProbe(Binding::pad(button));
     }
     model().padButtonEvent(button, down);
 }
@@ -856,6 +876,9 @@ void WPADRead(s32 chan, void* status) {
     const size_t size = formatSize(ch.dataFormat);
     if (ch.connected) {
         std::memcpy(status, &ch.report, size);
+        if (chan == 0 && (ch.report.core.button & WPAD_BUTTON_A) != 0) {
+            PetariNative::LatencyProbe::noteRead(PetariNative::LatencyProbe::frame.load(std::memory_order_relaxed));
+        }
     } else {
         std::memset(status, 0, size);
         static_cast<WPADStatus*>(status)->err = WPAD_ERR_NO_CONTROLLER;
