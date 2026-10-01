@@ -221,7 +221,11 @@ if(PETARI_BUILD_GX_PROBE)
     add_custom_target(petari_tests)
     foreach(_petari_test petari_j3d_material_anm_tests petari_app_smoke_storage_tests petari_app_smoke_domes_tests
             petari_app_seam_tests petari_app_input_events_tests petari_app_smoke_tests petari_app_smoke_stage_tests
-            petari_app_launch_stage_tests)
+            petari_app_launch_stage_tests
+            # Asset tests (registered only when build/game-data exists), also EXCLUDE_FROM_ALL:
+            petari_j3d_load_tests petari_j3d_anim_load_tests petari_jpa_load_tests petari_game_data_tests
+            petari_host_image_heap_tests petari_file_cache_heap_tests petari_file_cache_demand_tests
+            petari_speaker_tests petari_aud_chord_tests petari_jaudio_resource_tests)
         if(TARGET ${_petari_test})
             add_dependencies(petari_tests ${_petari_test})
         endif()

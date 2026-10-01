@@ -414,3 +414,15 @@ test runs listed; only the ctest targets were re-run for this summary.
   full warm PASS, all 5 gates <0.1 ms, 0 skipped draws, p99 17.4 ms. The first
   throttle (36cad0550, 1 speculative slot) caused heavy cold pop-in and was
   retuned to 2 stage + 1 backlog. Pause exemption is not isolated live.
+
+## Known flaky tests
+
+- `native_rfl_render` can fail on the first run in a fresh build tree (cold shader
+  cache), with `model frame: background where there is no face` or `icon corner is
+  RFL's copy-clear color`, and passes on later runs (3/3 after warming; it also fails
+  under heavy machine load). The test does not wait for asynchronous shader
+  compilation. Owner to be decided; low priority. Rerun it alone before treating a
+  failure as a regression.
+- `native_platform_allocation` has a performance comparison ("faster than dladdr")
+  that failed once under load and passed on rerun.
+- Tests labelled `timing` need a quiet machine (see the afternoon section above).
