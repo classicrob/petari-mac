@@ -3,13 +3,24 @@
 
 #include "present_aurora.hpp"
 
+#include "gfx/render_worker.hpp"
 #include "gx/gx.hpp"
 #include "webgpu/gpu.hpp"
 #include "window.hpp"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <petari/efb_dump_mark.hpp>
+#include <petari/host_allocation.hpp>
+#include <petari/png_write.hpp>
 
 #include "present.h"
 
@@ -103,6 +114,128 @@ aurora::webgpu::TextureWithSampler xfb_source(const aurora::gfx::TextureRef& ref
   };
 }
 
+
+// --- Opt-in dump of the presented image (PETARI_XFB_DUMP=<dir>), free when unset. -------------
+// Reads the XFB display copy VI latched (the final frame, unlike the mid-frame EFB snapshots)
+// and writes <dir>/<label>-<frame since mark>.png every PETARI_XFB_DUMP_EVERY (default 20)
+// presented frames, for up to PETARI_XFB_DUMP_SPAN (default 400) frames after each phase mark
+// (petari/efb_dump_mark.hpp) whose label is in PETARI_XFB_DUMP_LABELS (default "idle,walk,jump").
+// The readback runs on the render worker, in order after the display copy, and blocks it briefly.
+struct XfbDumpConfig {
+  std::string dir, labels = "idle,walk,jump";
+  unsigned long every = 20, span = 400;
+  bool enabled = false;
+};
+const XfbDumpConfig& xfbDumpConfig() {
+  static const XfbDumpConfig config = [] {
+    XfbDumpConfig c;
+    if (const char* dir = std::getenv("PETARI_XFB_DUMP"); dir && *dir) {
+      c.dir = dir;
+      c.enabled = true;
+      if (const char* v = std::getenv("PETARI_XFB_DUMP_LABELS")) c.labels = v;
+      if (const char* v = std::getenv("PETARI_XFB_DUMP_EVERY")) c.every = std::max(1ul, std::strtoul(v, nullptr, 10));
+      if (const char* v = std::getenv("PETARI_XFB_DUMP_SPAN")) c.span = std::strtoul(v, nullptr, 10);
+    }
+    return c;
+  }();
+  return config;
+}
+
+constexpr const char* kXfbShader = R"(
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var<storage, read_write> rgb: array<u32>;
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  let size = textureDimensions(src);
+  if (id.x >= size.x || id.y >= size.y) { return; }
+  let c = vec3u(round(clamp(textureLoad(src, vec2i(id.xy), 0).rgb, vec3f(0), vec3f(1)) * 255.0));
+  rgb[id.y * size.x + id.x] = (c.r << 16u) | (c.g << 8u) | c.b;
+}
+)";
+
+void dumpXfb(aurora::gfx::TextureHandle xfb, std::string path) {
+  PetariNative::HostAllocationScope host;
+  using aurora::webgpu::g_device;
+  using aurora::webgpu::g_queue;
+  const uint32_t width = xfb->size.width, height = xfb->size.height;
+  const uint64_t bytes = uint64_t(width) * height * 4;
+  static wgpu::ComputePipeline* pipeline = nullptr;
+  if (!pipeline) {
+    const wgpu::ShaderSourceWGSL wgsl{wgpu::ShaderSourceWGSL::Init{.code = kXfbShader}};
+    const wgpu::ShaderModuleDescriptor moduleDesc{.nextInChain = &wgsl, .label = "Petari XFB dump"};
+    const auto module = g_device.CreateShaderModule(&moduleDesc);
+    const wgpu::ComputePipelineDescriptor pipelineDesc{
+        .label = "Petari XFB dump", .compute = wgpu::ComputeState{.module = module, .entryPoint = "main"}};
+    pipeline = new wgpu::ComputePipeline(g_device.CreateComputePipeline(&pipelineDesc));
+  }
+  const wgpu::BufferDescriptor storageDesc{
+      .label = "Petari XFB dump storage", .usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc, .size = bytes};
+  const auto storage = g_device.CreateBuffer(&storageDesc);
+  const wgpu::BufferDescriptor readDesc{
+      .label = "Petari XFB dump readback", .usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst, .size = bytes};
+  const auto readback = g_device.CreateBuffer(&readDesc);
+  const std::array entries{wgpu::BindGroupEntry{.binding = 0, .textureView = xfb->sampleTextureView},
+                           wgpu::BindGroupEntry{.binding = 1, .buffer = storage, .size = bytes}};
+  const wgpu::BindGroupDescriptor bindDesc{
+      .label = "Petari XFB dump", .layout = pipeline->GetBindGroupLayout(0), .entryCount = entries.size(), .entries = entries.data()};
+  const auto binding = g_device.CreateBindGroup(&bindDesc);
+  const auto encoder = g_device.CreateCommandEncoder();
+  const auto pass = encoder.BeginComputePass();
+  pass.SetPipeline(*pipeline);
+  pass.SetBindGroup(0, binding);
+  pass.DispatchWorkgroups((width + 7) / 8, (height + 7) / 8);
+  pass.End();
+  encoder.CopyBufferToBuffer(storage, 0, readback, 0, bytes);
+  const auto commands = encoder.Finish();
+  g_queue.Submit(1, &commands);
+  std::atomic<int> state{0};
+  readback.MapAsync(wgpu::MapMode::Read, 0, bytes, wgpu::CallbackMode::AllowSpontaneous,
+                    [&state](wgpu::MapAsyncStatus status, wgpu::StringView) { state = status == wgpu::MapAsyncStatus::Success ? 1 : -1; });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (state == 0 && std::chrono::steady_clock::now() < deadline) {
+    aurora::webgpu::g_instance.ProcessEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if (state != 1) {
+    std::fprintf(stderr, "Petari XFB dump: readback failed for %s\n", path.c_str());
+    return;
+  }
+  const auto* data = static_cast<const uint32_t*>(readback.GetConstMappedRange(0, bytes));
+  std::vector<unsigned char> rgb;
+  rgb.reserve(size_t(width) * height * 3);
+  for (size_t i = 0; i < size_t(width) * height; ++i) {
+    rgb.push_back(static_cast<unsigned char>(data[i] >> 16));
+    rgb.push_back(static_cast<unsigned char>(data[i] >> 8));
+    rgb.push_back(static_cast<unsigned char>(data[i]));
+  }
+  readback.Unmap();
+  PetariNative::writePngRgb(path, width, height, rgb.data());
+}
+
+// Main thread, once per presented frame with an XFB.
+void maybeDumpXfb(const aurora::gfx::TextureHandle& xfb) {
+  const auto& config = xfbDumpConfig();
+  if (!config.enabled) return;
+  static uint64_t seenMark = 0, sinceMark = 0;
+  static const char* label = "none";
+  static bool directoryMade = false;
+  const auto counter = PetariNative::EfbDump::markCounter.load(std::memory_order_acquire);
+  if (counter != seenMark) {
+    seenMark = counter;
+    sinceMark = 0;
+    label = PetariNative::EfbDump::markLabel.load(std::memory_order_acquire);
+  }
+  const auto index = sinceMark++;
+  if (index >= config.span || index % config.every != 0) return;
+  if ((std::string(",") + config.labels + ",").find(std::string(",") + label + ",") == std::string::npos) return;
+  if (!directoryMade) {
+    if (std::system(("mkdir -p '" + config.dir + "'").c_str()) != 0) return;
+    directoryMade = true;
+  }
+  auto path = config.dir + "/xfb-" + label + "-" + std::to_string(index) + ".png";
+  aurora::gfx::render_worker::enqueue_work([xfb, path = std::move(path)] { dumpXfb(xfb, path); });
+}
+
 }  // namespace
 
 Frame take() noexcept {
@@ -129,6 +262,7 @@ Frame take() noexcept {
   }
   frame.black = false;
   frame.xfb = it->second.handle;
+  maybeDumpXfb(frame.xfb);
   frame.dimOpacity = gVideo.dimmed ? kDimOpacity : 0.0f;
   if (traceSizes()) {
     traceFrame(frame);

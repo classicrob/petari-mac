@@ -2,8 +2,11 @@
 #include "sync_backend.h"
 #include "gx/gx.hpp"
 #include "webgpu/gpu.hpp"
+#include <petari/efb_dump_mark.hpp>
+#include <petari/png_write.hpp>
 #include <petari/frame_telemetry.hpp>
 #include <petari/host_allocation.hpp>
+#include <algorithm>
 #include <array>
 #include <map>
 #include <memory>
@@ -11,6 +14,8 @@
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 
 namespace PetariNative::GX {
 namespace {
@@ -25,6 +30,64 @@ std::map<std::uint64_t, Snapshot> snapshots;
 // practice, so no allocation or page faults per capture). snapshotMutex.
 std::vector<std::vector<Pixel>> sparePixels;
 constexpr std::size_t kMaxSparePixels = 4;
+
+
+// --- Opt-in PNG dump (PETARI_EFB_DUMP=<dir>), off and free when unset. -----------------------
+// Writes every PETARI_EFB_DUMP_EVERY-th (default 60) snapshot, for up to
+// PETARI_EFB_DUMP_SPAN (default 1200) snapshots after each phase mark whose label is listed in
+// PETARI_EFB_DUMP_LABELS (default "idle,walk,jump"). About three snapshots are taken per game frame.
+// Files: <dir>/<label>-<index since mark>-t<ticket>.png (RGB; alpha ignored). Uncompressed PNG.
+struct DumpConfig {
+    std::string dir, labels;
+    unsigned long every = 60, span = 1200;
+    bool enabled = false;
+};
+const DumpConfig& dumpConfig() {
+    static const DumpConfig config = [] {
+        DumpConfig c;
+        if (const char* dir = std::getenv("PETARI_EFB_DUMP"); dir && *dir) {
+            c.dir = dir;
+            c.enabled = true;
+            c.labels = std::getenv("PETARI_EFB_DUMP_LABELS") ? std::getenv("PETARI_EFB_DUMP_LABELS") : "idle,walk,jump";
+            if (const char* v = std::getenv("PETARI_EFB_DUMP_EVERY")) c.every = std::max(1ul, std::strtoul(v, nullptr, 10));
+            if (const char* v = std::getenv("PETARI_EFB_DUMP_SPAN")) c.span = std::strtoul(v, nullptr, 10);
+        }
+        return c;
+    }();
+    return config;
+}
+// Called for every completed snapshot (readback thread, host allocation scope).
+void maybeDump(std::uint64_t ticket, const Snapshot& snapshot) {
+    const auto& config = dumpConfig();
+    if (!config.enabled) return;
+    static std::uint64_t seenMark = 0, sinceMark = 0;
+    static const char* label = "none";
+    static bool directoryMade = false;
+    const auto counter = EfbDump::markCounter.load(std::memory_order_acquire);
+    if (counter != seenMark) {
+        seenMark = counter;
+        sinceMark = 0;
+        label = EfbDump::markLabel.load(std::memory_order_acquire);
+    }
+    const auto index = sinceMark++;
+    if (index >= config.span || index % config.every != 0) return;
+    const std::string wanted = "," + config.labels + ",";
+    if (wanted.find(std::string(",") + label + ",") == std::string::npos) return;
+    if (!directoryMade) {
+        std::string command = "mkdir -p '" + config.dir + "'";
+        if (std::system(command.c_str()) != 0) return;
+        directoryMade = true;
+    }
+    std::vector<unsigned char> rgb;
+    rgb.reserve(snapshot.pixels.size() * 3);
+    for (const auto& pixel : snapshot.pixels) {
+        rgb.push_back(static_cast<unsigned char>(pixel.argb >> 16));
+        rgb.push_back(static_cast<unsigned char>(pixel.argb >> 8));
+        rgb.push_back(static_cast<unsigned char>(pixel.argb));
+    }
+    PetariNative::writePngRgb(config.dir + "/" + label + "-" + std::to_string(index) + "-t" + std::to_string(ticket) + ".png",
+                              snapshot.width, snapshot.height, rgb.data());
+}
 
 constexpr const char* shader = R"(
 struct Params {
@@ -207,6 +270,7 @@ aurora::gfx::AfterSubmitCallback encodeSnapshot(const wgpu::CommandEncoder& enco
                     }
                 }
                 result.pixels.assign(data, data + bytes / sizeof(Pixel));
+                maybeDump(ticket, result);
                 readback.Unmap();
                 returnReadback(readback, generation);
                 {

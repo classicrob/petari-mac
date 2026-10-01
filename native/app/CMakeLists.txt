@@ -35,6 +35,8 @@ target_include_directories(petari_milestone PUBLIC ${PETARI_REPO_ROOT}/native/in
 target_compile_features(petari_milestone PUBLIC cxx_std_17)
 add_library(petari_app_smoke STATIC smoke.cpp smoke_stage.cpp smoke_mechanics.cpp smoke_goodegg.cpp smoke_soak.cpp smoke_domes.cpp smoke_domes_routes.cpp smoke_domes_verified_routes.cpp smoke_replay.cpp)
 target_compile_features(petari_app_smoke PUBLIC cxx_std_17)
+# petari/efb_dump_mark.hpp only (header-only; no SDK or Aurora headers).
+target_include_directories(petari_app_smoke PUBLIC ${PETARI_REPO_ROOT}/native/include)
 
 if(NOT _petari_app_standalone)
     add_library(petari_app_platform STATIC platform_host.cpp smoke_game.cpp collision_probe.cpp frame_phase.cpp soak_telemetry.cpp)

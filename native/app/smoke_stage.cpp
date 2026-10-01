@@ -2,6 +2,7 @@
 // frame seam feeds it observations and applies its presses.
 
 #include "smoke_stage.hpp"
+#include <petari/efb_dump_mark.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -155,6 +156,14 @@ const char* StageDriver::phase() const {
 }
 
 void StageDriver::next(Phase phase) {
+    switch (phase) {  // marks for the opt-in EFB PNG dump (PETARI_EFB_DUMP); inert otherwise
+    case Phase::Idle: PetariNative::EfbDump::mark("idle"); break;
+    case Phase::Walk: PetariNative::EfbDump::mark("walk"); break;
+    case Phase::Jump: PetariNative::EfbDump::mark("jump"); break;
+    case Phase::Spin: PetariNative::EfbDump::mark("spin"); break;
+    case Phase::Camera: PetariNative::EfbDump::mark("camera"); break;
+    default: PetariNative::EfbDump::mark("other"); break;
+    }
     mPhase = phase;
     mPhaseFrames = 0;
     mStep = 0;
