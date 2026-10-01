@@ -26,9 +26,13 @@ see [Known issues](#known-issues).
 ## Requirements
 
 - A Mac with Apple Silicon (M1 or newer). Intel Macs are not supported.
-- macOS with a current Xcode or the Xcode Command Line Tools. Developed and
-  tested with Xcode 26.4 on macOS 27. The app is built for the macOS version of
-  your SDK (no older deployment target has been tested).
+- **Xcode 26 or newer** (or its Command Line Tools). Aurora uses C++20
+  `std::jthread` and `std::stop_token`, which Apple's libc++ only has from Xcode
+  26: the build works with Xcode 26.4 (Apple clang 21) and fails with Xcode 16.4
+  (Apple clang 17). Versions in between are untested. Check with
+  `clang --version`; switch with `sudo xcode-select -s /Applications/Xcode.app`.
+- Developed on macOS 27. The app is built for the macOS version of your SDK (no
+  older deployment target has been tested).
 - [CMake](https://cmake.org/) 3.25 or newer, and SQLite 3.37 or newer
   (Homebrew: `brew install cmake sqlite`).
 - An internet connection for the first configure: CMake downloads Aurora and its

@@ -10,10 +10,22 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15  # arm64
+    # Aurora needs std::jthread/std::stop_token: Xcode 26's libc++. The macos-15
+    # image defaults to Xcode 16.4 (Apple clang 17), which lacks them.
+    runs-on: macos-26  # arm64
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          xcode="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then echo "::error::no Xcode 26 on this runner image"; ls -d /Applications/Xcode*.app; exit 1; fi
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          clang --version
+          printf '#include <thread>\n#include <stop_token>\nint main(){std::jthread t([](std::stop_token){});}\n' > jthread.cpp
+          clang++ -std=c++20 jthread.cpp -o jthread || { echo "::error::this toolchain lacks std::jthread (Aurora needs it)"; exit 1; }
 
       - name: Dependencies
         run: brew install sqlite
