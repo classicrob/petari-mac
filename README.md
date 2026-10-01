@@ -6,7 +6,7 @@ code is compiled for arm64 and runs directly on your Mac, rendering with Metal
 through [Aurora](https://github.com/encounter/aurora). There is no emulator.
 
 > [!IMPORTANT]
-> **This is an unofficial fork, not affiliated with the Petari project or its
+> **This is an unofficial, independent project, not affiliated with the Petari project or its
 > Discord, and not with Nintendo.** The Petari decompilation itself is not meant
 > to be a PC port: please do **not** ask the Petari maintainers or their Discord
 > about this port. Report problems here instead.
