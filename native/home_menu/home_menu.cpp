@@ -1,5 +1,6 @@
 #include "petari/home_menu.hpp"
 #include "petari/launch_stage.hpp"
+#include "petari/progress.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -34,13 +35,14 @@ constexpr float kControlsBackTop = 0.68f;
 constexpr float kControlsBackHeight = 0.15f;
 constexpr float kControlsBackHalfWidth = 0.2f;
 
-constexpr const char* kListLabels[] = {"Resume", "Controls", "Mods", "Restart from Title", "Quit"};
-constexpr int kListCount = 5;
+constexpr const char* kListLabels[] = {"Resume", "Controls", "Mods", "My Progress", "Restart from Title", "Quit"};
+constexpr int kListCount = 6;
 constexpr int kListResume = 0;
 constexpr int kListControls = 1;
 constexpr int kListMods = 2;
-constexpr int kListRestart = 3;
-constexpr int kListQuit = 4;
+constexpr int kListProgress = 3;
+constexpr int kListRestart = 4;
+constexpr int kListQuit = 5;
 constexpr int kConfirmAccept = 0;
 constexpr int kConfirmCancel = 1;
 
@@ -126,6 +128,7 @@ void Menu::update(const FrameInput& input) {
     case Phase::Levels:
     case Phase::Camera:
     case Phase::ModFolder:
+    case Phase::Progress:
         break;
     }
 
@@ -163,6 +166,13 @@ void Menu::update(const FrameInput& input) {
         const std::uint32_t side = input.trigger & (Button::Left | Button::Right);
         if (side == Button::Left || side == Button::Right) {
             changeCameraValue(mFocus, side == Button::Left ? -1 : 1);
+            return;
+        }
+    }
+    if (mPhase == Phase::Progress && mFocus == 0) {
+        const std::uint32_t side = input.trigger & (Button::Left | Button::Right);
+        if (side == Button::Left || side == Button::Right) {
+            changeProgressGalaxy(side == Button::Left ? -1 : 1);
             return;
         }
     }
@@ -280,6 +290,69 @@ void Menu::refreshFolderLabels() {
     }
 }
 
+namespace {
+const char* missionKind(const App::LaunchStage::Galaxy& galaxy, int mission) {
+    const char digit = static_cast<char>('0' + mission);
+    if (std::strchr(galaxy.comets, digit) != nullptr) return " (comet)";
+    if (std::strchr(galaxy.hidden, digit) != nullptr) return " (hidden star)";
+    return "";
+}
+
+void formatTime(double seconds, char* out, size_t size) {
+    const int whole = static_cast<int>(seconds);
+    std::snprintf(out, size, "%d:%02d.%02d", whole / 60, whole % 60, static_cast<int>((seconds - whole) * 100.0 + 0.5) % 100);
+}
+}  // namespace
+
+void Menu::refreshProgress() {
+    int count = 0;
+    const App::LaunchStage::Galaxy* galaxies = App::LaunchStage::galaxies(&count);
+    mProgressGalaxy = count > 0 ? std::clamp(mProgressGalaxy, 0, count - 1) : 0;
+    mProgressLineCount = 0;
+    if (count == 0) {
+        std::snprintf(mProgressLabels[0], sizeof(mProgressLabels[0]), "No galaxies");
+        return;
+    }
+    const App::LaunchStage::Galaxy& galaxy = galaxies[mProgressGalaxy];
+    int clearedHere = 0;
+    ControlsEntry& header = mProgressLines[mProgressLineCount++];
+    std::memset(&header, 0, sizeof(header));
+    std::snprintf(header.inputs, sizeof(header.inputs), "Best time / deaths / coins / Star Bits");
+    std::snprintf(header.pad, sizeof(header.pad), "Clears, first clear");
+    for (int mission = 1; mission <= galaxy.missions && mProgressLineCount < 8; mission++) {
+        ControlsEntry& line = mProgressLines[mProgressLineCount++];
+        std::memset(&line, 0, sizeof(line));
+        std::snprintf(line.action, sizeof(line.action), "Mission %d%s", mission, missionKind(galaxy, mission));
+        Progress::Mission record;
+        if (Progress::find(galaxy.stage, mission, &record)) {
+            clearedHere++;
+            char time[24];
+            formatTime(record.bestTimeS, time, sizeof(time));
+            std::snprintf(line.inputs, sizeof(line.inputs), "Cleared %s  %d  %d  %d", time, record.fewestDeaths, record.bestCoins,
+                          record.bestStarBits);
+            std::snprintf(line.pad, sizeof(line.pad), "x%d  %.10s", record.clears, record.firstClear.c_str());
+        } else {
+            std::snprintf(line.inputs, sizeof(line.inputs), "Not cleared yet");
+        }
+    }
+    std::snprintf(mProgressLabels[0], sizeof(mProgressLabels[0]), "<  %s  >", galaxy.name);
+    std::snprintf(mProgressLabels[1], sizeof(mProgressLabels[1]), mProgressResetArmed ? "Press A again to erase everything" : "Reset progress...");
+    std::snprintf(mProgressLabels[2], sizeof(mProgressLabels[2]), "Back");
+    std::snprintf(mProgressMessage, sizeof(mProgressMessage), "%s: %d of %d cleared here, %d in all. Your save is not changed.",
+                  App::LaunchStage::domeName(galaxy.dome), clearedHere, galaxy.missions, Progress::clearedCount());
+}
+
+void Menu::changeProgressGalaxy(int delta) {
+    int count = 0;
+    App::LaunchStage::galaxies(&count);
+    if (count > 0) {
+        mProgressGalaxy = (mProgressGalaxy + delta + count) % count;
+    }
+    mProgressResetArmed = false;
+    refreshProgress();
+    play(Sound::Focus);
+}
+
 bool Menu::takeLevelRequest(const char** stage, int* mission) {
     if (!mLevelPending || mPhase != Phase::Finished) {
         return false;
@@ -335,6 +408,7 @@ void Menu::startBlackOut() {
     case Phase::Levels:
     case Phase::Camera:
     case Phase::ModFolder:
+    case Phase::Progress:
     case Phase::Closing:
         blackOut(Selection::Restart);
         break;
@@ -366,6 +440,7 @@ View Menu::view() const {
     case Phase::Levels:
     case Phase::Camera:
     case Phase::ModFolder:
+    case Phase::Progress:
         view.panelOpacity = 1.0f;
         break;
     case Phase::Closing:
@@ -383,6 +458,7 @@ View Menu::view() const {
 
     const bool confirm = mConfirming != Selection::None;
     const bool controls = mPhase == Phase::Controls;
+    const bool progressPage = mPhase == Phase::Progress;
     if (controls) {
         view.title = "Controls";
         view.message = "Change them in controls.txt in the game's user folder.";
@@ -393,6 +469,17 @@ View Menu::view() const {
         }
         view.linesArea = {-kControlsLinesHalfWidth / ax, kControlsLinesTop, kControlsLinesHalfWidth / ax,
                           kControlsLinesBottom};
+    } else if (mPhase == Phase::Progress) {
+        view.title = "My Progress";
+        view.message = mProgressMessage;
+        for (int i = 0; i < 3; i++) {
+            view.items[i].label = mProgressLabels[i];
+        }
+        view.lineCount = mProgressLineCount;
+        for (int i = 0; i < mProgressLineCount; i++) {
+            view.lines[i] = mProgressLines[i];
+        }
+        view.linesArea = {-kControlsLinesHalfWidth / ax, kControlsLinesTop + 0.2f, kControlsLinesHalfWidth / ax, 0.42f};
     } else if (mPhase == Phase::Mods) {
         view.title = "Mods";
         view.message = "Off by default. Saved in mods.txt; keys in controls.txt.";
@@ -444,9 +531,9 @@ View Menu::view() const {
         view.items[kConfirmCancel].label = "Cancel";
     }
     view.itemCount = itemCount();
-    if (controls) {
+    if (controls || progressPage) {
         view.panel = {-kControlsHalfWidth / ax, kControlsTop, kControlsHalfWidth / ax,
-                      itemRect(0).y1 + kPanelBottomMargin};
+                      itemRect(progressPage ? 2 : 0).y1 + kPanelBottomMargin};
         view.titleY = kControlsTitleY;
         view.messageY = kControlsMessageY;
     } else {
@@ -473,6 +560,9 @@ int Menu::itemCount() const {
     if (mPhase == Phase::ModFolder) {
         return folderShown() + (folderPages() > 1 ? 1 : 0) + 1;
     }
+    if (mPhase == Phase::Progress) {
+        return 3;
+    }
     if (mPhase == Phase::Camera) {
         return 5;
     }
@@ -487,6 +577,11 @@ Rect Menu::itemRect(int index) const {
     if (mPhase == Phase::Controls) {
         return {-kControlsBackHalfWidth / ax, kControlsBackTop, kControlsBackHalfWidth / ax,
                 kControlsBackTop + kControlsBackHeight};
+    }
+    if (mPhase == Phase::Progress) {
+        // The galaxy selector under the message, Reset and Back side by side at the bottom.
+        if (index == 0) return {-0.5f / ax, -0.64f, 0.5f / ax, -0.50f};
+        return index == 1 ? Rect{-0.6f / ax, 0.52f, -0.04f / ax, 0.67f} : Rect{0.04f / ax, 0.52f, 0.6f / ax, 0.67f};
     }
     // Six or more items (the Mods page) use a tighter column so they fit.
     const bool compact = itemCount() > 5;
@@ -522,6 +617,10 @@ void Menu::setFocus(int focus, bool withSound) {
         return;
     }
     mFocus = focus;
+    if (mPhase == Phase::Progress && mProgressResetArmed && focus != 1) {
+        mProgressResetArmed = false;  // moving away disarms the erase
+        refreshProgress();
+    }
     if (withSound) {
         play(Sound::Focus);
     }
@@ -541,6 +640,14 @@ void Menu::activate(int index) {
         case kListControls:
             play(Sound::Select);
             mPhase = Phase::Controls;
+            mFocus = 0;
+            mRepeatDir = 0;
+            break;
+        case kListProgress:
+            play(Sound::Select);
+            mProgressResetArmed = false;
+            refreshProgress();
+            mPhase = Phase::Progress;
             mFocus = 0;
             mRepeatDir = 0;
             break;
@@ -578,6 +685,26 @@ void Menu::activate(int index) {
             play(Sound::Cancel);
             mPhase = Phase::Mods;
             mFocus = mModCount + 1;
+            mRepeatDir = 0;
+        }
+    } else if (mPhase == Phase::Progress) {
+        if (index == 0) {
+            changeProgressGalaxy(1);
+        } else if (index == 1) {
+            if (!mProgressResetArmed) {
+                play(Sound::Select);
+                mProgressResetArmed = true;
+            } else {
+                play(Sound::Select);
+                mProgressResetArmed = false;
+                Progress::reset();
+            }
+            refreshProgress();
+        } else {
+            play(Sound::Cancel);
+            mProgressResetArmed = false;
+            mPhase = Phase::List;
+            mFocus = kListProgress;
             mRepeatDir = 0;
         }
     } else if (mPhase == Phase::ModFolder) {
@@ -664,6 +791,8 @@ void Menu::back() {
         activate(modsBackIndex());
     } else if (mPhase == Phase::ModFolder) {
         activate(itemCount() - 1);
+    } else if (mPhase == Phase::Progress) {
+        activate(2);
     } else if (mPhase == Phase::Levels) {
         activate(3);
     } else if (mPhase == Phase::Camera) {

@@ -30,6 +30,7 @@
 #include "Game/Util/NativeActorObserve.hpp"
 #ifdef PETARI_NATIVE
 #include <petari/milestone.hpp>
+#include <petari/progress_hook.hpp>
 #endif
 #include "Game/Util/StarPointerUtil.hpp"
 
@@ -820,6 +821,7 @@ void PowerStar::exeStageClearDemo() {
     if (MR::isFirstStep(this)) {
 #ifdef PETARI_NATIVE
         petari_milestone(mIsGrandStar ? "GrandStar.Get" : "PowerStar.Get");
+        petari_progress_star_get(mIsGrandStar ? 1 : mPowerStarId, mIsGrandStar ? 1 : 0);
 #endif
         mIsGrandStar ? MR::requestGrandStarGetDemo() : MR::requestPowerStarGetDemo();
 

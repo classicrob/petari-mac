@@ -42,7 +42,8 @@ endif()
 
 # The menu and the HBM entry points. home_menu.cpp has no SDK dependency; the
 # bridge reads the SDK's HBM and KPAD structures.
-add_library(petari_home_menu STATIC home_menu.cpp hbm_bridge.cpp launch_stage.cpp)
+# progress.cpp: the personal progress record (petari/progress.hpp), shown on the My Progress page.
+add_library(petari_home_menu STATIC home_menu.cpp hbm_bridge.cpp launch_stage.cpp ${PETARI_REPO_ROOT}/native/progress/progress.cpp)
 target_include_directories(petari_home_menu PUBLIC include ${PETARI_REPO_ROOT}/native/include)
 target_link_libraries(petari_home_menu PUBLIC petari_native_config)
 target_compile_features(petari_home_menu PUBLIC cxx_std_17)
@@ -93,4 +94,8 @@ if(BUILD_TESTING)
         target_link_libraries(petari_home_menu_tests PRIVATE petari_home_menu)
     endif()
     add_test(NAME native_home_menu COMMAND petari_home_menu_tests)
+
+    add_executable(petari_progress_tests ${PETARI_REPO_ROOT}/native/tests/progress_tests.cpp)
+    target_link_libraries(petari_progress_tests PRIVATE petari_home_menu)
+    add_test(NAME native_progress COMMAND petari_progress_tests)
 endif()

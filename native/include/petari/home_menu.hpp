@@ -48,12 +48,13 @@ enum class Selection : int { None = -1, Resume = 0, Quit = 1, Restart = 2 };
 enum class Phase : std::uint8_t {
     Closed,    // before the first open
     Opening,   // fade in; input ignored
-    List,      // Resume / Controls / Mods / Restart from Title / Quit
+    List,      // Resume / Controls / Mods / My Progress / Restart from Title / Quit
     Confirm,   // confirming Restart or Quit
     Controls,  // the controls page, with Back
     Mods,      // on/off toggles for the native mods, Level Select, Back
     Levels,    // Level Select: galaxy, mission, Go, Back (native/LEVEL_SELECT.md)
     Camera,    // Odyssey camera mod options (docs/dev/ODYSSEY_CAMERA.md)
+    Progress,  // My Progress: the personal clear record, one galaxy at a time (native/PROGRESS.md)
     ModFolder, // disc-file mods found in the mods folder: toggles, paging, Back (native/MODS.md)
     Closing,   // fade out before reporting Resume
     BlackOut,  // fade to black before reporting Restart or Quit
@@ -269,6 +270,14 @@ private:
     char mFolderLabels[kFolderPageSize][96] = {};
     char mFolderMessage[128] = {};
     std::uint64_t mFolderToggles = 0;
+    int mProgressGalaxy = 0;  // index into LaunchStage::galaxies
+    bool mProgressResetArmed = false;
+    char mProgressLabels[3][96] = {};
+    char mProgressMessage[160] = {};
+    ControlsEntry mProgressLines[8];
+    int mProgressLineCount = 0;
+    void refreshProgress();
+    void changeProgressGalaxy(int delta);
     int folderPages() const { return (mFolderCount + kFolderPageSize - 1) / kFolderPageSize; }
     int folderShown() const { return std::min(kFolderPageSize, mFolderCount - mFolderPageIndex * kFolderPageSize); }
     int modsBackIndex() const { return mModCount + (mFolderPage ? 3 : 2); }

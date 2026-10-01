@@ -17,6 +17,7 @@ extern "C" void petari_gx_pipeline_report();
 #include "frame_stats.hpp"
 #include "spike_profiler.hpp"
 #include "host.hpp"
+#include "progress_observe.hpp"
 #include "smoke_background.hpp"
 #include "smoke.hpp"
 #include "route_record.hpp"
@@ -606,6 +607,7 @@ extern "C" void petari_host_frame_seam(void) {
     } else if (gGoodEgg != nullptr) {
         runSmoke(gGoodEgg);
     } else if (gDomes != nullptr) {
+    observeProgressFrame();
         runSmoke(gDomes);
     } else if (gReplay != nullptr) {
         runSmoke(gReplay);

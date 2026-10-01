@@ -16,6 +16,7 @@
 
 #include "Game/System/HomeButtonMenuWrapper.hpp"
 #include "petari/home_menu.hpp"
+#include "petari/progress.hpp"
 #include "petari/launch_stage.hpp"
 #include "petari/home_menu_hbm.hpp"
 
@@ -28,6 +29,8 @@ using HM::Button::A;
 using HM::Button::B;
 using HM::Button::Down;
 using HM::Button::Home;
+using HM::Button::Left;
+using HM::Button::Right;
 using HM::Button::Plus;
 using HM::Button::Up;
 
@@ -165,13 +168,14 @@ void testLifecycle() {
     }
     check(menu.phase() == HM::Phase::List, "list after the fade in");
     const HM::View list = menu.view();
-    check(list.itemCount == 5 && std::strcmp(list.items[0].label, "Resume") == 0 &&
+    check(list.itemCount == 6 && std::strcmp(list.items[0].label, "Resume") == 0 &&
               std::strcmp(list.items[1].label, "Controls") == 0 && std::strcmp(list.items[2].label, "Mods") == 0 &&
-              std::strcmp(list.items[3].label, "Restart from Title") == 0 && std::strcmp(list.items[4].label, "Quit") == 0,
-          "list offers Resume, Controls, Mods, Restart from Title, Quit");
-    check(list.panel.y0 >= -1.0f && list.panel.y1 <= 1.0f && list.items[4].rect.y1 < list.panel.y1 &&
+              std::strcmp(list.items[3].label, "My Progress") == 0 && std::strcmp(list.items[4].label, "Restart from Title") == 0 &&
+              std::strcmp(list.items[5].label, "Quit") == 0,
+          "list offers Resume, Controls, Mods, My Progress, Restart from Title, Quit");
+    check(list.panel.y0 >= -1.0f && list.panel.y1 <= 1.0f && list.items[5].rect.y1 < list.panel.y1 &&
               list.messageY < list.items[0].rect.y0,
-          "five items fit inside the panel and the image");
+          "six items fit inside the panel and the image");
     check(list.items[0].focused && !list.items[1].focused, "Resume focused first");
 
     for (int i = 0; i < 300; i++) {
@@ -202,6 +206,7 @@ void testSelections() {
         menu.update(press(Down));
         menu.update(press(Down));
         menu.update(press(Down));
+        menu.update(press(Down));
         if (quit) {
             menu.update(press(Down));
         }
@@ -215,7 +220,7 @@ void testSelections() {
         check(std::strcmp(confirm.items[0].label, quit ? "Quit" : "Restart") == 0, "confirm names the action");
         check(menu.focus() == 1, "Cancel focused by default");
         menu.update(press(A));
-        check(menu.phase() == HM::Phase::List && menu.focus() == (quit ? 4 : 3), "A on Cancel returns to the item");
+        check(menu.phase() == HM::Phase::List && menu.focus() == (quit ? 5 : 4), "A on Cancel returns to the item");
 
         menu.update(press(A));
         menu.update(press(Up));
@@ -247,10 +252,11 @@ void testCancellation() {
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
+    menu.update(press(Down));
     menu.update(press(A));
     sounds.clear();
     menu.update(press(Plus | B));
-    check(menu.phase() == HM::Phase::List && menu.focus() == 3, "Escape in a confirmation goes back");
+    check(menu.phase() == HM::Phase::List && menu.focus() == 4, "Escape in a confirmation goes back");
     check(played(HM::Sound::Cancel), "cancel sound");
 
     menu.update(press(A));
@@ -269,6 +275,7 @@ void testCancellation() {
     check(menu.phase() == HM::Phase::Closing, "a left click outside the items is back");
 
     openToList(menu);
+    menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
@@ -312,6 +319,7 @@ void testBlackOut() {
             menu.update(press(Down));
             menu.update(press(Down));
             menu.update(press(Down));
+            menu.update(press(Down));
             menu.update(press(A));
         } else if (at == HM::Phase::Closing) {
             menu.update(press(A));
@@ -329,6 +337,7 @@ void testBlackOut() {
 
     // A reset during a Quit fade keeps its timing and becomes the reset result.
     openToList(menu);
+    menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
@@ -391,12 +400,16 @@ void testFocusAndRepeat() {
     for (int i = 0; i < 6; i++) {
         menu.update(hold(Down));
     }
-    check(menu.focus() == 4, "third repeat reaches the last item");
+    check(menu.focus() == 4, "third repeat");
+    for (int i = 0; i < 6; i++) {
+        menu.update(hold(Down));
+    }
+    check(menu.focus() == 5, "fourth repeat reaches the last item");
     sounds.clear();
     for (int i = 0; i < 12; i++) {
         menu.update(hold(Down));
     }
-    check(menu.focus() == 4 && sounds.empty(), "repeats stop at the end without sound");
+    check(menu.focus() == 5 && sounds.empty(), "repeats stop at the end without sound");
 
     // Interval, counted on the Up side: from item 2, press Up at 0 -> 1, repeat at 24 -> 0.
     openToList(menu);
@@ -436,26 +449,26 @@ void testFocusAndRepeat() {
     openToList(menu);
     const HM::View view = menu.view();
     float x, y;
-    center(view.items[4].rect, &x, &y);
+    center(view.items[5].rect, &x, &y);
     sounds.clear();
     menu.update(pointer(x, y));
-    check(menu.focus() == 4 && playedCount(HM::Sound::Focus) == 1, "pointer moving onto Quit focuses it");
+    check(menu.focus() == 5 && playedCount(HM::Sound::Focus) == 1, "pointer moving onto Quit focuses it");
     menu.update(pointer(x, y));
     check(playedCount(HM::Sound::Focus) == 1, "no sound while resting");
     HM::FrameInput up = pointer(x, y, Up);
     menu.update(up);
-    check(menu.focus() == 3, "keyboard moves the focus under a resting pointer");
+    check(menu.focus() == 4, "keyboard moves the focus under a resting pointer");
     menu.update(pointer(x, y));
-    check(menu.focus() == 3, "resting pointer does not steal the focus back");
+    check(menu.focus() == 4, "resting pointer does not steal the focus back");
     menu.update(pointer(x + 0.01f, y));
-    check(menu.focus() == 4, "moving the pointer takes the focus");
+    check(menu.focus() == 5, "moving the pointer takes the focus");
     menu.update(pointer(0.95f, 0.95f));
-    check(menu.focus() == 4, "leaving the items keeps the focus");
+    check(menu.focus() == 5, "leaving the items keeps the focus");
     menu.update(pointer(x, y, B));
     check(menu.phase() == HM::Phase::Confirm && menu.confirming() == HM::Selection::Quit, "left click on Quit");
 
     openToList(menu);
-    center(menu.view().items[3].rect, &x, &y);
+    center(menu.view().items[4].rect, &x, &y);
     menu.update(pointer(x, y));
     menu.update(pointer(0.95f, 0.95f));
     menu.update(press(A));
@@ -674,6 +687,7 @@ void testWrapper() {
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
+    frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_A, WPAD_BUTTON_A);
     check(HM::instance().phase() == HM::Phase::Confirm, "Restart chosen through RSO::HBMCalc");
     frame(WPAD_BUTTON_UP, WPAD_BUTTON_UP);
@@ -702,6 +716,7 @@ void testWrapper() {
     for (int i = 0; i < 10; i++) {
         frame(0, 0);
     }
+    frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
     frame(WPAD_BUTTON_DOWN, WPAD_BUTTON_DOWN);
@@ -922,6 +937,7 @@ void testImGuiOverlay() {
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
+    menu.update(press(Down));
     menu.update(press(A));
     menu.update(press(Up));
     menu.update(press(A));
@@ -1076,6 +1092,72 @@ void testModFolderPage() {
           "no folder mods: message and Back");
 }
 
+void testProgressPage() {
+    namespace PR = PetariNative::Progress;
+    PR::resetForTesting();
+    std::string error;
+    check(PR::parse("{\"version\": 1, \"missions\": {"
+                    "\"EggStarGalaxy:1\": {\"stage\": \"EggStarGalaxy\", \"mission\": 1, \"first_clear\": \"2026-10-01T10:00:00Z\", "
+                    "\"last_clear\": \"2026-10-03T12:00:00Z\", \"clears\": 3, \"best_time_s\": 123.5, \"fewest_deaths\": 0, "
+                    "\"best_coins\": 42, \"best_star_bits\": 120},"
+                    "\"EggStarGalaxy:5\": {\"stage\": \"EggStarGalaxy\", \"mission\": 5, \"first_clear\": \"2026-10-02T09:00:00Z\", "
+                    "\"clears\": 1, \"best_time_s\": 59.0, \"fewest_deaths\": 2, \"best_coins\": 0, \"best_star_bits\": 0}}}", &error),
+          "test record parses");
+    HM::Menu menu = newMenu();
+    openToList(menu);
+    for (int i = 0; i < 3; ++i) menu.update(press(Down));
+    sounds.clear();
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::Progress && menu.focus() == 0 && played(HM::Sound::Select), "My Progress opens from the list");
+    HM::View view = menu.view();
+    check(std::strcmp(view.title, "My Progress") == 0 && view.itemCount == 3 && std::strcmp(view.items[1].label, "Reset progress...") == 0 &&
+              std::strcmp(view.items[2].label, "Back") == 0,
+          "title, selector, Reset and Back");
+    check(std::strstr(view.items[0].label, "Bowser Jr.'s Robot Reactor") != nullptr && view.lineCount == 2 &&
+              std::strstr(view.lines[1].inputs, "Not cleared yet") != nullptr,
+          "starts on the first galaxy, a one-mission galaxy has one row under the header");
+    menu.update(press(Right));
+    menu.update(press(Right));
+    view = menu.view();
+    check(std::strstr(view.items[0].label, "Good Egg Galaxy") != nullptr && view.lineCount == 7, "Right moves to the next galaxies; Good Egg has six missions");
+    check(std::strstr(view.message, "2 of 6 cleared here, 2 in all") != nullptr && std::strstr(view.message, "save is not changed") != nullptr,
+          "the message counts clears here and in all");
+    check(std::strcmp(view.lines[1].action, "Mission 1") == 0 && std::strstr(view.lines[1].inputs, "Cleared 2:03.50  0  42  120") != nullptr &&
+              std::strstr(view.lines[1].pad, "x3  2026-10-01") != nullptr,
+          "a cleared mission shows best time, deaths, coins, Star Bits, clears and first clear date");
+    check(std::strcmp(view.lines[4].action, "Mission 4 (comet)") == 0 && std::strstr(view.lines[4].inputs, "Not cleared yet") != nullptr &&
+              std::strcmp(view.lines[6].action, "Mission 6 (hidden star)") == 0 &&
+              std::strstr(view.lines[5].inputs, "Cleared 0:59.00  2  0  0") != nullptr,
+          "comet and hidden missions are labelled; mission 5 is cleared");
+    menu.update(press(Left));
+    check(std::strstr(menu.view().items[0].label, "Honeyhive") == nullptr && std::strstr(menu.view().items[0].label, "Flipswitch Galaxy") != nullptr,
+          "Left moves back");
+    for (int i = 0; i < 40; ++i) menu.update(press(Left));
+    check(std::strstr(menu.view().items[0].label, "<  ") != nullptr, "the selector wraps around");
+
+    // Reset needs two presses and is disarmed by moving away.
+    menu.update(press(Down));
+    sounds.clear();
+    menu.update(press(A));
+    check(std::strcmp(menu.view().items[1].label, "Press A again to erase everything") == 0 && PR::clearedCount() == 2, "first press arms the reset");
+    menu.update(press(Up));
+    menu.update(press(Down));
+    check(std::strcmp(menu.view().items[1].label, "Reset progress...") == 0 && PR::clearedCount() == 2, "moving away disarms it");
+    menu.update(press(A));
+    menu.update(press(A));
+    check(PR::clearedCount() == 0 && std::strcmp(menu.view().items[1].label, "Reset progress...") == 0, "second press erases the record");
+
+    // Back and Escape return to the list on My Progress.
+    menu.update(press(Down));
+    sounds.clear();
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::List && menu.focus() == 3 && played(HM::Sound::Cancel), "Back returns to the list");
+    menu.update(press(A));
+    menu.update(press(Plus | B));
+    check(menu.phase() == HM::Phase::List && menu.focus() == 3, "Escape returns too");
+    PR::resetForTesting();
+}
+
 void testLevelSelect() {
     namespace LS = PetariNative::App::LaunchStage;
     HM::Menu menu = newMenu();
@@ -1208,6 +1290,7 @@ int main() {
     testControlsPage();
     testModsPage();
     testModFolderPage();
+    testProgressPage();
     testLevelSelect();
     testCameraPage();
     testBridgeInput();

@@ -24,6 +24,7 @@
 #include <petari/unlocked_save.hpp>
 #include <petari/pipeline_startup.hpp>
 #include <petari/mods.hpp>
+#include <petari/progress.hpp>
 #include <petari/camera_settings.hpp>
 #include <petari/input.hpp>
 
@@ -330,6 +331,11 @@ int main(int argc, char** argv) {
     if (!PetariNative::Mods::load(paths.user / "mods.txt", &error)) {
         std::fprintf(stderr, "petari: mods: %s\n", error.c_str());
         return 1;
+    // The personal progress record (native/PROGRESS.md): beside the save, never inside it. A damaged
+    // file is reported and left alone; progress is then not recorded this run.
+    if (!PetariNative::Progress::load(paths.user / "progress.json", &error)) {
+        std::fprintf(stderr, "petari: progress: %s (not recording progress this run)\n", error.c_str());
+    }
     }
     if (!PetariNative::CameraSettings::load(paths.user / "camera.txt", &error)) {
         std::fprintf(stderr, "petari: camera: %s\n", error.c_str());

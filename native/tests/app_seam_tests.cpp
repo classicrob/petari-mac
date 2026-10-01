@@ -575,4 +575,4 @@ int main() {
     return 0;
 }
 
-namespace PetariNative::App { void recordRouteFrame(bool) {} }
+namespace PetariNative::App { void recordRouteFrame(bool) {} void observeProgressFrame() {} }
