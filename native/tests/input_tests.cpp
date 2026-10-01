@@ -20,7 +20,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <functional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,6 +37,8 @@
 #include "Game/Util/TriggerChecker.hpp"
 #include "petari/input.hpp"
 #include "petari/mods.hpp"
+#include "petari/camera_settings.hpp"
+#include "petari/camera_input.h"
 #include "petari/platform/sc.hpp"
 #include "petari/platform/vi.hpp"
 #include "../input/remote_model.hpp"
@@ -2007,7 +2011,124 @@ void testMods() {
     setenv("PETARI_MODS", "Teleport", 1);
     check(!Mods::load("/nonexistent/petari-mods.txt", &error), "PETARI_MODS rejects unknown mods");
     unsetenv("PETARI_MODS");
+    // Disc-file mod lines share mods.txt (platform/mod_folder.hpp); self-contained, after the checks above.
     Mods::resetForTesting();
+    check(Mods::parse("Folder.MyMod=on\nShootEnemy=on\n", &error) && Mods::enabled(Mods::Mod::ShootEnemy),
+          "disc-file mod lines (Folder.<name>) are not gameplay mods and are accepted");
+    {
+        const std::string path = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp") + "/petari-mods-folder-" +
+                                 std::to_string(getpid()) + ".txt";
+        {
+            std::ofstream out(path);
+            out << "Folder.MyMod=on\nShootEnemy=off\nFolder.Other=off\n";
+        }
+        unsetenv("PETARI_MODS");
+        check(Mods::load(path, &error), "load with Folder lines");
+        Mods::setEnabled(Mods::Mod::ShootEnemy, true);
+        check(Mods::save(&error), "save");
+        std::ifstream in(path);
+        std::stringstream saved;
+        saved << in.rdbuf();
+        check(saved.str().find("Folder.MyMod=on\n") != std::string::npos && saved.str().find("Folder.Other=off\n") != std::string::npos &&
+                  saved.str().find("ShootEnemy=on\n") != std::string::npos,
+              "saving the gameplay mods keeps the Folder lines");
+        std::remove(path.c_str());
+        Mods::resetForTesting();
+    }
+    Mods::resetForTesting();
+    In::resetForTesting();
+}
+
+void testCamera() {
+    namespace Camera = PetariNative::CameraSettings;
+    In::resetForTesting();
+    Camera::resetForTesting();
+    In::setBindings(In::Bindings::defaults());
+    PetariCameraInput in;
+    // Off: nothing is taken, and inputs keep their meaning.
+    In::mouseWheel(0.0f, 1.0f);
+    In::padAxisEvent(In::PadAxis::RightX, 0.9f);
+    petari_camera_take_input(&in);
+    check(!in.enabled && in.stickX == 0.0f && in.zoomSteps == 0.0f, "camera off: no camera input");
+    In::padAxisEvent(In::PadAxis::RightX, 0.0f);
+    std::string error;
+    check(Camera::parse("OdysseyCamera=on\nSpeed=5\nInvertY=on\n", &error) && Camera::enabled() && Camera::speed() == 5 &&
+              Camera::invertY() && !Camera::invertX(),
+          "camera.txt parses");
+    check(!Camera::parse("Speed=9\n", &error) && Camera::speed() == 5, "bad speed rejected, nothing changes");
+    const std::string text = Camera::serialize();
+    Camera::resetForTesting();
+    check(Camera::parse(text, &error) && Camera::enabled() && Camera::speed() == 5, "camera.txt round-trips");
+    // On: right stick, middle drag, wheel, Q/E, Z/X and C reach the camera.
+    In::padAxisEvent(In::PadAxis::RightX, 1.0f);
+    In::padAxisEvent(In::PadAxis::RightY, -0.1f);
+    In::mouseMoved(100.0f, 100.0f);
+    In::mouseMoved(140.0f, 100.0f);  // no drag without the middle button
+    In::mouseButtonEvent(In::MouseButton::Middle, true);
+    In::mouseMoved(180.0f, 92.0f);
+    In::mouseButtonEvent(In::MouseButton::Middle, false);
+    In::mouseWheel(0.0f, 2.0f);
+    In::keyEvent(In::Key::E, true, false);
+    In::keyEvent(In::Key::X, true, false);
+    In::keyEvent(In::Key::C, true, false);
+    petari_camera_take_input(&in);
+    check(in.enabled && in.stickX > 0.99f && std::fabs(in.stickY) < 0.2f, "right stick orbits (dead zone rescaled)");
+    check(std::fabs(in.mouseYaw - 10.0f) < 0.01f && std::fabs(in.mousePitch - 2.0f) < 0.01f, "middle drag only: 0.25 deg/point");
+    check(in.zoomSteps == -2.0f && in.yawHold == 1.0f && in.zoomHold == 1.0f && in.recenter, "wheel, E, X and C");
+    petari_camera_take_input(&in);
+    check(in.mouseYaw == 0.0f && in.zoomSteps == 0.0f && !in.recenter && in.yawHold == 1.0f, "deltas taken once, holds persist");
+    In::keyEvent(In::Key::E, false, false);
+    In::keyEvent(In::Key::X, false, false);
+    In::keyEvent(In::Key::C, false, false);
+    In::focusChanged(false);
+    petari_camera_take_input(&in);
+    check(in.yawHold == 0.0f && in.stickX == 0.0f, "focus loss releases camera input");
+    In::focusChanged(true);
+    // Trackpad: precise scroll orbits, pinch zooms; Command held + mouse motion orbits.
+    In::mouseWheel(0.5f, 0.25f);
+    In::pinch(1.21f);
+    In::mouseMoved(200.0f, 100.0f);
+    In::keyEvent(In::Key::LeftGui, true, false);
+    In::mouseMoved(220.0f, 100.0f);
+    In::keyEvent(In::Key::LeftGui, false, false);
+    In::mouseMoved(260.0f, 100.0f);
+    petari_camera_take_input(&in);
+    check(std::fabs(in.mouseYaw - (1.5f + 5.0f)) < 0.01f && std::fabs(in.mousePitch - 0.75f) < 0.01f,
+          "precise scroll and Command-drag orbit");
+    check(std::fabs(in.zoomSteps + 2.0f) < 0.01f, "pinch out by 21% zooms in two steps");
+    Camera::setScrollMode(Camera::ScrollMode::Zoom);
+    In::mouseWheel(0.5f, 0.25f);
+    petari_camera_take_input(&in);
+    check(in.mouseYaw == 0.0f && std::fabs(in.zoomSteps + 0.25f) < 0.01f, "ScrollMode=zoom zooms on any scroll");
+    In::Bindings remapped = In::Bindings::defaults();
+    check(remapped.parse("CameraOrbitHold=Key:B\nCameraZoomIn=Key:N\n", &error), "camera actions remap: " + error);
+    In::setBindings(remapped);
+    In::mouseMoved(260.0f, 100.0f);
+    In::keyEvent(In::Key::B, true, false);
+    In::keyEvent(In::Key::N, true, false);
+    In::mouseMoved(300.0f, 100.0f);
+    petari_camera_take_input(&in);
+    check(std::fabs(in.mouseYaw - 10.0f) < 0.01f && in.zoomHold == -1.0f, "remapped orbit hold and zoom in");
+    In::keyEvent(In::Key::B, false, false);
+    In::keyEvent(In::Key::N, false, false);
+    In::setBindings(In::Bindings::defaults());
+    In::keyEvent(In::Key::J, true, false);
+    In::keyEvent(In::Key::I, true, false);
+    petari_camera_take_input(&in);
+    check(in.yawHold == -1.0f && in.pitchHold == 1.0f, "J orbits left, I pitches up");
+    In::keyEvent(In::Key::J, false, false);
+    In::keyEvent(In::Key::I, false, false);
+    In::keyEvent(In::Key::L, true, false);
+    In::keyEvent(In::Key::K, true, false);
+    petari_camera_take_input(&in);
+    check(in.yawHold == 1.0f && in.pitchHold == -1.0f, "L orbits right, K pitches down");
+    In::keyEvent(In::Key::L, false, false);
+    In::keyEvent(In::Key::K, false, false);
+    unsetenv("PETARI_ODYSSEY_CAMERA");
+    setenv("PETARI_ODYSSEY_CAMERA", "0", 1);
+    check(Camera::load("/nonexistent/petari-camera.txt", &error) && !Camera::enabled(), "PETARI_ODYSSEY_CAMERA=0 overrides");
+    unsetenv("PETARI_ODYSSEY_CAMERA");
+    Camera::resetForTesting();
     In::resetForTesting();
 }
 
@@ -2029,6 +2150,7 @@ int main() {
     testSteering();
     testGamepad();
     testDevice();
+    testCamera();
     testMods();
 #ifdef PETARI_INPUT_TEST_SDL3
     testSdl3();

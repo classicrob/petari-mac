@@ -964,11 +964,12 @@ void testModsPage() {
     menu.update(press(A));
     check(menu.phase() == HM::Phase::Mods && menu.focus() == 0 && played(HM::Sound::Select), "Mods opens its page");
     HM::View view = menu.view();
-    check(std::strcmp(view.title, "Mods") == 0 && view.itemCount == 4 &&
+    check(std::strcmp(view.title, "Mods") == 0 && view.itemCount == 5 &&
               std::strcmp(view.items[0].label, "Collect visible Star Bits: Off") == 0 &&
               std::strcmp(view.items[1].label, "Fire a Star Bit at the nearest enemy: On") == 0 &&
-              std::strcmp(view.items[2].label, "Level Select") == 0 && std::strcmp(view.items[3].label, "Back") == 0,
-          "Mods page shows each toggle's state, Level Select and Back");
+              std::strcmp(view.items[2].label, "Odyssey camera...") == 0 &&
+              std::strcmp(view.items[3].label, "Level Select") == 0 && std::strcmp(view.items[4].label, "Back") == 0,
+          "Mods page shows each toggle's state, the camera options, Level Select and Back");
     check(menu.takeModToggles() == 0, "nothing toggled yet");
     menu.update(press(A));
     check(menu.phase() == HM::Phase::Mods && menu.mods()[0].on &&
@@ -980,7 +981,8 @@ void testModsPage() {
     check(!menu.mods()[1].on && menu.takeModToggles() == 2u, "second toggle turns off");
     menu.update(press(Down));
     menu.update(press(Down));
-    check(menu.focus() == 3, "Back is last");
+    menu.update(press(Down));
+    check(menu.focus() == 4, "Back is last");
     sounds.clear();
     menu.update(press(A));
     check(menu.phase() == HM::Phase::List && menu.focus() == 2 && played(HM::Sound::Cancel), "Back returns to Mods");
@@ -989,6 +991,89 @@ void testModsPage() {
     check(menu.phase() == HM::Phase::List && menu.focus() == 2 && menu.takeModToggles() == 0, "Escape returns, no toggle");
     menu.update(press(A));
     check(std::strcmp(menu.view().items[0].label, "Collect visible Star Bits: On") == 0, "state kept on reopen");
+}
+
+void testModFolderPage() {
+    HM::Menu menu = newMenu();
+    HM::ModsEntry entries[1];
+    std::strcpy(entries[0].label, "Collect visible Star Bits");
+    menu.setMods(entries, 1);
+    // Without setFolderMods the Mods page has no Mod folder entry.
+    openToList(menu);
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(A));
+    check(menu.view().itemCount == 4 && std::strcmp(menu.view().items[3].label, "Back") == 0, "no Mod folder entry before folder mods are set");
+    menu.update(press(Plus));
+
+    // Seven mods: three pages of three, three and one.
+    HM::FolderModEntry folder[7];
+    for (int i = 0; i < 7; ++i) {
+        std::snprintf(folder[i].label, sizeof(folder[i].label), "Mod%d (%d files)", i, i + 1);
+    }
+    folder[4].on = true;
+    menu.setFolderMods(folder, 7);
+    menu.update(press(A));  // reopen the Mods page
+    HM::View mods = menu.view();
+    check(mods.itemCount == 5 && std::strcmp(mods.items[2].label, "Level Select") == 0 &&
+              std::strcmp(mods.items[3].label, "Mod folder...") == 0 && std::strcmp(mods.items[4].label, "Back") == 0,
+          "Mods page gains Mod folder before Back once folder mods are set");
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(Down));
+    check(menu.focus() == 3, "focus reaches Mod folder");
+    sounds.clear();
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::ModFolder && menu.focus() == 0 && played(HM::Sound::Select), "Mod folder opens");
+    HM::View view = menu.view();
+    check(std::strcmp(view.title, "Mod folder") == 0 && view.itemCount == 5 &&
+              std::strcmp(view.items[0].label, "Mod0 (1 files): Off") == 0 && std::strcmp(view.items[2].label, "Mod2 (3 files): Off") == 0 &&
+              std::strcmp(view.items[3].label, "Next page") == 0 && std::strcmp(view.items[4].label, "Back") == 0 &&
+              std::strstr(view.message, "Page 1 of 3") != nullptr,
+          "first page: three toggles, Next page, Back");
+    check(menu.takeFolderToggles() == 0, "nothing toggled yet");
+    menu.update(press(A));
+    check(menu.folderMods()[0].on && std::strcmp(menu.view().items[0].label, "Mod0 (1 files): On") == 0 && menu.takeFolderToggles() == 1u &&
+              menu.takeFolderToggles() == 0,
+          "A toggles the mod and reports it once");
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(A));
+    check(menu.focus() == 0 && std::strstr(menu.view().message, "Page 2 of 3") != nullptr && std::strcmp(menu.view().items[1].label, "Mod4 (5 files): On") == 0,
+          "Next page shows the next three and keeps their state");
+    menu.update(press(Down));
+    menu.update(press(A));
+    check(menu.folderMods()[4].on == false && menu.takeFolderToggles() == (std::uint64_t{1} << 4), "toggle on page two maps to its entry");
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(A));
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(Down));
+    check(menu.view().itemCount == 3 && std::strcmp(menu.view().items[0].label, "Mod6 (7 files): Off") == 0, "last page: one toggle, Next page, Back");
+    menu.update(press(Down));
+    menu.update(press(Down));
+    sounds.clear();
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::Mods && menu.focus() == 3 && played(HM::Sound::Cancel), "Back returns to the Mods page on the Mod folder entry");
+    menu.update(press(A));
+    menu.update(press(Plus | B));
+    check(menu.phase() == HM::Phase::Mods && menu.focus() == 3, "Escape returns from Mod folder");
+
+    // No mods found: the page says so and offers Back.
+    HM::Menu empty = newMenu();
+    empty.setMods(entries, 1);
+    empty.setFolderMods(nullptr, 0);
+    openToList(empty);
+    empty.update(press(Down));
+    empty.update(press(Down));
+    empty.update(press(A));
+    for (int i = 0; i < 3; ++i) empty.update(press(Down));
+    empty.update(press(A));
+    check(empty.phase() == HM::Phase::ModFolder && empty.view().itemCount == 1 && std::strcmp(empty.view().items[0].label, "Back") == 0 &&
+              std::strstr(empty.view().message, "No mods found") != nullptr,
+          "no folder mods: message and Back");
 }
 
 void testLevelSelect() {
@@ -1002,6 +1087,7 @@ void testLevelSelect() {
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(A));
+    menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(Down));
     menu.update(press(A));
@@ -1059,10 +1145,58 @@ void testLevelSelect() {
     menu.update(press(A));
     menu.update(press(Down));
     menu.update(press(Down));
+    menu.update(press(Down));
     menu.update(press(A));
     menu.update(press(Plus | B));
-    check(menu.phase() == HM::Phase::Mods && menu.focus() == 2, "Escape returns to the Mods page");
+    check(menu.phase() == HM::Phase::Mods && menu.focus() == 3, "Escape returns to the Mods page");
     check(!menu.takeLevelRequest(&stage, &mission), "no request after Back");
+}
+
+void testCameraPage() {
+    HM::Menu menu = newMenu();
+    HM::ModsEntry entries[3];
+    std::strcpy(entries[0].label, "Collect visible Star Bits");
+    std::strcpy(entries[1].label, "Fire a Star Bit at the nearest enemy");
+    std::strcpy(entries[2].label, "Odyssey movement");
+    menu.setMods(entries, 3);
+    HM::CameraOptions options;
+    options.speed = 4;
+    menu.setCamera(options);
+    openToList(menu);
+    menu.update(press(Down));
+    menu.update(press(Down));
+    menu.update(press(A));
+    HM::View mods = menu.view();
+    check(mods.itemCount == 6 && std::strcmp(mods.items[3].label, "Odyssey camera...") == 0, "six-item Mods page");
+    check(mods.panel.y0 >= -1.0f && mods.panel.y1 <= 1.0f && mods.items[5].rect.y1 < mods.panel.y1 &&
+              mods.items[0].rect.y1 <= mods.items[1].rect.y0,
+          "six items fit without overlapping");
+    for (int i = 0; i < 3; i++) menu.update(press(Down));
+    menu.update(press(A));
+    check(menu.phase() == HM::Phase::Camera && menu.focus() == 0, "camera options open");
+    HM::View view = menu.view();
+    check(std::strcmp(view.title, "Odyssey camera") == 0 && view.itemCount == 5 &&
+              std::strcmp(view.items[0].label, "Odyssey camera: Off") == 0 && std::strcmp(view.items[1].label, "Speed: 4") == 0 &&
+              std::strcmp(view.items[2].label, "Invert horizontal: Off") == 0 &&
+              std::strcmp(view.items[3].label, "Invert vertical: Off") == 0 && std::strcmp(view.items[4].label, "Back") == 0,
+          "camera page shows its options");
+    HM::CameraOptions changed;
+    check(!menu.takeCameraChange(&changed), "no change yet");
+    menu.update(press(A));
+    check(menu.takeCameraChange(&changed) && changed.on && !menu.takeCameraChange(&changed), "A turns the camera on, reported once");
+    menu.update(press(Down));
+    menu.update(press(HM::Button::Right));
+    menu.update(press(HM::Button::Right));
+    check(menu.camera().speed == 1 && std::strcmp(menu.view().items[1].label, "Speed: 1") == 0, "speed wraps 5 -> 1");
+    menu.update(press(HM::Button::Left));
+    check(menu.camera().speed == 5, "speed wraps back");
+    menu.update(press(Down));
+    menu.update(press(A));
+    menu.update(press(Down));
+    menu.update(press(A));
+    check(menu.takeCameraChange(&changed) && changed.invertX && changed.invertY && changed.speed == 5, "inverts toggle");
+    menu.update(press(Plus | B));
+    check(menu.phase() == HM::Phase::Mods && menu.focus() == 3, "Escape returns to the camera entry");
 }
 
 int main() {
@@ -1073,7 +1207,9 @@ int main() {
     testFocusAndRepeat();
     testControlsPage();
     testModsPage();
+    testModFolderPage();
     testLevelSelect();
+    testCameraPage();
     testBridgeInput();
     testWrapper();
 #ifdef PETARI_HOME_MENU_TEST_IMGUI

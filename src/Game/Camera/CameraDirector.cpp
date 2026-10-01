@@ -112,6 +112,10 @@ CameraDirector::CameraDirector(const char* pName) : NameObj(pName) {
 void CameraDirector::init(const JMapInfoIter& rIter) {
 }
 
+#ifdef PETARI_NATIVE
+void petariOdysseyCameraApply(CameraDirector* pDirector);  // OdysseyCamera.cpp
+#endif
+
 void CameraDirector::movement() {
     ::sUpdateCounter++;
 
@@ -119,6 +123,10 @@ void CameraDirector::movement() {
     mTargetHolder->movement();
     updateCameraMan();
     calcPose();
+#ifdef PETARI_NATIVE
+    // Native mod OdysseyCamera (docs/dev/ODYSSEY_CAMERA.md): returns at once when off.
+    petariOdysseyCameraApply(this);
+#endif
     createViewMtx();
     getCurrentCameraMan()->mMatrix.set(MR::getCameraInvViewMtx());
     mPoseParam2->copyFrom(*getCurrentCameraMan()->mPoseParam);

@@ -60,6 +60,14 @@ inline bool handleEvent(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_MOTION:
         mouseMoved(event.motion.x, event.motion.y);
         return true;
+    case SDL_EVENT_MOUSE_WHEEL: {
+        const float flip = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0f : 1.0f;
+        mouseWheel(event.wheel.x * flip, event.wheel.y * flip);
+        return true;
+    }
+    case SDL_EVENT_PINCH_UPDATE:
+        pinch(event.pinch.scale);
+        return true;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP: {
         MouseButton button;

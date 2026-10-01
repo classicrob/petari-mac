@@ -34,6 +34,7 @@ have input-component tests but have not been approved through gameplay:
 | Arrow keys | D-pad; Up enters first-person view where supported, Down or Space leaves it |
 | F1 or ` | Native Home menu: Resume, Controls (every key as currently bound), Mods (with Level Select, native/LEVEL_SELECT.md), Restart from Title, Quit |
 | G / V | Optional mods (off by default; F1 → Mods): collect visible Star Bits / fire a Star Bit at the nearest enemy. See native/MODS.md |
+| J / L, I / K, Z / X, Command or middle mouse + mouse, trackpad scroll and pinch, right stick | Only with the Odyssey camera mod on (F1 → Mods → Odyssey camera): orbit, pitch, zoom. C recentres. See native/MODS.md |
 | Minus | Remote Minus (also pauses) |
 | 1 / 2 | Remote 1 / 2 (the game never needs them) |
 | Keypad Enter | Same as Return |

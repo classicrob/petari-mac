@@ -95,6 +95,14 @@ enum class Action : std::uint8_t {
     // for the game side (takeActionPresses) and does nothing unless its mod is on.
     ModCollectStarBits,
     ModShootEnemy,
+    // Odyssey camera mod (docs/dev/ODYSSEY_CAMERA.md), only while it is on:
+    CameraOrbitHold,  // while held, mouse motion orbits the camera (the pointer stays)
+    CameraZoomIn,
+    CameraZoomOut,
+    CameraOrbitLeft,  // held: orbit (J/L, I/K by default)
+    CameraOrbitRight,
+    CameraPitchUp,
+    CameraPitchDown,
     Count
 };
 
@@ -234,6 +242,12 @@ void keyEvent(KeyCode code, bool down, bool repeat);
 void mouseButtonEvent(MouseButton button, bool down);
 // Mouse position in window coordinates.
 void mouseMoved(float x, float y);
+// Scroll, as SDL3 reports it (x right, y away from the user). Only the Odyssey
+// camera mod uses it: precise (fractional, trackpad or Magic Mouse) scrolling
+// orbits, whole wheel clicks zoom (camera.txt ScrollMode overrides).
+void mouseWheel(float x, float y);
+// Trackpad pinch: scale change since the last update (> 1 = zoom in).
+void pinch(float scale);
 // The mouse left the window: the remote points away from the screen.
 void mouseLeft();
 void setViewport(const Viewport& viewport);

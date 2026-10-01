@@ -37,6 +37,7 @@
 //   hold repeat.
 // - Pointer (mouse): moving onto an item focuses it.
 
+#include <algorithm>
 #include <cstdint>
 
 namespace PetariNative::HomeMenu {
@@ -52,6 +53,8 @@ enum class Phase : std::uint8_t {
     Controls,  // the controls page, with Back
     Mods,      // on/off toggles for the native mods, Level Select, Back
     Levels,    // Level Select: galaxy, mission, Go, Back (native/LEVEL_SELECT.md)
+    Camera,    // Odyssey camera mod options (docs/dev/ODYSSEY_CAMERA.md)
+    ModFolder, // disc-file mods found in the mods folder: toggles, paging, Back (native/MODS.md)
     Closing,   // fade out before reporting Resume
     BlackOut,  // fade to black before reporting Restart or Quit
     Finished,  // selection() reports the result
@@ -118,13 +121,29 @@ struct Rect {
     bool contains(float x, float y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
 };
 
-constexpr int kMaxItems = 5;
+constexpr int kMaxItems = 8;
 constexpr int kMaxControls = 20;
 constexpr int kMaxMods = 4;
+constexpr int kMaxFolderMods = 64;   // detected disc-file mods (native/MODS.md)
+constexpr int kFolderPageSize = 3;   // toggles per page of the Mod folder page
+
+// The Odyssey camera mod's options (Mods -> Odyssey camera).
+struct CameraOptions {
+    bool on = false;
+    int speed = 3;  // 1..5
+    bool invertX = false;
+    bool invertY = false;
+};
 
 // One toggle of the Mods page: what the mod does, and whether it is on.
 struct ModsEntry {
     char label[48] = {};
+    bool on = false;
+};
+
+// One disc-file mod of the Mod folder page: its label (title, file count) and state.
+struct FolderModEntry {
+    char label[64] = {};
     bool on = false;
 };
 
@@ -179,11 +198,25 @@ public:
     // Toggles the player activated since the last call: bit i is entry i,
     // whose new state is in mods()[i]. The caller applies and saves them.
     std::uint32_t takeModToggles();
+    // The Mod folder page (native/MODS.md): the disc-file mods found, most
+    // recent scan. Calling this (even with none) adds a "Mod folder..." entry
+    // to the Mods page. Changes apply when the game next starts.
+    void setFolderMods(const FolderModEntry* entries, int count);
+    // Folder mods toggled since the last call: bit i is entry i (new state in
+    // folderMods()[i]); the caller saves them to mods.txt.
+    std::uint64_t takeFolderToggles();
+    const FolderModEntry* folderMods() const { return mFolderMods; }
+    int folderModCount() const { return mFolderCount; }
     const ModsEntry* mods() const { return mMods; }
     // Level Select's Go, reported once after the menu has closed: the
     // internal stage name and mission. The caller starts the warp.
     bool takeLevelRequest(const char** stage, int* mission);
     int levelGalaxy() const { return mLevelGalaxy; }
+    // The Odyssey camera page's options; changes are reported once (true) and
+    // copied to *options. The caller applies and saves them.
+    void setCamera(const CameraOptions& options);
+    bool takeCameraChange(CameraOptions* options);
+    const CameraOptions& camera() const { return mCamera; }
     int levelMission() const { return mLevelMission; }
     Selection selection() const { return mPhase == Phase::Finished ? mResult : Selection::None; }  // HBMGetSelectBtnNum
 
@@ -229,12 +262,28 @@ private:
     ModsEntry mMods[kMaxMods];
     char mModLabels[kMaxMods][64] = {};
     std::uint32_t mModToggles = 0;
+    bool mFolderPage = false;
+    int mFolderCount = 0;
+    int mFolderPageIndex = 0;
+    FolderModEntry mFolderMods[kMaxFolderMods];
+    char mFolderLabels[kFolderPageSize][96] = {};
+    char mFolderMessage[128] = {};
+    std::uint64_t mFolderToggles = 0;
+    int folderPages() const { return (mFolderCount + kFolderPageSize - 1) / kFolderPageSize; }
+    int folderShown() const { return std::min(kFolderPageSize, mFolderCount - mFolderPageIndex * kFolderPageSize); }
+    int modsBackIndex() const { return mModCount + (mFolderPage ? 3 : 2); }
+    void refreshFolderLabels();
     int mLevelGalaxy = 0;   // index into LaunchStage::galaxies
     int mLevelMission = 1;
     bool mLevelPending = false;
     char mLevelLabels[2][80] = {};
     char mLevelMessage[96] = {};
     void refreshLevelLabels();
+    CameraOptions mCamera;
+    bool mCameraChanged = false;
+    char mCameraLabels[4][48] = {};
+    void refreshCameraLabels();
+    void changeCameraValue(int item, int delta);
     void changeLevelValue(int item, int delta);
 };
 

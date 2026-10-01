@@ -16,7 +16,8 @@ constexpr int kActionCount = static_cast<int>(Action::Count);
 const char* const kActionNames[kActionCount] = {
     "StickUp", "StickDown", "StickLeft", "StickRight", "A",        "B",        "Plus",     "Minus",     "Home",   "One",
     "Two",     "DpadUp",    "DpadDown",  "DpadLeft",   "DpadRight", "NunchukC", "NunchukZ", "Shake",     "TiltHold",
-    "PostureToggle", "Walk",   "Start", "ModCollectStarBits", "ModShootEnemy",
+    "PostureToggle", "Walk",   "Start", "ModCollectStarBits", "ModShootEnemy", "CameraOrbitHold", "CameraZoomIn",
+    "CameraZoomOut", "CameraOrbitLeft", "CameraOrbitRight", "CameraPitchUp", "CameraPitchDown",
 };
 
 const char* const kMouseNames[static_cast<int>(MouseButton::Count)] = {"Left", "Middle", "Right", "X1", "X2"};
@@ -319,6 +320,16 @@ Bindings Bindings::defaults() {
     // Mods (off by default, native/MODS.md): keys the game does not use.
     b.bind(Action::ModCollectStarBits, Binding::key(Key::G));
     b.bind(Action::ModShootEnemy, Binding::key(Key::V));
+    // Odyssey camera mod (off by default): hold-to-orbit for mice without a
+    // middle button (Command), and zoom keys.
+    b.bind(Action::CameraOrbitHold, Binding::mouse(MouseButton::Middle));
+    b.bind(Action::CameraOrbitHold, Binding::key(Key::LeftGui));
+    b.bind(Action::CameraZoomIn, Binding::key(Key::Z));
+    b.bind(Action::CameraZoomOut, Binding::key(Key::X));
+    b.bind(Action::CameraOrbitLeft, Binding::key(Key::J));
+    b.bind(Action::CameraOrbitRight, Binding::key(Key::L));
+    b.bind(Action::CameraPitchUp, Binding::key(Key::I));
+    b.bind(Action::CameraPitchDown, Binding::key(Key::K));
     // Game controllers: the usual console layout for this game. The left
     // stick is the Nunchuk stick and the right stick the Star Pointer (not
     // bindings; see RemoteModel). Start and Back would block pausing if they

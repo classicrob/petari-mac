@@ -29,6 +29,29 @@ The buttons are remappable in `controls.txt` like any other action:
 (see native/CONTROLS.md for input names). A button press while its mod is
 off does nothing and is not remembered.
 
+## Odyssey camera
+
+A player-controlled orbit camera like Super Mario Odyssey's, wherever Galaxy uses
+an ordinary follow camera. Cutscenes, boss intros, talk, launch stars, cannons,
+2D sections and fixed or rail cameras stay as designed. Turn it on in F1 → Mods
+→ Odyssey camera..., which also has speed (1-5) and invert options; they are
+saved in `camera.txt` (`PETARI_ODYSSEY_CAMERA=1` for one run). It works with or
+without the Odyssey movement mod.
+
+| Input (camera mod on) | Action |
+| --- | --- |
+| Right stick | orbit; the stick no longer moves the Star Pointer (the mouse still does) |
+| J / L, I / K (and Q / E, arrow left / right) | orbit left / right, pitch up / down |
+| Hold Command or the middle mouse button and move the mouse | orbit; the pointer stays put |
+| Two-finger trackpad or Magic Mouse scroll | orbit |
+| Mouse wheel clicks, trackpad pinch, Z / X | zoom in / out |
+| C | recentre behind Mario |
+
+All of these are remappable in `controls.txt` (`CameraOrbitHold`,
+`CameraOrbitLeft`, `CameraOrbitRight`, `CameraPitchUp`, `CameraPitchDown`,
+`CameraZoomIn`, `CameraZoomOut`). `ScrollMode=orbit` or `zoom` in `camera.txt`
+makes every scroll orbit or zoom. Design and value sources: docs/dev/ODYSSEY_CAMERA.md.
+
 ## How they follow the game's rules
 
 Both mods act only where the game itself would let the pointer collect or

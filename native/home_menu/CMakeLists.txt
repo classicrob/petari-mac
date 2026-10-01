@@ -49,7 +49,7 @@ target_compile_features(petari_home_menu PUBLIC cxx_std_17)
 # The Controls page lists the live bindings when the input layer is in the
 # build (the root adds native/input first). Standalone builds show no lines.
 if(TARGET petari_input)
-    target_link_libraries(petari_home_menu PUBLIC petari_input)
+    target_link_libraries(petari_home_menu PUBLIC petari_input petari_platform_dvd)  # Mod folder page: mod_folder.hpp
     target_compile_definitions(petari_home_menu PRIVATE PETARI_HOME_MENU_INPUT=1)
 endif()
 

@@ -124,6 +124,8 @@ void Menu::update(const FrameInput& input) {
     case Phase::Controls:
     case Phase::Mods:
     case Phase::Levels:
+    case Phase::Camera:
+    case Phase::ModFolder:
         break;
     }
 
@@ -157,6 +159,13 @@ void Menu::update(const FrameInput& input) {
         setFocus(hovered, true);
     }
 
+    if (mPhase == Phase::Camera && mFocus == 1) {
+        const std::uint32_t side = input.trigger & (Button::Left | Button::Right);
+        if (side == Button::Left || side == Button::Right) {
+            changeCameraValue(mFocus, side == Button::Left ? -1 : 1);
+            return;
+        }
+    }
     if (mPhase == Phase::Levels && (mFocus == 0 || mFocus == 1)) {
         const std::uint32_t side = input.trigger & (Button::Left | Button::Right);
         if (side == Button::Left || side == Button::Right) {
@@ -203,6 +212,71 @@ void Menu::setMods(const ModsEntry* entries, int count) {
     for (int i = 0; i < mModCount; i++) {
         mMods[i] = entries[i];
         mMods[i].label[sizeof(mMods[i].label) - 1] = '\0';
+    }
+}
+
+void Menu::setCamera(const CameraOptions& options) {
+    mCamera = options;
+    mCamera.speed = std::clamp(mCamera.speed, 1, 5);
+    mCameraChanged = false;
+    refreshCameraLabels();
+}
+
+bool Menu::takeCameraChange(CameraOptions* options) {
+    if (!mCameraChanged) {
+        return false;
+    }
+    mCameraChanged = false;
+    *options = mCamera;
+    return true;
+}
+
+void Menu::refreshCameraLabels() {
+    std::snprintf(mCameraLabels[0], sizeof(mCameraLabels[0]), "Odyssey camera: %s", mCamera.on ? "On" : "Off");
+    std::snprintf(mCameraLabels[1], sizeof(mCameraLabels[1]), "Speed: %d", mCamera.speed);
+    std::snprintf(mCameraLabels[2], sizeof(mCameraLabels[2]), "Invert horizontal: %s", mCamera.invertX ? "On" : "Off");
+    std::snprintf(mCameraLabels[3], sizeof(mCameraLabels[3]), "Invert vertical: %s", mCamera.invertY ? "On" : "Off");
+}
+
+void Menu::changeCameraValue(int item, int delta) {
+    switch (item) {
+    case 0: mCamera.on = !mCamera.on; break;
+    case 1: mCamera.speed = (mCamera.speed - 1 + delta + 5) % 5 + 1; break;
+    case 2: mCamera.invertX = !mCamera.invertX; break;
+    case 3: mCamera.invertY = !mCamera.invertY; break;
+    default: return;
+    }
+    mCameraChanged = true;
+    refreshCameraLabels();
+    play(item == 1 ? Sound::Focus : Sound::Select);
+}
+
+void Menu::setFolderMods(const FolderModEntry* entries, int count) {
+    mFolderPage = true;
+    mFolderCount = std::clamp(count, 0, kMaxFolderMods);
+    for (int i = 0; i < mFolderCount; i++) {
+        mFolderMods[i] = entries[i];
+        mFolderMods[i].label[sizeof(mFolderMods[i].label) - 1] = '\0';
+    }
+    mFolderPageIndex = std::min(mFolderPageIndex, std::max(0, folderPages() - 1));
+}
+
+std::uint64_t Menu::takeFolderToggles() {
+    const std::uint64_t toggles = mFolderToggles;
+    mFolderToggles = 0;
+    return toggles;
+}
+
+void Menu::refreshFolderLabels() {
+    for (int i = 0; i < folderShown(); i++) {
+        const FolderModEntry& mod = mFolderMods[mFolderPageIndex * kFolderPageSize + i];
+        std::snprintf(mFolderLabels[i], sizeof(mFolderLabels[i]), "%s: %s", mod.label, mod.on ? "On" : "Off");
+    }
+    if (mFolderCount == 0) {
+        std::snprintf(mFolderMessage, sizeof(mFolderMessage), "No mods found. Put mod folders in mods/ in the user folder.");
+    } else {
+        std::snprintf(mFolderMessage, sizeof(mFolderMessage), "Replace disc files. Page %d of %d. Applies after restarting the game.",
+                      mFolderPageIndex + 1, std::max(1, folderPages()));
     }
 }
 
@@ -259,6 +333,8 @@ void Menu::startBlackOut() {
     case Phase::Controls:
     case Phase::Mods:
     case Phase::Levels:
+    case Phase::Camera:
+    case Phase::ModFolder:
     case Phase::Closing:
         blackOut(Selection::Restart);
         break;
@@ -288,6 +364,8 @@ View Menu::view() const {
     case Phase::Controls:
     case Phase::Mods:
     case Phase::Levels:
+    case Phase::Camera:
+    case Phase::ModFolder:
         view.panelOpacity = 1.0f;
         break;
     case Phase::Closing:
@@ -321,8 +399,30 @@ View Menu::view() const {
         for (int i = 0; i < mModCount; i++) {
             view.items[i].label = mModLabels[i];
         }
-        view.items[mModCount].label = "Level Select";
-        view.items[mModCount + 1].label = "Back";
+        view.items[mModCount].label = "Odyssey camera...";
+        view.items[mModCount + 1].label = "Level Select";
+        if (mFolderPage) {
+            view.items[mModCount + 2].label = "Mod folder...";
+        }
+        view.items[modsBackIndex()].label = "Back";
+    } else if (mPhase == Phase::ModFolder) {
+        view.title = "Mod folder";
+        view.message = mFolderMessage;
+        const int shown = folderShown();
+        for (int i = 0; i < shown; i++) {
+            view.items[i].label = mFolderLabels[i];
+        }
+        if (folderPages() > 1) {
+            view.items[shown].label = "Next page";
+        }
+        view.items[shown + (folderPages() > 1 ? 1 : 0)].label = "Back";
+    } else if (mPhase == Phase::Camera) {
+        view.title = "Odyssey camera";
+        view.message = "Right stick or middle-drag orbits; wheel or Z/X zooms; C recentres.";
+        for (int i = 0; i < 4; i++) {
+            view.items[i].label = mCameraLabels[i];
+        }
+        view.items[4].label = "Back";
     } else if (mPhase == Phase::Levels) {
         view.title = "Level Select";
         view.message = mLevelMessage;
@@ -368,7 +468,13 @@ int Menu::itemCount() const {
         return 1;
     }
     if (mPhase == Phase::Mods) {
-        return mModCount + 2;
+        return modsBackIndex() + 1;
+    }
+    if (mPhase == Phase::ModFolder) {
+        return folderShown() + (folderPages() > 1 ? 1 : 0) + 1;
+    }
+    if (mPhase == Phase::Camera) {
+        return 5;
     }
     if (mPhase == Phase::Levels) {
         return 4;
@@ -382,8 +488,12 @@ Rect Menu::itemRect(int index) const {
         return {-kControlsBackHalfWidth / ax, kControlsBackTop, kControlsBackHalfWidth / ax,
                 kControlsBackTop + kControlsBackHeight};
     }
-    const float top = kItemTop + kItemSpacing * static_cast<float>(index);
-    return {-kItemHalfWidth / ax, top, kItemHalfWidth / ax, top + kItemHeight};
+    // Six or more items (the Mods page) use a tighter column so they fit.
+    const bool compact = itemCount() > 5;
+    const bool dense = itemCount() > 6;  // seven items: the Mods page with a Mod folder entry
+    const float spacing = dense ? 0.17f : compact ? 0.2f : kItemSpacing;
+    const float top = (dense ? -0.4f : compact ? -0.32f : kItemTop) + spacing * static_cast<float>(index);
+    return {-kItemHalfWidth / ax, top, kItemHalfWidth / ax, top + (dense ? 0.14f : compact ? 0.16f : kItemHeight)};
 }
 
 int Menu::itemAt(float x, float y) const {
@@ -467,14 +577,56 @@ void Menu::activate(int index) {
         } else {
             play(Sound::Cancel);
             mPhase = Phase::Mods;
+            mFocus = mModCount + 1;
+            mRepeatDir = 0;
+        }
+    } else if (mPhase == Phase::ModFolder) {
+        const int shown = folderShown();
+        const bool paged = folderPages() > 1;
+        if (index >= 0 && index < shown) {
+            play(Sound::Select);
+            const int entry = mFolderPageIndex * kFolderPageSize + index;
+            mFolderMods[entry].on = !mFolderMods[entry].on;
+            mFolderToggles |= std::uint64_t{1} << entry;
+            refreshFolderLabels();
+        } else if (paged && index == shown) {
+            play(Sound::Select);
+            mFolderPageIndex = (mFolderPageIndex + 1) % folderPages();
+            refreshFolderLabels();
+            mFocus = 0;
+        } else {
+            play(Sound::Cancel);
+            mPhase = Phase::Mods;
+            mFocus = mModCount + 2;
+            mRepeatDir = 0;
+        }
+    } else if (mPhase == Phase::Camera) {
+        if (index >= 0 && index < 4) {
+            changeCameraValue(index, 1);
+        } else {
+            play(Sound::Cancel);
+            mPhase = Phase::Mods;
             mFocus = mModCount;
             mRepeatDir = 0;
         }
     } else if (mPhase == Phase::Mods) {
         if (index == mModCount) {
             play(Sound::Select);
+            refreshCameraLabels();
+            mPhase = Phase::Camera;
+            mFocus = 0;
+            mRepeatDir = 0;
+        } else if (index == mModCount + 1) {
+            play(Sound::Select);
             refreshLevelLabels();
             mPhase = Phase::Levels;
+            mFocus = 0;
+            mRepeatDir = 0;
+        } else if (mFolderPage && index == mModCount + 2) {
+            play(Sound::Select);
+            mFolderPageIndex = 0;
+            refreshFolderLabels();
+            mPhase = Phase::ModFolder;
             mFocus = 0;
             mRepeatDir = 0;
         } else if (index >= 0 && index < mModCount) {
@@ -509,9 +661,13 @@ void Menu::back() {
     } else if (mPhase == Phase::Controls) {
         activate(0);
     } else if (mPhase == Phase::Mods) {
-        activate(mModCount + 1);
+        activate(modsBackIndex());
+    } else if (mPhase == Phase::ModFolder) {
+        activate(itemCount() - 1);
     } else if (mPhase == Phase::Levels) {
         activate(3);
+    } else if (mPhase == Phase::Camera) {
+        activate(4);
     } else {
         play(Sound::ReturnApp);
         close();

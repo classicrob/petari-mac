@@ -17,6 +17,8 @@
 #include "petari/host_allocation.hpp"
 #include "petari/input.hpp"
 #include "petari/mods.hpp"
+#include "petari/platform/mod_folder.hpp"
+#include "petari/camera_settings.hpp"
 #endif
 
 namespace PetariNative::HomeMenu {
@@ -157,6 +159,64 @@ void refreshMods() {
     instance().setMods(entries, count);
 }
 
+// The Odyssey camera page, from the camera settings in effect now.
+void refreshCamera() {
+    CameraOptions options;
+    options.on = CameraSettings::enabled();
+    options.speed = CameraSettings::speed();
+    options.invertX = CameraSettings::invertX();
+    options.invertY = CameraSettings::invertY();
+    instance().setCamera(options);
+}
+
+// Applies and saves changes made on the Odyssey camera page this frame.
+void applyCameraChange() {
+    CameraOptions options;
+    if (!instance().takeCameraChange(&options)) {
+        return;
+    }
+    CameraSettings::setEnabled(options.on);
+    CameraSettings::setSpeed(options.speed);
+    CameraSettings::setInvertX(options.invertX);
+    CameraSettings::setInvertY(options.invertY);
+    std::string error;
+    if (!CameraSettings::save(&error)) {
+        std::fprintf(stderr, "petari: camera: %s\n", error.c_str());
+    }
+}
+
+// The Mod folder page: the disc-file mods found, with their saved states.
+void refreshFolderMods() {
+    FolderModEntry entries[kMaxFolderMods];
+    const auto mods = Platform::ModFolder::detected();
+    const auto states = Platform::ModFolder::detectedStates();
+    const int count = std::min(static_cast<int>(mods.size()), kMaxFolderMods);
+    for (int i = 0; i < count; i++) {
+        const auto& mod = mods[i];
+        std::snprintf(entries[i].label, sizeof(entries[i].label), "%s (%u files)", mod.title.c_str(), mod.fileCount);
+        const auto state = states.find(mod.name);
+        entries[i].on = state != states.end() && state->second;
+    }
+    instance().setFolderMods(entries, count);
+}
+
+// Saves the Mod folder toggles made this frame to mods.txt.
+void applyFolderToggles() {
+    const std::uint64_t toggles = instance().takeFolderToggles();
+    if (toggles == 0) {
+        return;
+    }
+    const auto mods = Platform::ModFolder::detected();
+    for (int i = 0; i < static_cast<int>(mods.size()) && i < kMaxFolderMods; i++) {
+        if (toggles & (std::uint64_t{1} << i)) {
+            std::string error;
+            if (!Platform::ModFolder::setEnabled(mods[i].name, instance().folderMods()[i].on, &error)) {
+                std::fprintf(stderr, "petari: mod folder: %s\n", error.c_str());
+            }
+        }
+    }
+}
+
 // Applies and saves toggles made on the Mods page this frame.
 void applyModToggles() {
     const std::uint32_t toggles = instance().takeModToggles();
@@ -182,6 +242,8 @@ void init() {
 #ifdef PETARI_HOME_MENU_INPUT
     refreshControls();
     refreshMods();
+    refreshFolderMods();
+    refreshCamera();
 #endif
     instance().open();
 }
@@ -191,6 +253,8 @@ void calc(const HBMControllerData* controllers) {
     menu.update(frameInput(controllers));
 #ifdef PETARI_HOME_MENU_INPUT
     applyModToggles();
+    applyFolderToggles();
+    applyCameraChange();
 #endif
     // Level Select's Go, once the menu has closed: the game starts the warp
     // at its next normal gameplay frame (GameScene::update).

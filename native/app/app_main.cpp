@@ -24,6 +24,7 @@
 #include <petari/unlocked_save.hpp>
 #include <petari/pipeline_startup.hpp>
 #include <petari/mods.hpp>
+#include <petari/camera_settings.hpp>
 #include <petari/input.hpp>
 
 #include "host.hpp"
@@ -262,6 +263,21 @@ App::FrameStats::Phase framePhaseForPipelines() {
         }
         testWarp.clear();
     }
+    // Test driver (PETARI_CAMERA_TEST=1, with the Odyssey camera mod on): a fixed
+    // script of right-stick orbit, pitch, zoom, mouse drag and recentre during gameplay.
+    static const bool cameraTest = std::getenv("PETARI_CAMERA_TEST") != nullptr;
+    static long cameraFrames = 0;
+    if (cameraTest && gameplay && PetariNative::CameraSettings::enabled()) {
+        namespace Camera = PetariNative::CameraSettings;
+        const long f = ++cameraFrames % 900;
+        if (f == 60) std::fputs("[camera-test] orbit right\n", stderr);
+        if (f == 300) std::fputs("[camera-test] pitch, zoom, drag, recentre\n", stderr);
+        Camera::stick(f >= 60 && f < 180 ? 0.7f : 0.0f, f >= 240 && f < 300 ? 0.6f : 0.0f);
+        if (f == 320) Camera::zoomSteps(4.0f);
+        if (f == 380) Camera::zoomSteps(-6.0f);
+        if (f >= 420 && f < 450) Camera::mouseDrag(-8.0f, 2.0f);
+        if (f == 600) Camera::recenter();
+    }
     static long gameplayFrames = 0;
     if (period > 1 && gameplay) {
         ++gameplayFrames;
@@ -315,6 +331,11 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "petari: mods: %s\n", error.c_str());
         return 1;
     }
+    if (!PetariNative::CameraSettings::load(paths.user / "camera.txt", &error)) {
+        std::fprintf(stderr, "petari: camera: %s\n", error.c_str());
+        return 1;
+    }
+    if (PetariNative::CameraSettings::enabled()) std::fputs("PETARI MODS: OdysseyCamera on\n", stderr);
     for (int m = 0; m < static_cast<int>(PetariNative::Mods::Mod::Count); ++m) {
         const auto mod = static_cast<PetariNative::Mods::Mod>(m);
         if (PetariNative::Mods::enabled(mod)) std::fprintf(stderr, "PETARI MODS: %s on\n", PetariNative::Mods::name(mod));

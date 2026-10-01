@@ -34,6 +34,7 @@
 #include "petari/host_allocation.hpp"
 #include "petari/input.hpp"
 #include "petari/latency_probe.hpp"
+#include "petari/camera_settings.hpp"
 #include "remote_model.hpp"
 
 namespace PetariNative::Input {
@@ -566,6 +567,44 @@ void countModPress(Binding input) {
 }
 }  // namespace
 
+namespace {
+// Odyssey camera mod (petari/camera_settings.hpp), by binding: CameraOrbitHold,
+// CameraZoomIn/Out, D-pad left/right (Q/E, arrows) for yaw, NunchukC (C) to
+// recentre. Caller holds gHostMutex.
+enum CameraHeld { OrbitHold, YawLeft, YawRight, ZoomIn, ZoomOut, OrbitLeft, OrbitRight, PitchUp, PitchDown, CameraHeldCount };
+constexpr Action kCameraActions[CameraHeldCount] = {Action::CameraOrbitHold, Action::DpadLeft, Action::DpadRight,
+                                                    Action::CameraZoomIn, Action::CameraZoomOut, Action::CameraOrbitLeft,
+                                                    Action::CameraOrbitRight, Action::CameraPitchUp, Action::CameraPitchDown};
+int gCameraHeld[CameraHeldCount] = {};  // inputs currently down per action
+bool gHaveMouse = false;
+float gMouseX = 0.0f, gMouseY = 0.0f;
+float gRightX = 0.0f, gRightY = 0.0f;
+
+bool boundTo(Action action, Binding input) {
+    const auto& bound = model().bindings().inputs(action);
+    return std::find(bound.begin(), bound.end(), input) != bound.end();
+}
+
+void cameraInput(Binding input, bool down) {
+    if (!CameraSettings::enabled()) return;
+    for (int i = 0; i < CameraHeldCount; ++i) {
+        if (boundTo(kCameraActions[i], input)) gCameraHeld[i] = std::max(0, gCameraHeld[i] + (down ? 1 : -1));
+    }
+    const bool right = gCameraHeld[YawRight] > 0 || gCameraHeld[OrbitRight] > 0;
+    const bool left = gCameraHeld[YawLeft] > 0 || gCameraHeld[OrbitLeft] > 0;
+    CameraSettings::yawHold((right ? 1 : 0) - (left ? 1 : 0));
+    CameraSettings::pitchHold((gCameraHeld[PitchUp] > 0 ? 1 : 0) - (gCameraHeld[PitchDown] > 0 ? 1 : 0));
+    CameraSettings::zoomHold((gCameraHeld[ZoomOut] > 0 ? 1 : 0) - (gCameraHeld[ZoomIn] > 0 ? 1 : 0));
+    if (down && boundTo(Action::NunchukC, input)) CameraSettings::recenter();
+}
+
+void releaseCameraInput() {
+    for (int& held : gCameraHeld) held = 0;
+    gRightX = gRightY = 0.0f;
+    CameraSettings::resetInput();
+}
+}  // namespace
+
 int takeActionPresses(Action action) {
     for (std::size_t i = 0; i < std::size(kModActions); ++i) {
         if (kModActions[i] == action) {
@@ -590,6 +629,7 @@ void keyEvent(KeyCode code, bool down, bool repeat) {
         countModPress(Binding::key(code));
         notePressForProbe(Binding::key(code));
     }
+    if (!repeat) cameraInput(Binding::key(code), down);
     model().keyEvent(code, down, repeat);
 }
 
@@ -600,6 +640,7 @@ void mouseButtonEvent(MouseButton button, bool down) {
         countModPress(Binding::mouse(button));
         notePressForProbe(Binding::mouse(button));
     }
+    cameraInput(Binding::mouse(button), down);
     model().mouseButtonEvent(button, down);
 }
 
@@ -610,6 +651,7 @@ void padButtonEvent(PadButton button, bool down) {
         countModPress(Binding::pad(button));
         notePressForProbe(Binding::pad(button));
     }
+    cameraInput(Binding::pad(button), down);
     model().padButtonEvent(button, down);
 }
 
@@ -619,6 +661,13 @@ void padAxisEvent(PadAxis axis, float value) {
         gHostActivity = true;
     }
     std::lock_guard<std::mutex> lock(gHostMutex);
+    if (CameraSettings::enabled() && (axis == PadAxis::RightX || axis == PadAxis::RightY)) {
+        // The right stick orbits the camera instead of moving the Star Pointer.
+        (axis == PadAxis::RightX ? gRightX : gRightY) = value;
+        CameraSettings::stick(gRightX, -gRightY);
+        model().padAxisEvent(axis, 0.0f);
+        return;
+    }
     model().padAxisEvent(axis, value);
 }
 
@@ -630,7 +679,31 @@ void padDisconnected() {
 void mouseMoved(float x, float y) {
     gHostActivity = true;
     std::lock_guard<std::mutex> lock(gHostMutex);
+    const bool drag = CameraSettings::enabled() && gCameraHeld[OrbitHold] > 0 && gHaveMouse;
+    if (drag) CameraSettings::mouseDrag(x - gMouseX, y - gMouseY);
+    gMouseX = x;
+    gMouseY = y;
+    gHaveMouse = true;
+    if (drag) return;  // the pointer stays put while the hold-to-orbit input is down
     model().mouseMoved(x, y);
+}
+
+void mouseWheel(float x, float y) {
+    if (!CameraSettings::enabled()) return;
+    // Wheel clicks arrive as whole notches; trackpads and Magic Mouse scroll precisely.
+    const bool precise = x != 0.0f || y != std::round(y);
+    const auto mode = CameraSettings::scrollMode();
+    if (mode == CameraSettings::ScrollMode::Orbit || (mode == CameraSettings::ScrollMode::Auto && precise)) {
+        CameraSettings::scrollOrbit(x, y);
+    } else {
+        CameraSettings::zoomSteps(-y);  // wheel up: closer
+    }
+}
+
+void pinch(float scale) {
+    if (!CameraSettings::enabled() || !(scale > 0.0f)) return;
+    // Spread (scale > 1) zooms in, about one wheel notch per 10%.
+    CameraSettings::zoomSteps(-std::log(scale) / std::log(1.1f));
 }
 
 void mouseLeft() {
@@ -645,6 +718,7 @@ void setViewport(const Viewport& viewport) {
 
 void focusChanged(bool focused) {
     std::lock_guard<std::mutex> lock(gHostMutex);
+    if (!focused) releaseCameraInput();
     model().focusChanged(focused);
 }
 

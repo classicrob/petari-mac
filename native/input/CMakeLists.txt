@@ -103,6 +103,7 @@ endif()
 set(PETARI_KPAD_SOURCE ${PETARI_REPO_ROOT}/src/RVL_SDK/kpad/KPAD.c)
 add_library(petari_input STATIC
     bindings.cpp
+    camera_input.cpp
     mods.cpp
     remote_model.cpp
     wpad_host.cpp

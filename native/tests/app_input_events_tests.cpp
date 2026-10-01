@@ -65,6 +65,8 @@ void mouseButtonEvent(MouseButton button, bool down) {
 void mouseMoved(float, float) {
     gDelivered.push_back({Delivered::MouseMoved, 0, false, false});
 }
+void mouseWheel(float, float) {}  // the Odyssey camera mod's scroll (not used by these tests)
+void pinch(float) {}
 void mouseLeft() {
     gDelivered.push_back({Delivered::MouseLeft, 0, false, false});
 }
