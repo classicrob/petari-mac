@@ -1,12 +1,15 @@
 #include "petari/platform/mod_folder.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -96,6 +99,94 @@ std::string normalizePath(const std::string& path) {
         out += part;
     }
     return out;
+}
+
+namespace {
+std::uint32_t be32(const unsigned char* p) {
+    return (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16) | (std::uint32_t(p[2]) << 8) | p[3];
+}
+
+std::string extensionOf(const std::string& path) {
+    const auto dot = path.rfind('.');
+    return dot == std::string::npos ? "" : upper(path.substr(dot));
+}
+
+// The first `want` bytes of a Yaz0 payload (after its 16-byte header), or fewer if it is malformed.
+std::vector<unsigned char> yaz0Head(const std::vector<unsigned char>& in, std::size_t want) {
+    std::vector<unsigned char> out;
+    std::size_t at = 16;
+    while (out.size() < want && at < in.size()) {
+        const unsigned char flags = in[at++];
+        for (int bit = 7; bit >= 0 && out.size() < want; --bit) {
+            if (flags & (1 << bit)) {
+                if (at >= in.size()) return out;
+                out.push_back(in[at++]);
+            } else {
+                if (at + 1 >= in.size()) return out;
+                const unsigned char a = in[at++], b = in[at++];
+                std::size_t length = a >> 4;
+                const std::size_t distance = (std::size_t(a & 15) << 8 | b) + 1;
+                if (length == 0) {
+                    if (at >= in.size()) return out;
+                    length = std::size_t(in[at++]) + 18;
+                } else {
+                    length += 2;
+                }
+                if (distance > out.size()) return out;  // a back-reference before the start
+                for (std::size_t i = 0; i < length && out.size() < want; ++i) out.push_back(out[out.size() - distance]);
+            }
+        }
+    }
+    return out;
+}
+
+// A RARC header (0x20 bytes) at `h`, whose archive is `available` bytes long.
+bool rarcOk(const unsigned char* h, std::size_t available) {
+    if (available < 0x40 || std::memcmp(h, "RARC", 4) != 0) return false;
+    const std::uint32_t size = be32(h + 4), headerLength = be32(h + 8), dataOffset = be32(h + 12), dataLength = be32(h + 16);
+    return headerLength == 0x20 && size >= 0x40 && size <= available && dataOffset >= 0x20 && dataOffset <= size &&
+           dataLength <= size && std::uint64_t(dataOffset) + 0x20 <= size;
+}
+
+// A U8 archive header (0x20 bytes; used by the HomeButton and other system archives): magic 55 AA 38 2D, the root node at
+// 0x20, a node table that fits the file, and a data offset inside it.
+bool u8Ok(const unsigned char* h, std::size_t available) {
+    if (available < 0x30 || be32(h) != 0x55AA382Du) return false;
+    const std::uint32_t rootOffset = be32(h + 4), tableSize = be32(h + 8), dataOffset = be32(h + 12);
+    return rootOffset == 0x20 && tableSize >= 12 && std::uint64_t(rootOffset) + tableSize <= available && dataOffset >= rootOffset &&
+           dataOffset <= available;
+}
+
+bool archiveOk(const unsigned char* h, std::size_t available) {
+    return rarcOk(h, available) || u8Ok(h, available);
+}
+}  // namespace
+
+std::string invalidKind(const fs::path& host, const std::string& discPath) {
+    const std::string extension = extensionOf(discPath);
+    const bool archive = extension == ".ARC" || extension == ".SZS";
+    const bool message = extension == ".BMG";
+    const bool stream = extension == ".BRSTM";
+    if (!archive && !message && !stream) return "";
+    std::error_code ec;
+    const std::uintmax_t length = fs::file_size(host, ec);
+    std::ifstream in(host, std::ios::binary);
+    if (ec || !in) return archive ? "archive" : message ? "message file" : "stream";
+    const std::size_t want = static_cast<std::size_t>(std::min<std::uintmax_t>(length, archive ? 0x2000 : 16));
+    std::vector<unsigned char> head(want);
+    in.read(reinterpret_cast<char*>(head.data()), static_cast<std::streamsize>(want));
+    head.resize(static_cast<std::size_t>(std::max<std::streamsize>(in.gcount(), 0)));
+    if (message) return head.size() >= 16 && std::memcmp(head.data(), "MESGbmg1", 8) == 0 ? "" : "message file";
+    if (stream) return head.size() >= 16 && std::memcmp(head.data(), "RSTM", 4) == 0 ? "" : "stream";
+    if (head.size() >= 16 && std::memcmp(head.data(), "Yaz0", 4) == 0) {
+        const std::uint32_t decompressed = be32(head.data() + 4);
+        if (decompressed < 0x40 || decompressed > (256u << 20) || length < 17) return "archive";
+        const auto first = yaz0Head(head, 0x20);
+        if (first.size() != 0x20) return "archive";
+        // .szs also holds non-archive Yaz0 data (the JAudio sound archives); only .arc must decompress to RARC or U8.
+        return extension == ".SZS" || archiveOk(first.data(), decompressed) ? "" : "archive";
+    }
+    return archiveOk(head.data(), static_cast<std::size_t>(length)) ? "" : "archive";
 }
 
 std::vector<ModInfo> discover(const std::vector<fs::path>& directories) {
@@ -217,6 +308,8 @@ Resolved resolve(const std::vector<ModInfo>& mods, const std::map<std::string, b
         return a->priority != b->priority ? a->priority > b->priority : a->name < b->name;
     });
     std::map<std::string, std::size_t> owner;  // upper-cased normalized path -> index in out.files
+    struct Rejected { std::string mod, path, kind; };
+    std::vector<Rejected> rejected;
     for (std::size_t rank = 0; rank < enabled.size(); ++rank) {
         const ModInfo& mod = *enabled[rank];
         out.log.push_back("mod " + mod.name + " (priority " + std::to_string(mod.priority) + ", rank " +
@@ -231,6 +324,10 @@ Resolved resolve(const std::vector<ModInfo>& mods, const std::map<std::string, b
         walk(files, [&](const std::string& relative, const fs::path& host) {
             const std::string path = normalizePath(relative);
             if (path.empty()) return;
+            if (const std::string kind = invalidKind(host, path); !kind.empty()) {
+                rejected.push_back({mod.name, path, kind});
+                return;  // a broken file must not replace a working one
+            }
             const auto [it, inserted] = owner.emplace(upper(path), out.files.size());
             if (inserted) {
                 out.files.push_back({path, host, mod.name});
@@ -238,6 +335,11 @@ Resolved resolve(const std::vector<ModInfo>& mods, const std::map<std::string, b
                 out.log.push_back("conflict " + path + ": " + out.files[it->second].mod + " wins over " + mod.name);
             }
         });
+    }
+    for (const Rejected& r : rejected) {
+        const auto it = owner.find(upper(r.path));
+        out.log.push_back(r.mod + ": " + r.path + " is not a valid " + r.kind + "; using " +
+                          (it == owner.end() ? std::string("the disc file") : "the file from mod " + out.files[it->second].mod));
     }
     return out;
 }

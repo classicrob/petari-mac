@@ -2,17 +2,21 @@
 """Live smoke for the disc-file mod folder (native/MODS.md).
 
 Builds a test mod from a copy of a disc file at run time (no Nintendo data is stored):
-EggStarGalaxy's Yaz0 archive is decompressed, the Mario start x of its layer A start
-point is moved by +200 units in place, and the result is installed twice, as an
-uncompressed RARC and as a Yaz0 stream (literal-only encoder). Three launches of the stage
+EggStarGalaxy's Yaz0 archive is decompressed, 4096 zero bytes are appended and the RARC header's size
+field is raised to match (a valid, larger archive: the game must still load the stage), then installed twice,
+as an uncompressed RARC and as a Yaz0 stream (literal-only encoder). Four launches of the stage
 smoke on EggStarGalaxy scenario 1, each in its own fixture user directory:
 
-  1. mod present, not enabled    -> no overlay, Mario's ready position = the disc's
-  2. enabled, uncompressed RARC  -> overlay applied, ready x ~ +200
-  3. enabled, Yaz0 replacement   -> overlay applied, ready x ~ +200
+  1. mod present, not enabled    -> no overlay; the stage archive loads at its disc size
+  2. enabled, uncompressed RARC  -> overlay applied; the archive loads 4096 bytes larger
+  3. enabled, Yaz0 replacement   -> overlay applied; the archive loads 4096 bytes larger
+  4. enabled, corrupt archive    -> refused ("is not a valid archive; using the disc file"); the disc file loads
 
-Pass/fail is read from the logs ("[mods] disc overlay applied", "[mods] game opened ...",
-"stage ready ... Mario at"). One app at a time through build/locked-app.sh.
+Pass/fail is read from the logs: "[mods] disc overlay applied", "[mods] game opened ...",
+"[heap-arc] /StageData/EggStarGalaxy.arc -> file cache, N bytes" (the size the game mounted) and the
+stage smoke's own PASS. (Moving Mario's start point is NOT a usable probe: in the synthetic stage entry
+the start does not come from these rows. A corrupted archive crashes the game, which also proves its
+bytes are the ones read; that is how this was checked.) One app at a time through build/locked-app.sh.
 
 usage: mod_smoke.py --app Petari.app/Contents/MacOS/Petari --output build/mod-smoke [--owner modfolder]
 """
@@ -30,8 +34,7 @@ from collect_pipeline_seed_inputs import decompress  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 STAGE, SCENARIO = "EggStarGalaxy", 1
-START_X = -3264.62255859375   # layer A start of EggStarGalaxy (checked at run time)
-SHIFT = 200.0
+PAD = 4096  # bytes appended to the archive
 
 
 def yaz0_literal(data):
@@ -46,12 +49,8 @@ def yaz0_literal(data):
 
 def patched_archive(disc):
     raw = (disc / "files/StageData" / f"{STAGE}.arc").read_bytes()
-    plain = bytearray(decompress(raw))
-    needle = struct.pack(">f", START_X)
-    if plain.count(needle) != 1:
-        raise SystemExit(f"mod_smoke: expected one {START_X} in {STAGE}.arc, found {plain.count(needle)}")
-    at = plain.index(needle)
-    plain[at:at + 4] = struct.pack(">f", START_X + SHIFT)
+    plain = bytearray(decompress(raw)) + bytes(PAD)
+    plain[4:8] = struct.pack(">I", len(plain))  # the RARC header's own size field: the game mounts this many bytes
     return bytes(plain)
 
 
@@ -70,8 +69,10 @@ def run(args, name, user, mod_state):
     return {
         "name": name, "status": status, "log": str(log), "mod_state": mod_state,
         "ready": [float(v) for v in ready.groups()] if ready else None,
+        "mounted": [int(n) for n in re.findall(rf"\[heap-arc\] /StageData/{STAGE}\.arc -> file cache, (\d+) bytes", text)],
         "overlay": re.search(r"\[mods\] disc overlay applied: (\d+) files replaced, (\d+) added", text),
         "opened": re.findall(r"\[mods\] game opened (\S+) from mod (\S+) \((\d+) bytes\)", text),
+        "rejected": re.findall(r"\[mods\] (\S+: \S+ is not a valid \w+; using .*)", text),
         "result": (re.findall(r"PETARI SMOKE RESULT: (\w+)", text) or [None])[-1],
     }
 
@@ -91,10 +92,11 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     fixture = sweep.load_fixture_module()
     plain = patched_archive(args.disc)
-    variants = {"uncompressed": plain, "yaz0": yaz0_literal(plain)}
+    variants = {"uncompressed": plain, "yaz0": yaz0_literal(plain), "corrupt": b"XARC" + plain[4:]}
 
     results = []
-    plan = [("1-present-not-enabled", None), ("2-enabled-uncompressed", "uncompressed"), ("3-enabled-yaz0", "yaz0")]
+    plan = [("1-present-not-enabled", None), ("2-enabled-uncompressed", "uncompressed"), ("3-enabled-yaz0", "yaz0"),
+            ("4-enabled-corrupt", "corrupt")]
     for name, variant in plan:
         user = args.output / f"{name}-user"
         shutil.rmtree(user, ignore_errors=True)
@@ -108,28 +110,35 @@ def main():
             (user / "mods.txt").write_text("Folder.TestMod=on\n")
         results.append(run(args, name, user, variant or "off (present, not enabled)"))
 
-    base, uncompressed, yaz0 = results
+    base, uncompressed, yaz0, corrupt = results
     failures = []
-    if base["ready"] is None or base["overlay"] or base["opened"]:
-        failures.append("run 1: a mod that is present but not enabled must change nothing")
+    disc_size = base["mounted"][0] if base["mounted"] else None
+    if base["ready"] is None or base["overlay"] or base["opened"] or disc_size is None:
+        failures.append("run 1: a mod that is present but not enabled must change nothing, and the archive must mount")
     for r in (uncompressed, yaz0):
-        if r["ready"] is None:
-            failures.append(f"{r['name']}: stage never became ready")
-            continue
+        if r["ready"] is None or r["result"] != "PASS":
+            failures.append(f"{r['name']}: the stage did not load and pass with the mod")
         if not r["overlay"] or r["overlay"].groups() != ("1", "0"):
             failures.append(f"{r['name']}: expected 'disc overlay applied: 1 files replaced, 0 added'")
         if not any(p == f"/StageData/{STAGE}.arc" and m == "TestMod" for p, m, _ in r["opened"]):
             failures.append(f"{r['name']}: the game never opened the mod's {STAGE}.arc")
-        if base["ready"] and not (SHIFT - 40 <= r["ready"][0] - base["ready"][0] <= SHIFT + 40):
-            failures.append(f"{r['name']}: Mario's ready x moved {r['ready'][0] - base['ready'][0]:.1f}, expected about {SHIFT}")
+        if disc_size is not None and r["mounted"][:1] != [disc_size + PAD]:
+            failures.append(f"{r['name']}: the archive mounted {r['mounted'][:1]} bytes, expected {disc_size + PAD}")
+    # A broken archive must be refused at the mod folder (validated headers), never crash the game.
+    if corrupt["result"] != "PASS" or corrupt["ready"] is None:
+        failures.append("4-enabled-corrupt: the game must start normally with the disc file when the mod archive is corrupt")
+    if corrupt["overlay"] or corrupt["opened"] or not any("is not a valid archive; using the disc file" in line for line in corrupt["rejected"]):
+        failures.append("4-enabled-corrupt: expected the 'is not a valid archive; using the disc file' log and no overlay")
+    if disc_size is not None and corrupt["mounted"][:1] != [disc_size]:
+        failures.append(f"4-enabled-corrupt: the archive mounted {corrupt['mounted'][:1]} bytes, expected the disc's {disc_size}")
     for r in results:
-        print(f"{r['name']}: exit {r['status']} result {r['result']} ready {r['ready']} overlay "
-              f"{r['overlay'].groups() if r['overlay'] else None} opened {r['opened']}")
+        print(f"{r['name']}: exit {r['status']} result {r['result']} overlay "
+              f"{r['overlay'].groups() if r['overlay'] else None} opened {r['opened']} mounted {r['mounted'][:1]} rejected {r['rejected']}")
     if failures:
         print("FAIL:\n  " + "\n  ".join(failures))
         return 1
-    print(f"PASS: default off; an enabled mod replaced {STAGE}.arc (uncompressed RARC and Yaz0), "
-          f"Mario's ready x moved {uncompressed['ready'][0] - base['ready'][0]:.1f} and {yaz0['ready'][0] - base['ready'][0]:.1f}")
+    print(f"PASS: default off ({disc_size} bytes); an enabled mod replaced {STAGE}.arc as an uncompressed RARC and as a Yaz0 "
+          f"stream, and the game mounted {disc_size + PAD} bytes each time and passed the stage")
     return 0
 
 

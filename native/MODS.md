@@ -155,8 +155,23 @@ mod still applies.
 The game decides by the file's header, as on the console. Stage archives
 (`.arc`) can be Yaz0-compressed (header `Yaz0`) or plain (`RARC`); both load.
 Whitehole writes the compressed form; either is fine in `files/`. Nothing in the
-mod folder is converted or checked: a broken archive fails the same way a broken
-disc file would.
+mod folder is converted.
+
+## Broken files are refused, not loaded
+
+Before a mod file can replace a disc file, its header is checked (a few dozen bytes, at start-up):
+archives (`.arc`, `.szs`) need a Yaz0 header with a sane size and, for `.arc`, a RARC or U8 archive after
+it, or a RARC or U8 header whose sizes fit the file; `.bmg` needs `MESGbmg1`; `.brstm` needs `RSTM`. Other
+files are not checked. A file that fails is skipped and the disc file (or another mod's valid file) is
+used, with a log line:
+
+```
+[mods] MyMod: StageData/EggStarGalaxy.arc is not a valid archive; using the disc file
+```
+
+This only catches obvious damage (a truncated download, the wrong file, a corrupted header); an archive
+with a valid header and bad contents can still fail when the game uses it. The check was run against all
+2,233 archive, message and stream files of a real disc with no false rejections.
 
 ## Make your first mod
 
@@ -185,12 +200,17 @@ the disc and checks it in the real game, without shipping any game data:
 python3 native/tools/mod_smoke.py --app build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari --output build/mod-smoke
 ```
 
-It decompresses `EggStarGalaxy.arc`, moves the layer A start point by 200 units in
-place (one float in the archive's start-point table), and installs the result as an
-uncompressed archive and as a Yaz0 stream. It then launches the game three times
-on that stage: mod present but not enabled (Mario's start must not change),
-enabled uncompressed, enabled Yaz0 (Mario's start must move by about 200). Each
-run must log the overlay and the first open of the mod's file.
+It decompresses `EggStarGalaxy.arc`, appends 4096 zero bytes and raises the header's size field to match (a valid,
+larger archive), and installs the result as an uncompressed archive and as a Yaz0 stream. It then
+launches the game four times on that stage: mod present but not enabled (the archive must mount at
+its disc size), enabled uncompressed, enabled Yaz0 (the archive must mount 4096 bytes larger, the log must
+show the overlay and the first open of the mod's file, and the stage must still load and pass), and a fourth with a corrupt archive (refused with the log line above;
+the disc archive loads and the stage passes). The size
+the game mounted comes from its own `[heap-arc] /StageData/EggStarGalaxy.arc -> file cache, N bytes` line.
+
+(Do not use Mario's start point as the probe: the stage fixture's synthetic entry does not take it from
+the archive's start rows. Corrupting the archive's `RARC` magic crashes the game when it loads, which is
+the other way to show the game reads the mod's bytes.)
 
 ## Tests
 
@@ -198,7 +218,8 @@ run must log the overlay and the first open of the mod's file.
   and larger, other-case paths, new files and directories, conflicts (a file where a
   directory is, and the reverse), byte reads, absolute disc-offset reads, and the
   unmodified mount.
-- `native_mod_folder`: path normalization (case, slashes, leading slashes, `..`),
+- `native_mod_folder`: header validation (good and corrupt RARC, U8 and Yaz0 archives, BMG, BRSTM; with
+  `PETARI_DISC_FILES=<disc>/files` it also checks every real disc archive), path normalization (case, slashes, leading slashes, `..`),
   discovery, `mod.txt`, the states in `mods.txt` (other lines kept), default off,
   precedence and conflict logging, a missing `files/` directory, `PETARI_MOD_FOLDERS`
   and `PETARI_MOD_DIRS`.

@@ -61,6 +61,13 @@ struct Resolved {
     std::vector<DVD::OverlayFile> files;      // one per path, precedence applied
     std::vector<std::string> log;        // human readable: order, conflicts, empty mods
 };
+// Cheap header checks on a mod file before it can replace a disc file, so a broken file cannot crash the game:
+// archives (.arc, .szs): Yaz0 magic with a sane decompressed size and a RARC (or U8) header after it, or such a header
+// whose sizes fit the file; BMG ("MESGbmg1") and BRSTM/BRSAR/BRWSD-style streams (.brstm: "RSTM"). Other files
+// are not checked. Returns "" when the file is fine (or not a checked kind), else a short kind name for the log
+// ("archive", "message file", "stream"). Reads at most a few dozen bytes.
+std::string invalidKind(const std::filesystem::path& host, const std::string& discPath);
+
 // Enabled mods in precedence order (priority descending, then name ascending);
 // the first one listed that supplies a path wins it.
 Resolved resolve(const std::vector<ModInfo>& mods, const std::map<std::string, bool>& states);
