@@ -115,6 +115,12 @@ private:
                     GXS::reportBreakpointReached(c.start);
                     lock.lock();
                 }
+                // As the real processor (patch_aurora_sync.py worker_main): wait
+                // for the breakpoint to move without holding the stream lock, so
+                // game threads keep writing. (wait_for with the stream predicate
+                // returns at once while commands are pending, without unlocking.)
+                mChanged.wait_for(lock, std::chrono::milliseconds(2),
+                                  [&] { return mStop || GXS::breakpointPosition() != bp; });
                 continue;
             }
             reportedHalt = false;
@@ -253,6 +259,20 @@ void testBreakpoint() {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     GXReadXfRasMetric(&a, &b, &c, &clocks2);
     check(clocks1 == clocks2 && a == 0 && b == 0 && c == 0, "halted GP makes no progress; unmeasured counters are 0");
+    // Game threads keep writing while the processor is halted: the real FIFO
+    // processor waits for a wake without holding the buffer lock (patch_aurora_sync.py).
+    // A writer blocked here would hold the OS CPU that the thread moving the
+    // breakpoint needs (head-check hang under load, 2026-10-01).
+    std::atomic<bool> wrote{false};
+    std::thread writer([&wrote] {
+        gRenderer.write(Cmd::Draw, 0, 64);
+        wrote = true;
+    });
+    for (int i = 0; i < 2000 && !wrote.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    check(wrote.load(), "a write while the processor is halted at the breakpoint does not block");
+    writer.join();
     GXS::clearBreakpoint();
     gRenderer.wakeForBreakpointChange();
     GXDrawDoneTest();
