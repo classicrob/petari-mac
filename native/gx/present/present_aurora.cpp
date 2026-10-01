@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -21,6 +22,7 @@
 #include <petari/efb_dump_mark.hpp>
 #include <petari/host_allocation.hpp>
 #include <petari/png_write.hpp>
+#include <petari/screenshot.hpp>
 
 #include "present.h"
 
@@ -121,6 +123,19 @@ aurora::webgpu::TextureWithSampler xfb_source(const aurora::gfx::TextureRef& ref
 // presented frames, for up to PETARI_XFB_DUMP_SPAN (default 400) frames after each phase mark
 // (petari/efb_dump_mark.hpp) whose label is in PETARI_XFB_DUMP_LABELS (default "idle,walk,jump").
 // The readback runs on the render worker, in order after the display copy, and blocks it briefly.
+// A listed label matches a mark whose label starts with it ("dome-select" matches "dome-select-EggStarGalaxy").
+bool labelListed(const std::string& list, const char* label) {
+  size_t at = 0;
+  const std::string mark = label;
+  while (at <= list.size()) {
+    const size_t comma = std::min(list.find(',', at), list.size());
+    const std::string token = list.substr(at, comma - at);
+    if (!token.empty() && mark.compare(0, token.size(), token) == 0) return true;
+    at = comma + 1;
+  }
+  return false;
+}
+
 struct XfbDumpConfig {
   std::string dir, labels = "idle,walk,jump";
   unsigned long every = 20, span = 400;
@@ -153,11 +168,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 }
 )";
 
-void dumpXfb(aurora::gfx::TextureHandle xfb, std::string path) {
+bool readXfb(const aurora::gfx::TextureHandle& xfb, std::vector<unsigned char>& rgb, uint32_t& width, uint32_t& height) {
   PetariNative::HostAllocationScope host;
   using aurora::webgpu::g_device;
   using aurora::webgpu::g_queue;
-  const uint32_t width = xfb->size.width, height = xfb->size.height;
+  width = xfb->size.width;
+  height = xfb->size.height;
   const uint64_t bytes = uint64_t(width) * height * 4;
   static wgpu::ComputePipeline* pipeline = nullptr;
   if (!pipeline) {
@@ -197,11 +213,11 @@ void dumpXfb(aurora::gfx::TextureHandle xfb, std::string path) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   if (state != 1) {
-    std::fprintf(stderr, "Petari XFB dump: readback failed for %s\n", path.c_str());
-    return;
+    std::fprintf(stderr, "Petari XFB dump: readback failed\n");
+    return false;
   }
   const auto* data = static_cast<const uint32_t*>(readback.GetConstMappedRange(0, bytes));
-  std::vector<unsigned char> rgb;
+  rgb.clear();
   rgb.reserve(size_t(width) * height * 3);
   for (size_t i = 0; i < size_t(width) * height; ++i) {
     rgb.push_back(static_cast<unsigned char>(data[i] >> 16));
@@ -209,11 +225,105 @@ void dumpXfb(aurora::gfx::TextureHandle xfb, std::string path) {
     rgb.push_back(static_cast<unsigned char>(data[i]));
   }
   readback.Unmap();
-  PetariNative::writePngRgb(path, width, height, rgb.data());
+  return true;
+}
+
+void dumpXfb(aurora::gfx::TextureHandle xfb, std::string path) {
+  std::vector<unsigned char> rgb;
+  uint32_t width = 0, height = 0;
+  if (readXfb(xfb, rgb, width, height)) PetariNative::writePngRgb(path, width, height, rgb.data());
+}
+
+
+// --- Opt-in dump of the final window image (PETARI_SURFACE_DUMP=<dir>), free when unset. ------
+// Unlike PETARI_XFB_DUMP (the game's frame only) this includes everything drawn over it: the Home menu,
+// progress badges and other ImGui overlays. Same schedule as the XFB dump: PETARI_SURFACE_DUMP_EVERY frames
+// (default 20), up to _SPAN frames (default 400) after each phase mark whose label is in _LABELS (default
+// "idle,walk,jump,dome-ready,dome-select"). Files: <dir>/surface-<label>-<index>.png.
+struct SurfaceDumpConfig {
+  std::string dir, labels = "idle,walk,jump,dome-ready,dome-select";
+  unsigned long every = 20, span = 400;
+  bool enabled = false;
+};
+const SurfaceDumpConfig& surfaceDumpConfig() {
+  static const SurfaceDumpConfig config = [] {
+    SurfaceDumpConfig c;
+    if (const char* dir = std::getenv("PETARI_SURFACE_DUMP"); dir && *dir) {
+      c.dir = dir;
+      c.enabled = true;
+      if (const char* v = std::getenv("PETARI_SURFACE_DUMP_LABELS")) c.labels = v;
+      if (const char* v = std::getenv("PETARI_SURFACE_DUMP_EVERY")) c.every = std::max(1ul, std::strtoul(v, nullptr, 10));
+      if (const char* v = std::getenv("PETARI_SURFACE_DUMP_SPAN")) c.span = std::strtoul(v, nullptr, 10);
+    }
+    return c;
+  }();
+  return config;
+}
+
+// PETARI_XFB_HASH=<file>: one line per presented frame, "<index> <black|xfb> <dim> <hash>" (FNV-1a 64 of the
+// RGB image), for the first PETARI_XFB_HASH_FRAMES (default 6000) frames. Compares presentation modes
+// without storing images. Lines may be out of order; sort by index.
+struct HashConfig {
+  std::string path;
+  uint64_t frames = 6000;
+  bool enabled = false;
+};
+const HashConfig& hashConfig() {
+  static const HashConfig config = [] {
+    HashConfig c;
+    if (const char* p = std::getenv("PETARI_XFB_HASH"); p && *p) {
+      c.path = p;
+      c.enabled = true;
+      if (const char* v = std::getenv("PETARI_XFB_HASH_FRAMES")) c.frames = std::strtoull(v, nullptr, 10);
+    }
+    return c;
+  }();
+  return config;
+}
+std::mutex gHashMutex;
+void hashLine(uint64_t index, const char* kind, float dim, uint64_t hash) {
+  std::lock_guard<std::mutex> lock(gHashMutex);
+  if (std::FILE* file = std::fopen(hashConfig().path.c_str(), "a")) {
+    std::fprintf(file, "%llu %s %.3f %016llx\n", static_cast<unsigned long long>(index), kind, static_cast<double>(dim),
+                 static_cast<unsigned long long>(hash));
+    std::fclose(file);
+  }
+}
+void hashFrame(uint64_t index, const Frame& frame) {
+  if (frame.black || !frame.xfb) {
+    hashLine(index, "black", frame.dimOpacity, 0);
+    return;
+  }
+  aurora::gfx::render_worker::enqueue_work([index, xfb = frame.xfb, dim = frame.dimOpacity] {
+    std::vector<unsigned char> rgb;
+    uint32_t width = 0, height = 0;
+    uint64_t hash = 14695981039346656037ULL;
+    if (readXfb(xfb, rgb, width, height)) {
+      for (unsigned char c : rgb) hash = (hash ^ c) * 1099511628211ULL;
+    }
+    hashLine(index, "xfb", dim, hash);
+  });
 }
 
 // Main thread, once per presented frame with an XFB.
 void maybeDumpXfb(const aurora::gfx::TextureHandle& xfb) {
+  // Photo mode's screenshot (petari/screenshot.hpp): this frame, once.
+  if (PetariNative::Screenshot::pending.load(std::memory_order_acquire)) {
+    std::string path = PetariNative::Screenshot::path;
+    PetariNative::Screenshot::pending.store(false, std::memory_order_release);
+    aurora::gfx::render_worker::enqueue_work([xfb, path = std::move(path)] {
+      std::vector<unsigned char> rgb;
+      uint32_t width = 0, height = 0;
+      bool ok = readXfb(xfb, rgb, width, height);
+      if (ok) {
+        PetariNative::writePngRgb(path, width, height, rgb.data());
+        std::FILE* written = std::fopen(path.c_str(), "rb");
+        ok = written != nullptr;
+        if (written) std::fclose(written);
+      }
+      std::fprintf(stderr, "[photo] screenshot %s: %s (%ux%u)\n", ok ? "saved" : "FAILED", path.c_str(), width, height);
+    });
+  }
   const auto& config = xfbDumpConfig();
   if (!config.enabled) return;
   static uint64_t seenMark = 0, sinceMark = 0;
@@ -227,7 +337,7 @@ void maybeDumpXfb(const aurora::gfx::TextureHandle& xfb) {
   }
   const auto index = sinceMark++;
   if (index >= config.span || index % config.every != 0) return;
-  if ((std::string(",") + config.labels + ",").find(std::string(",") + label + ",") == std::string::npos) return;
+  if (!labelListed(config.labels, label)) return;
   if (!directoryMade) {
     if (std::system(("mkdir -p '" + config.dir + "'").c_str()) != 0) return;
     directoryMade = true;
@@ -238,7 +348,7 @@ void maybeDumpXfb(const aurora::gfx::TextureHandle& xfb) {
 
 }  // namespace
 
-Frame take() noexcept {
+Frame takeImpl() noexcept {
   Frame frame;
   if (!gEnabled) {
     return frame;
@@ -268,6 +378,92 @@ Frame take() noexcept {
     traceFrame(frame);
   }
   return frame;
+}
+
+Frame take() noexcept {
+  Frame frame = takeImpl();
+  if (frame.active && hashConfig().enabled) {
+    static uint64_t presented = 0;
+    const uint64_t index = presented++;
+    if (index < hashConfig().frames) hashFrame(index, frame);
+  }
+  return frame;
+}
+
+void surface_dump_prepare() noexcept {
+  const auto& config = surfaceDumpConfig();
+  static bool done = false;
+  if (!config.enabled || done) return;
+  done = true;
+  // The surface is created render-only; reconfigure once with copy-source usage so it can be read back.
+  using namespace aurora::webgpu;
+  g_graphicsConfig.surfaceConfiguration.usage |= wgpu::TextureUsage::CopySrc;
+  auto configuration = g_graphicsConfig.surfaceConfiguration;
+  configuration.device = g_device;
+  g_surface.Configure(&configuration);
+}
+
+std::function<void()> surface_dump_encode(const wgpu::CommandEncoder& encoder, const wgpu::Texture& texture) noexcept {
+  const auto& config = surfaceDumpConfig();
+  if (!config.enabled || !texture) return {};
+  static uint64_t seenMark = 0, sinceMark = 0;
+  static const char* label = "none";
+  static bool directoryMade = false;
+  const auto counter = PetariNative::EfbDump::markCounter.load(std::memory_order_acquire);
+  if (counter != seenMark) {
+    seenMark = counter;
+    sinceMark = 0;
+    label = PetariNative::EfbDump::markLabel.load(std::memory_order_acquire);
+  }
+  const auto index = sinceMark++;
+  if (index >= config.span || index % config.every != 0) return {};
+  if (!labelListed(config.labels, label)) return {};
+  if (!directoryMade) {
+    if (std::system(("mkdir -p '" + config.dir + "'").c_str()) != 0) return {};
+    directoryMade = true;
+  }
+  if (!(texture.GetUsage() & wgpu::TextureUsage::CopySrc)) return {};
+  PetariNative::HostAllocationScope host;
+  const uint32_t width = texture.GetWidth(), height = texture.GetHeight();
+  const bool bgra = texture.GetFormat() == wgpu::TextureFormat::BGRA8Unorm;
+  const uint32_t rowBytes = (width * 4 + 255) / 256 * 256;
+  const uint64_t bytes = uint64_t(rowBytes) * height;
+  const wgpu::BufferDescriptor readDesc{
+      .label = "Petari surface dump", .usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst, .size = bytes};
+  const auto readback = aurora::webgpu::g_device.CreateBuffer(&readDesc);
+  const wgpu::TexelCopyTextureInfo source{.texture = texture};
+  const wgpu::TexelCopyBufferInfo destination{.layout = {.bytesPerRow = rowBytes, .rowsPerImage = height}, .buffer = readback};
+  const wgpu::Extent3D extent{width, height, 1};
+  encoder.CopyTextureToBuffer(&source, &destination, &extent);
+  auto path = config.dir + "/surface-" + label + "-" + std::to_string(index) + ".png";
+  return [readback, bytes, width, height, rowBytes, bgra, path = std::move(path)] {
+    PetariNative::HostAllocationScope scope;
+    std::atomic<int> state{0};
+    readback.MapAsync(wgpu::MapMode::Read, 0, bytes, wgpu::CallbackMode::AllowSpontaneous,
+                      [&state](wgpu::MapAsyncStatus status, wgpu::StringView) { state = status == wgpu::MapAsyncStatus::Success ? 1 : -1; });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (state == 0 && std::chrono::steady_clock::now() < deadline) {
+      aurora::webgpu::g_instance.ProcessEvents();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (state != 1) {
+      std::fprintf(stderr, "Petari surface dump: readback failed for %s\n", path.c_str());
+      return;
+    }
+    const auto* data = static_cast<const unsigned char*>(readback.GetConstMappedRange(0, bytes));
+    std::vector<unsigned char> rgb;
+    rgb.reserve(size_t(width) * height * 3);
+    for (uint32_t y = 0; y < height; ++y) {
+      const unsigned char* row = data + size_t(y) * rowBytes;
+      for (uint32_t x = 0; x < width; ++x) {
+        rgb.push_back(row[x * 4 + (bgra ? 2 : 0)]);
+        rgb.push_back(row[x * 4 + 1]);
+        rgb.push_back(row[x * 4 + (bgra ? 0 : 2)]);
+      }
+    }
+    readback.Unmap();
+    PetariNative::writePngRgb(path, width, height, rgb.data());
+  };
 }
 
 bool bind_image(const Frame& frame, wgpu::BindGroup& out) noexcept {

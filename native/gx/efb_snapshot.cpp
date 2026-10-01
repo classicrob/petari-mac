@@ -71,8 +71,14 @@ void maybeDump(std::uint64_t ticket, const Snapshot& snapshot) {
     }
     const auto index = sinceMark++;
     if (index >= config.span || index % config.every != 0) return;
-    const std::string wanted = "," + config.labels + ",";
-    if (wanted.find(std::string(",") + label + ",") == std::string::npos) return;
+    bool listed = false;
+    for (size_t at = 0; at <= config.labels.size() && !listed;) {
+        const size_t comma = std::min(config.labels.find(',', at), config.labels.size());
+        const std::string token = config.labels.substr(at, comma - at);
+        listed = !token.empty() && std::string(label).compare(0, token.size(), token) == 0;
+        at = comma + 1;
+    }
+    if (!listed) return;
     if (!directoryMade) {
         std::string command = "mkdir -p '" + config.dir + "'";
         if (std::system(command.c_str()) != 0) return;

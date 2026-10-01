@@ -67,6 +67,8 @@ def run_dome(dome, args, output):
     with contextlib.redirect_stdout(io.StringIO()):
         create(ROOT / "build/observatory-user-2", user)
     shutil.copytree(args.save / "NAND", user / "NAND", dirs_exist_ok=True)
+    if getattr(args, "progress_seed", None):
+        shutil.copy2(args.progress_seed, user / "progress.json")  # a personal progress record to badge (native/PROGRESS.md)
     (user / "tour-save-source.json").write_text(json.dumps({
         "source": str(args.save.resolve()),
         "sha256": hashlib.sha256((user / "NAND/title/00010000/524d4745/data/GameData.bin").read_bytes()).hexdigest(),
@@ -142,6 +144,7 @@ def main():
     parser.add_argument("--save", type=Path, default=ROOT / "build/saves/all-missions")
     parser.add_argument("--output", type=Path, required=True, help="new or existing evidence directory")
     parser.add_argument("--domes", default="1,2,3,4,5,6")
+    parser.add_argument("--progress-seed", type=Path, default=None, help="progress.json copied into each dome's user directory")
     parser.add_argument("--missions", default="", help="PETARI_DOME_MISSIONS, e.g. EggStarGalaxy:5")
     parser.add_argument("--frames", type=int, default=72000)
     parser.add_argument("--timeout", type=float, default=1200, help="seconds per dome session (<= 20 min)")

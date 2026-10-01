@@ -2132,6 +2132,78 @@ void testCamera() {
     In::resetForTesting();
 }
 
+// Photo mode (docs/dev/ODYSSEY_CAMERA.md): off by default; P asks the game,
+// which answers; while active the game sees no input and everything flies.
+void testPhotoMode() {
+    namespace Camera = PetariNative::CameraSettings;
+    Camera::resetForTesting();
+    PetariPhotoInput in;
+    {
+        Rig rig;
+        const WPadStick& stick = *rig.pad->mStick;
+        press(In::Key::P);
+        lift(In::Key::P);
+        petari_photo_take_input(&in);
+        check(!in.enabled && in.toggle == 0 && !Camera::photoCapturing(), "photo mode off: P does nothing");
+        std::string error;
+        check(Camera::parse("PhotoMode=on\n", &error) && Camera::photoEnabled() && !Camera::enabled(),
+              "PhotoMode=on parses, independent of the orbit camera");
+        check(Camera::serialize().find("PhotoMode=on") != std::string::npos, "PhotoMode serialized");
+        // W held, then P: the game's stick is released and W now flies.
+        press(In::Key::W);
+        rig.frame();
+        check(stick.mStick.y > 0.99f, "W moves Mario before photo mode");
+        press(In::Key::P);
+        lift(In::Key::P);
+        check(Camera::photoCapturing(), "P: input held back while the game answers");
+        petari_photo_take_input(&in);
+        check(in.enabled && in.toggle == 1, "the game sees the toggle");
+        petari_photo_set_active(1);
+        rig.frame();
+        check(stick.mStick.x == 0.0f && stick.mStick.y == 0.0f, "entering releases the game's held stick");
+        press(In::Key::Space);
+        press(In::Key::L);
+        press(In::Key::Tab);
+        rig.frame();
+        check(stick.mStick.y == 0.0f, "the game gets no input in photo mode");
+        In::mouseMoved(100.0f, 100.0f);
+        In::mouseButtonEvent(In::MouseButton::Left, true);
+        In::mouseMoved(120.0f, 90.0f);
+        In::mouseButtonEvent(In::MouseButton::Left, false);
+        In::mouseWheel(0.0f, 1.0f);
+        press(In::Key::O);
+        lift(In::Key::O);
+        petari_photo_take_input(&in);
+        check(in.moveForward == 0.0f, "W held from before entry does not fly");
+        check(in.moveUp == 1.0f && in.fast, "Space flies up, Tab fast");
+        check(std::fabs(in.yaw - (3.0f + 2.5f)) < 0.01f && std::fabs(in.pitch - 1.5f) < 0.01f,
+              "drag and L look (" + std::to_string(in.yaw) + ", " + std::to_string(in.pitch) + ")");
+        check(in.fovSteps == -1.0f && in.shots == 1, "wheel narrows the view, O takes a shot");
+        lift(In::Key::W);
+        press(In::Key::W);
+        petari_photo_take_input(&in);
+        check(in.moveForward == 1.0f && in.yaw == 2.5f, "W pressed in photo mode flies forward");
+        press(In::Key::Escape);
+        lift(In::Key::Escape);
+        petari_photo_take_input(&in);
+        check(in.leave == 1, "Escape leaves");
+        petari_photo_set_active(0);
+        for (In::KeyCode key : {In::Key::W, In::Key::Space, In::Key::L, In::Key::Tab}) lift(key);
+        press(In::Key::D);
+        rig.frame();
+        check(stick.mStick.x > 0.99f && !Camera::photoCapturing(), "after leaving the game gets input again");
+        lift(In::Key::D);
+        // Refused (the game cannot pause now): input is back at once.
+        press(In::Key::P);
+        lift(In::Key::P);
+        petari_photo_take_input(&in);
+        petari_photo_set_active(0);
+        check(!Camera::photoCapturing(), "a refused toggle returns input to the game");
+    }
+    Camera::resetForTesting();
+    In::resetForTesting();
+}
+
 int main() {
     __OSThreadInit();
     testBindings();
@@ -2151,6 +2223,7 @@ int main() {
     testGamepad();
     testDevice();
     testCamera();
+    testPhotoMode();
     testMods();
 #ifdef PETARI_INPUT_TEST_SDL3
     testSdl3();

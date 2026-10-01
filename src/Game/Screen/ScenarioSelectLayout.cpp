@@ -1,5 +1,6 @@
 #include "Game/Screen/ScenarioSelectLayout.hpp"
 #include "Game/Util/NativeUiObserve.hpp"
+#include <petari/progress_hook.hpp>
 #include "Game/Camera/CameraContext.hpp"
 #include "Game/Effect/MultiEmitter.hpp"
 #include "Game/LiveActor/Nerve.hpp"
@@ -676,6 +677,14 @@ void ScenarioSelectLayout::exeWaitScenarioSelect() {
         if (!mStar[i]->_30 && mStar[i]->mScenarioNo == 1) {
             MR::Native::publishUiPaneTarget(this, ::cStarPaneName[i], "Scenario.First", 1,
                 PETARI_UI_SELECTABLE | (mSelectedScenarioNo == 1 ? PETARI_UI_POINTING : 0));
+        }
+    }
+    // The personal progress badges (native/PROGRESS.md): where each shown mission star is, every frame.
+    for (s32 i = 0; i < 7; ++i) {
+        TVec2f badgePos;
+        if (!mStar[i]->_30 && MR::Native::paneCenterOnScreen(this, ::cStarPaneName[i], &badgePos)) {
+            petari_progress_badge(MR::getCurrentStageName(), mStar[i]->mScenarioNo, badgePos.x / MR::getScreenWidth(),
+                                  badgePos.y / MR::getScreenHeight());
         }
     }
     // Every shown mission star, indexed by its scenario number (comet and

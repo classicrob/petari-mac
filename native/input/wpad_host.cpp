@@ -603,6 +603,88 @@ void releaseCameraInput() {
     gRightX = gRightY = 0.0f;
     CameraSettings::resetInput();
 }
+
+// Photo mode (docs/dev/ODYSSEY_CAMERA.md): from a PhotoMode press until the game
+// leaves photo mode, every input flies the free camera and the game gets none.
+// Moves by the stick bindings (WASD), up A (Space), down NunchukZ (Shift); looks
+// by the camera orbit and D-pad bindings (IJKL, Q/E, arrows), any mouse button
+// drag, trackpad scroll and the right stick; FOV by the zoom bindings, wheel
+// and pinch; TiltHold (Tab) fast, Walk (Alt) slow; PhotoShot (O) or Start
+// (Return) saves a screenshot; PhotoMode again or Plus (Escape) leaves.
+enum PhotoHeld {
+    MoveFwd, MoveBack, MoveLeft, MoveRight, MoveUp, MoveDown, LookLeft, LookRight, LookUp, LookDown,
+    FovNarrow, FovWide, Fast, Slow, PhotoHeldCount
+};
+int gPhotoHeld[PhotoHeldCount] = {};
+int gPhotoMouseButtons = 0;
+float gLeftX = 0.0f, gLeftY = 0.0f;
+bool gGameReleased = false;  // the game's held inputs were released for this capture
+
+bool photoBound(PhotoHeld held, Binding input) {
+    switch (held) {
+    case MoveFwd: return boundTo(Action::StickUp, input);
+    case MoveBack: return boundTo(Action::StickDown, input);
+    case MoveLeft: return boundTo(Action::StickLeft, input);
+    case MoveRight: return boundTo(Action::StickRight, input);
+    case MoveUp: return boundTo(Action::A, input);
+    case MoveDown: return boundTo(Action::NunchukZ, input);
+    case LookLeft: return boundTo(Action::CameraOrbitLeft, input) || boundTo(Action::DpadLeft, input);
+    case LookRight: return boundTo(Action::CameraOrbitRight, input) || boundTo(Action::DpadRight, input);
+    case LookUp: return boundTo(Action::CameraPitchUp, input) || boundTo(Action::DpadUp, input);
+    case LookDown: return boundTo(Action::CameraPitchDown, input) || boundTo(Action::DpadDown, input);
+    case FovNarrow: return boundTo(Action::CameraZoomIn, input);
+    case FovWide: return boundTo(Action::CameraZoomOut, input);
+    case Fast: return boundTo(Action::TiltHold, input);
+    case Slow: return boundTo(Action::Walk, input);
+    default: return false;
+    }
+}
+
+void publishPhotoHolds() {
+    auto axis = [](int plus, int minus) { return static_cast<float>((gPhotoHeld[plus] > 0 ? 1 : 0) - (gPhotoHeld[minus] > 0 ? 1 : 0)); };
+    CameraSettings::photoMove(axis(MoveRight, MoveLeft), axis(MoveFwd, MoveBack), axis(MoveUp, MoveDown));
+    const float lookX = std::clamp(axis(LookRight, LookLeft) + gRightX, -1.0f, 1.0f);
+    const float lookY = std::clamp(axis(LookUp, LookDown) - gRightY, -1.0f, 1.0f);
+    CameraSettings::photoLookHold(lookX, lookY);
+    CameraSettings::photoStick(gLeftX, -gLeftY);
+    CameraSettings::photoFovHold(static_cast<int>(axis(FovWide, FovNarrow)));
+    CameraSettings::photoSpeed(gPhotoHeld[Fast] > 0, gPhotoHeld[Slow] > 0);
+}
+
+void releasePhotoInput() {
+    for (int& held : gPhotoHeld) held = 0;
+    gPhotoMouseButtons = 0;
+    gLeftX = gLeftY = 0.0f;
+    CameraSettings::resetPhotoInput();
+}
+
+// True when the input went to photo mode (and must not reach the game).
+bool photoInput(Binding input, bool down, bool repeat) {
+    if (!CameraSettings::photoEnabled()) return false;
+    if (down && !repeat && boundTo(Action::PhotoMode, input)) CameraSettings::photoToggle();
+    if (!CameraSettings::photoCapturing()) {
+        if (gGameReleased) {
+            gGameReleased = false;
+            releasePhotoInput();
+        }
+        return false;
+    }
+    if (!gGameReleased) {
+        // Entering: whatever the game saw held is let go, as on a focus loss.
+        model().focusChanged(false);
+        model().focusChanged(true);
+        gGameReleased = true;
+    }
+    if (repeat) return true;
+    for (int i = 0; i < PhotoHeldCount; ++i) {
+        if (photoBound(static_cast<PhotoHeld>(i), input)) gPhotoHeld[i] = std::max(0, gPhotoHeld[i] + (down ? 1 : -1));
+    }
+    if (input.device == Binding::Device::Mouse) gPhotoMouseButtons = std::max(0, gPhotoMouseButtons + (down ? 1 : -1));
+    if (down && (boundTo(Action::PhotoShot, input) || boundTo(Action::Start, input))) CameraSettings::photoShot();
+    if (down && boundTo(Action::Plus, input)) CameraSettings::photoLeave();
+    publishPhotoHolds();
+    return true;
+}
 }  // namespace
 
 int takeActionPresses(Action action) {
@@ -629,6 +711,7 @@ void keyEvent(KeyCode code, bool down, bool repeat) {
         countModPress(Binding::key(code));
         notePressForProbe(Binding::key(code));
     }
+    if (photoInput(Binding::key(code), down, repeat)) return;
     if (!repeat) cameraInput(Binding::key(code), down);
     model().keyEvent(code, down, repeat);
 }
@@ -640,6 +723,7 @@ void mouseButtonEvent(MouseButton button, bool down) {
         countModPress(Binding::mouse(button));
         notePressForProbe(Binding::mouse(button));
     }
+    if (photoInput(Binding::mouse(button), down, false)) return;
     cameraInput(Binding::mouse(button), down);
     model().mouseButtonEvent(button, down);
 }
@@ -651,6 +735,7 @@ void padButtonEvent(PadButton button, bool down) {
         countModPress(Binding::pad(button));
         notePressForProbe(Binding::pad(button));
     }
+    if (photoInput(Binding::pad(button), down, false)) return;
     cameraInput(Binding::pad(button), down);
     model().padButtonEvent(button, down);
 }
@@ -661,6 +746,12 @@ void padAxisEvent(PadAxis axis, float value) {
         gHostActivity = true;
     }
     std::lock_guard<std::mutex> lock(gHostMutex);
+    if (CameraSettings::photoEnabled() && CameraSettings::photoCapturing()) {
+        if (axis == PadAxis::RightX || axis == PadAxis::RightY) (axis == PadAxis::RightX ? gRightX : gRightY) = value;
+        if (axis == PadAxis::LeftX || axis == PadAxis::LeftY) (axis == PadAxis::LeftX ? gLeftX : gLeftY) = value;
+        publishPhotoHolds();
+        return;
+    }
     if (CameraSettings::enabled() && (axis == PadAxis::RightX || axis == PadAxis::RightY)) {
         // The right stick orbits the camera instead of moving the Star Pointer.
         (axis == PadAxis::RightX ? gRightX : gRightY) = value;
@@ -679,6 +770,14 @@ void padDisconnected() {
 void mouseMoved(float x, float y) {
     gHostActivity = true;
     std::lock_guard<std::mutex> lock(gHostMutex);
+    if (CameraSettings::photoEnabled() && CameraSettings::photoCapturing()) {
+        // Any mouse button held: drag to look (0.15 degrees per point).
+        if (gHaveMouse && gPhotoMouseButtons > 0) CameraSettings::photoLook((x - gMouseX) * 0.15f, -(y - gMouseY) * 0.15f);
+        gMouseX = x;
+        gMouseY = y;
+        gHaveMouse = true;
+        return;
+    }
     const bool drag = CameraSettings::enabled() && gCameraHeld[OrbitHold] > 0 && gHaveMouse;
     if (drag) CameraSettings::mouseDrag(x - gMouseX, y - gMouseY);
     gMouseX = x;
@@ -689,6 +788,16 @@ void mouseMoved(float x, float y) {
 }
 
 void mouseWheel(float x, float y) {
+    if (CameraSettings::photoEnabled() && CameraSettings::photoCapturing()) {
+        // Trackpad scroll looks; wheel notches change the field of view (up: narrower).
+        const bool precise = x != 0.0f || y != std::round(y);
+        if (precise) {
+            CameraSettings::photoLook(-x * 3.0f, y * 3.0f);
+        } else {
+            CameraSettings::photoFov(-y);
+        }
+        return;
+    }
     if (!CameraSettings::enabled()) return;
     // Wheel clicks arrive as whole notches; trackpads and Magic Mouse scroll precisely.
     const bool precise = x != 0.0f || y != std::round(y);
@@ -701,6 +810,10 @@ void mouseWheel(float x, float y) {
 }
 
 void pinch(float scale) {
+    if (CameraSettings::photoEnabled() && CameraSettings::photoCapturing() && scale > 0.0f) {
+        CameraSettings::photoFov(-std::log(scale) / std::log(1.1f));
+        return;
+    }
     if (!CameraSettings::enabled() || !(scale > 0.0f)) return;
     // Spread (scale > 1) zooms in, about one wheel notch per 10%.
     CameraSettings::zoomSteps(-std::log(scale) / std::log(1.1f));
@@ -718,7 +831,10 @@ void setViewport(const Viewport& viewport) {
 
 void focusChanged(bool focused) {
     std::lock_guard<std::mutex> lock(gHostMutex);
-    if (!focused) releaseCameraInput();
+    if (!focused) {
+        releaseCameraInput();
+        releasePhotoInput();
+    }
     model().focusChanged(focused);
 }
 

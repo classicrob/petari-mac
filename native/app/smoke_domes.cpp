@@ -5,6 +5,7 @@
 #include <petari/efb_dump_mark.hpp>
 
 #include <algorithm>
+#include <set>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -184,6 +185,11 @@ const char* DomesDriver::phase() const {
 }
 
 void DomesDriver::next(Phase phase) {
+    if (phase == Phase::Scenario && !mVisits.empty() && mVisit < mVisits.size()) {
+        // Opt-in image dumps (PETARI_SURFACE_DUMP and friends); inert otherwise. One label per galaxy.
+        static std::set<std::string> labels;
+        PetariNative::EfbDump::mark(labels.insert("dome-select-" + mVisits[mVisit].galaxy).first->c_str());
+    }
     mPhase = phase;
     mPhaseFrames = 0;
     mAimFrames = mAimMissing = mPointingFrames = 0;

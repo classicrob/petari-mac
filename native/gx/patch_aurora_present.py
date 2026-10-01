@@ -306,10 +306,20 @@ def patch_aurora(text):
     text = replace_once(text, '#include "present_aurora.hpp"\n',
                         '#include "present_aurora.hpp"\n#include <petari/frame_telemetry.hpp>\n#include <petari/latency_probe.hpp>\n')
     text = replace_once(text, '        g_surface.GetCurrentTexture(&surfaceTexture);\n',
+                        '        petari_present::surface_dump_prepare();  // opt-in PETARI_SURFACE_DUMP: copy-source surface\n'
                         '        {\n'
                         '          PetariNative::FrameTelemetry::Scope petariTiming{PetariNative::FrameTelemetry::DrawableAcquire};\n'
                         '          g_surface.GetCurrentTexture(&surfaceTexture);\n'
                         '        }\n')
+    # Opt-in dump of the final window image (the presented frame plus the ImGui overlay).
+    text = replace_once(text, '    wgpu::Texture currentTexture;\n    wgpu::TextureView currentView;\n',
+                        '    wgpu::Texture currentTexture;\n    wgpu::TextureView currentView;\n'
+                        '    std::function<void()> petariSurfaceDump;\n')
+    text = replace_once(text, '        imgui::render(pass, imguiDrawData);\n        pass.End();\n      }\n',
+                        '        imgui::render(pass, imguiDrawData);\n        pass.End();\n      }\n'
+                        '      petariSurfaceDump = petari_present::surface_dump_encode(encoder, currentTexture);\n')
+    text = replace_once(text, '    webgpu::gpu_prof::after_submit();\n',
+                        '    if (petariSurfaceDump) {\n      petariSurfaceDump();\n    }\n    webgpu::gpu_prof::after_submit();\n')
     text = replace_once(text, '      g_queue.Submit(1, &buffer);\n',
                         '      PetariNative::FrameTelemetry::Scope petariTiming{PetariNative::FrameTelemetry::FrameSubmit};\n'
                         '      g_queue.Submit(1, &buffer);\n')

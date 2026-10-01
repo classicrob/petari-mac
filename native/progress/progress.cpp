@@ -9,6 +9,8 @@
 #include <map>
 #include <mutex>
 #include <sstream>
+#include <utility>
+#include <vector>
 
 #include "petari/host_allocation.hpp"
 
@@ -21,6 +23,20 @@ std::mutex gMutex;
 std::map<std::string, Mission> gMissions;  // key "Stage:mission"
 fs::path gFile;
 std::string (*gClock)() = nullptr;
+
+// Badges: published during one frame, read by the overlay.
+struct BadgeStore {
+    std::string stage;
+    std::vector<std::pair<int, std::pair<float, float>>> stars;
+    unsigned long stamp = 0;  // gFrames when last published
+    bool any = false;
+} gBadges;
+unsigned long gFrames = 0;
+bool gBadgesOn = true;
+
+fs::path settingsFile() {
+    return gFile.empty() ? fs::path() : gFile.parent_path() / "progress_settings.txt";
+}
 
 // The run being timed.
 struct RunState {
@@ -296,6 +312,12 @@ bool load(const fs::path& file, std::string* error) {
     }
     gMissions = std::move(loaded);
     gFile = file;
+    gBadgesOn = true;
+    std::ifstream settings(settingsFile());
+    std::string line;
+    while (std::getline(settings, line)) {
+        if (line.rfind("badges=", 0) == 0) gBadgesOn = line.substr(7, 3) != "off";
+    }
     return true;
 }
 
@@ -325,6 +347,7 @@ bool parse(const std::string& text, std::string* error) {
 
 void frame(const FrameState& s) {
     std::lock_guard<std::mutex> lock(gMutex);
+    ++gFrames;
     if (!s.inGame) {
         gRun.active = false;  // the next Game scene starts a new run
         return;
@@ -386,6 +409,71 @@ int currentRunDeaths() {
     return gRun.deaths;
 }
 
+void publishBadge(const char* stage, int mission, float u, float v) {
+    HostAllocationScope host;
+    std::lock_guard<std::mutex> lock(gMutex);
+    if (!gBadges.any || gBadges.stamp != gFrames || gBadges.stage != stage) {
+        gBadges.stage = stage;
+        gBadges.stars.clear();
+        gBadges.stamp = gFrames;
+        gBadges.any = true;
+    }
+    for (auto& star : gBadges.stars) {
+        if (star.first == mission) {
+            star.second = {u, v};
+            return;
+        }
+    }
+    gBadges.stars.push_back({mission, {u, v}});
+}
+
+bool currentBadges(std::vector<BadgeStar>* out, std::string* stage) {
+    std::lock_guard<std::mutex> lock(gMutex);
+    static const bool trace = std::getenv("PETARI_PROGRESS_TRACE") != nullptr;
+    if (trace && gBadges.any && gFrames - gBadges.stamp <= 2) {
+        static unsigned long lastReport = 0;
+        if (gFrames - lastReport > 120) {
+            lastReport = gFrames;
+            std::fprintf(stderr, "[progress] badges: %zu stars of %s, on=%d, record has %zu missions\n", gBadges.stars.size(),
+                         gBadges.stage.c_str(), gBadgesOn ? 1 : 0, gMissions.size());
+        }
+    }
+    if (!gBadgesOn || !gBadges.any || gFrames - gBadges.stamp > 2) return false;
+    out->clear();
+    if (stage) *stage = gBadges.stage;
+    for (const auto& [mission, position] : gBadges.stars) {
+        BadgeStar star;
+        star.mission = mission;
+        star.u = position.first;
+        star.v = position.second;
+        const auto it = gMissions.find(key(gBadges.stage, mission));
+        if (it != gMissions.end()) {
+            star.cleared = true;
+            star.bestTimeS = it->second.bestTimeS;
+            star.clears = it->second.clears;
+        }
+        out->push_back(star);
+    }
+    return !out->empty();
+}
+
+bool badgesEnabled() {
+    std::lock_guard<std::mutex> lock(gMutex);
+    return gBadgesOn;
+}
+
+void setBadgesEnabled(bool on) {
+    HostAllocationScope host;
+    std::lock_guard<std::mutex> lock(gMutex);
+    gBadgesOn = on;
+    const fs::path file = settingsFile();
+    if (file.empty()) return;
+    std::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::trunc);
+    out << "badges=" << (on ? "on" : "off") << "\n";
+}
+
 void setClockForTesting(std::string (*clock)()) {
     std::lock_guard<std::mutex> lock(gMutex);
     gClock = clock;
@@ -397,6 +485,9 @@ void resetForTesting() {
     gFile.clear();
     gRun = RunState{};
     gClock = nullptr;
+    gBadges = BadgeStore{};
+    gFrames = 0;
+    gBadgesOn = true;
 }
 
 }  // namespace PetariNative::Progress

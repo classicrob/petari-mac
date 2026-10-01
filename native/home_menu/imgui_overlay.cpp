@@ -2,6 +2,8 @@
 // are included here, so ImGui's types never meet the SDK's GX headers.
 
 #include "petari/home_menu.hpp"
+#include "petari/launch_stage.hpp"
+#include "petari/progress.hpp"
 #include "petari/pipeline_startup.hpp"
 
 #include <imgui.h>
@@ -14,11 +16,14 @@
 #endif
 
 #include <algorithm>
+#include <vector>
+#include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
 
 namespace PetariNative::HomeMenu {
+namespace App = PetariNative::App;
 
 namespace {
 
@@ -85,6 +90,63 @@ void drawTitleHint(const char* text, float imageX, float imageY, float imageWidt
     list->PopClipRect();
 }
 
+// My Progress badges (petari/progress.hpp): a check and the best time under each mission star the player cleared
+// themselves, while the mission select is up. Positions come from the game's own star panes (normalized game-image
+// coordinates), so they follow the image at any window size.
+void drawProgressBadges(float imageX, float imageY, float imageWidth, float imageHeight) {
+    std::vector<Progress::BadgeStar> stars;
+    std::string stage;
+    if (!(imageWidth > 0.0f) || !(imageHeight > 0.0f) || !Progress::currentBadges(&stars, &stage)) {
+        return;
+    }
+    ImDrawList* list = ImGui::GetForegroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    list->PushClipRect(ImVec2(imageX, imageY), ImVec2(imageX + imageWidth, imageY + imageHeight), false);
+    const float textSize = imageHeight * 0.03f;
+    const float height = imageHeight * 0.045f;
+    for (const Progress::BadgeStar& star : stars) {
+        if (!star.cleared) {
+            continue;
+        }
+        char text[32];
+        const int whole = static_cast<int>(star.bestTimeS);
+        std::snprintf(text, sizeof(text), "%d:%02d.%d", whole / 60, whole % 60, static_cast<int>((star.bestTimeS - whole) * 10.0));
+        const ImVec2 extent = font->CalcTextSizeA(textSize, 1.0e9f, 0.0f, text);
+        const float pad = height * 0.35f;
+        const float width = height + extent.x + pad * 2.0f;
+        const ImVec2 center(imageX + star.u * imageWidth, imageY + star.v * imageHeight + imageHeight * 0.085f);
+        const ImVec2 min(center.x - width * 0.5f, center.y - height * 0.5f);
+        const ImVec2 max(center.x + width * 0.5f, center.y + height * 0.5f);
+        list->AddRectFilled(min, max, color(0.02f, 0.03f, 0.08f, 0.82f), height * 0.5f);
+        list->AddRect(min, max, color(0.35f, 0.85f, 0.45f, 0.9f), height * 0.5f, 0, imageHeight * 0.002f);
+        const ImVec2 badge(min.x + height * 0.5f, center.y);
+        list->AddCircleFilled(badge, height * 0.34f, color(0.2f, 0.72f, 0.32f, 1.0f));
+        const float unit = height * 0.34f;
+        list->AddPolyline(std::array<ImVec2, 3>{ImVec2(badge.x - unit * 0.5f, badge.y), ImVec2(badge.x - unit * 0.12f, badge.y + unit * 0.4f),
+                                                  ImVec2(badge.x + unit * 0.55f, badge.y - unit * 0.4f)}.data(),
+                          3, color(1.0f, 1.0f, 1.0f, 1.0f), 0, imageHeight * 0.004f);
+        list->AddText(font, textSize, ImVec2(min.x + height + pad * 0.6f, center.y - extent.y * 0.5f), color(1.0f, 1.0f, 1.0f, 0.97f), text);
+    }
+    // "x/y cleared by you" for the galaxy, in a corner of the image where the mission select leaves room.
+    if (const App::LaunchStage::Galaxy* galaxy = App::LaunchStage::find(stage)) {
+        int cleared = 0;
+        for (int mission = 1; mission <= galaxy->missions; ++mission) {
+            cleared += Progress::find(galaxy->stage, mission, nullptr) ? 1 : 0;
+        }
+        char text[64];
+        std::snprintf(text, sizeof(text), "%d/%d cleared by you", cleared, galaxy->missions);
+        const float size = imageHeight * 0.03f;
+        const ImVec2 extent = font->CalcTextSizeA(size, 1.0e9f, 0.0f, text);
+        const float padX = size * 0.8f, padY = size * 0.4f;
+        const ImVec2 min(imageX + imageWidth * 0.02f, imageY + imageHeight * 0.02f);
+        const ImVec2 max(min.x + extent.x + padX * 2.0f, min.y + extent.y + padY * 2.0f);
+        list->AddRectFilled(min, max, color(0.02f, 0.03f, 0.08f, 0.82f), (max.y - min.y) * 0.5f);
+        list->AddRect(min, max, color(0.35f, 0.85f, 0.45f, 0.9f), (max.y - min.y) * 0.5f, 0, imageHeight * 0.002f);
+        list->AddText(font, size, ImVec2(min.x + padX, min.y + padY), color(1.0f, 1.0f, 1.0f, 0.97f), text);
+    }
+    list->PopClipRect();
+}
+
 void drawImGuiOverlay(float imageX, float imageY, float imageWidth, float imageHeight) {
     const View view = publishedView();
 #ifdef PETARI_HOME_MENU_INPUT
@@ -102,6 +164,9 @@ void drawImGuiOverlay(float imageX, float imageY, float imageWidth, float imageH
         drawTitleHint(sHint.c_str(), imageX, imageY, imageWidth, imageHeight);
     }
 #endif
+    if (!view.visible) {
+        drawProgressBadges(imageX, imageY, imageWidth, imageHeight);
+    }
     if (!view.visible || !(imageWidth > 0.0f) || !(imageHeight > 0.0f)) {
         return;
     }

@@ -36,6 +36,24 @@ change the galaxy; each mission is a row with **Cleared**, its best time, fewest
 coins and Star Bits, the number of clears and the first clear date, or **Not cleared yet**. The
 message line counts the missions cleared in this galaxy and in all.
 
+## Badges on the mission select
+
+When you pick a galaxy's mission, each mission star you cleared yourself gets a small badge under it: a green
+check and your best time (`5:12.3`), and a pill in the top-left corner says **x/y cleared by you** for the
+galaxy. They come from `progress.json`, not from the save's stars, so they work on an all-unlocked save.
+
+- Positions come from the game's own mission-select layout: `ScenarioSelectLayout::exeWaitScenarioSelect`
+  reports each shown star pane's centre every frame (normalized game-image coordinates), and the overlay
+  (`native/home_menu/imgui_overlay.cpp`) draws at that fraction of the game image, so they line up at any
+  window size and aspect. Not drawn while the F1 menu is open.
+- Hide them: F1, **My Progress**, **Badges: On/Off**. The choice is saved in `progress_settings.txt` beside
+  `progress.json` (Reset progress keeps it).
+- Not done: a per-galaxy count on the galaxy map / dome view. The mission select shows it.
+- Verification: `PETARI_SURFACE_DUMP=<dir>` (see below) on a dome-tour run with a seeded `progress.json`
+  (`dome_tour.py --progress-seed FILE`), e.g. `build/stage-sweep/badge-live-v6/dumps/` (`surface-dome-select-
+  EggStarGalaxy-546.png`: four of six missions badged, "4/6 cleared by you"). `PETARI_PROGRESS_TRACE=1` logs
+  what the overlay is given.
+
 ## Wiping it
 
 - On the page: **Reset progress...**, then press A again (moving the focus away cancels it).
@@ -64,3 +82,12 @@ progress that run. Fix or delete the file and start the game again.
   --warp-placement PowerStar --name progress-live` warps Mario onto the one Power Star that exists
   from the start; the run's `user/progress.json` then holds the clear and the log has a
   `[progress] cleared ...` line.
+
+## Image dumps used to check the UI (debug, off by default)
+
+- `PETARI_SURFACE_DUMP=<dir>`: the final window image, including everything ImGui draws over the game (Home
+  menu, badges), as PNG. `PETARI_SURFACE_DUMP_LABELS` (prefix match on the phase marks; the dome tour marks
+  `dome-select-<Galaxy>` when it starts choosing a mission, the stage script marks `idle`/`walk`/`jump`),
+  `_EVERY` (frames), `_SPAN` (frames after each mark). The surface is reconfigured once as a copy source
+  when this is set.
+- `PETARI_XFB_DUMP=<dir>`: only the game's presented frame (the XFB), same schedule variables with `XFB`.

@@ -23,6 +23,22 @@ namespace MR {
             petari_ui_target(pId, index, rScreenPos.x / MR::getScreenWidth(), rScreenPos.y / MR::getScreenHeight(), flags);
         }
 
+        // The centre of a bounding pane in star pointer screen space, taken as LayoutManager::isPointing bounds it.
+        inline bool paneCenterOnScreen(const LayoutActor* pHost, const char* pPaneName, TVec2f* pOut) {
+            const nw4r::lyt::Pane* pPane = pHost->getLayoutManager()->getPane(pPaneName);
+            if (pPane == nullptr) {
+                return false;
+            }
+
+            s32 horizontalPosition = static_cast< u8 >(pPane->mBasePosition % 3);
+            s32 verticalPosition = static_cast< u8 >(pPane->mBasePosition / 3);
+            TVec2f localCenter(0.0f, 0.0f);
+            localCenter.x = horizontalPosition == 0 ? pPane->mSize.width / 2.0f : (horizontalPosition == 2 ? -pPane->mSize.width / 2.0f : 0.0f);
+            localCenter.y = verticalPosition == 0 ? -pPane->mSize.height / 2.0f : (verticalPosition == 2 ? pPane->mSize.height / 2.0f : 0.0f);
+            MR::convertPaneLocalPosToScreenPos(pOut, pPane, localCenter);
+            return true;
+        }
+
         // Publishes the centre of a bounding pane, taken as LayoutManager::isPointing bounds it.
         inline void publishUiPaneTarget(const LayoutActor* pHost, const char* pPaneName, const char* pId, s32 index, u32 flags) {
             if (!petari_ui_observing()) {

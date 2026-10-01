@@ -164,7 +164,41 @@ Script: `build/camera/run3.sh` (stage smoke, 1200-frame delay, 1500-frame tail).
 - Handoffs to scripted cameras snap to the game's camera (the game's own blend
   starts from its own pose, not ours); acceptable for a first version.
 
-## Later (not in this change)
+## Photo mode
 
-A detached fly/photo camera (freeze the game, fly freely) was requested as a
-nice-to-have; it would reuse the same hook with the target unbound from Mario.
+A detached free camera over the frozen game (player docs: native/MODS.md
+"Photo mode"; setting `PhotoMode` in `camera.txt`, independent of the orbit).
+
+- **Freeze:** a native `GameScene` nerve, `PhotoMode`, entered from
+  `GameScene::update` only in `GameSceneAction` with `isPermitToPauseMenu()`
+  (no demo, talk, wipe or death). Like `exePauseMenu`, it runs no movement list.
+  So nothing moves: Mario, enemies, timers, the camera director, clipping. Audio
+  and rumble pause as for the pause menu (`AudSystem::enterPauseMenu`,
+  `onPauseBeginAllRumble`). `calcAnim`/`calcViewAndEntry` still run every frame, so
+  the scene is drawn from the new view. Leaving goes through
+  `setNerveAfterPauseMenu`, as the pause menu does.
+- **View:** `PhotoCamera` (src/Game/Camera/PhotoCamera.cpp) saves the camera
+  context's view matrix and fovy on entry. Each frame it sets its own with
+  `MR::setCameraViewMtx`/`MR::setFovy`. On leaving it puts the saved ones back
+  before any movement runs, so the game's next frame starts from its own view.
+  Yaw turns about the camera's up on entry (planets keep their horizon), and pitch
+  stops short of straight up or down.
+- **HUD:** `GameScene::draw` skips `draw2D` and `GameSystemObjHolder::drawStarPointer`
+  skips the Star Pointer while active. Screenshots therefore have no HUD and no
+  cursor.
+- **Input:** host side (wpad_host.cpp). From the `PhotoMode` press until the game
+  leaves, every input goes to the free camera and none to the game. Entering
+  releases what the game saw held (as on a focus loss). A press the game cannot
+  take is answered at once (`petari_photo_set_active(0)`). A press no scene
+  answers (file select, movies) lapses after 0.3 s and is not carried over.
+- **Screenshot:** `petari/screenshot.hpp` is a one-shot request. The presenter
+  reads the next XFB back (the same path as `PETARI_XFB_DUMP`) and writes a PNG at
+  the renderer's resolution: `[photo] screenshot saved: <path> (WxH)`.
+- **Known limit:** objects the game's clipping had hidden from its own camera stay
+  hidden. Running the clipping director would change actor state (some actors
+  reset when they come back into view), which leaving must not do.
+- **Check:** `PETARI_PHOTO_TEST=N` (app_main.cpp) enters after N gameplay frames,
+  flies, looks, zooms, takes two shots and leaves. `[photo] enter:` and
+  `[photo] exit:` log the scene frame count, Mario's position and velocity,
+  coins, Star Bits, a hash of the view matrix and fovy; they must match. Script:
+  `build/photo/run.sh`.

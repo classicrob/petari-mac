@@ -246,6 +246,7 @@ void Menu::refreshCameraLabels() {
     std::snprintf(mCameraLabels[1], sizeof(mCameraLabels[1]), "Speed: %d", mCamera.speed);
     std::snprintf(mCameraLabels[2], sizeof(mCameraLabels[2]), "Invert horizontal: %s", mCamera.invertX ? "On" : "Off");
     std::snprintf(mCameraLabels[3], sizeof(mCameraLabels[3]), "Invert vertical: %s", mCamera.invertY ? "On" : "Off");
+    std::snprintf(mCameraLabels[4], sizeof(mCameraLabels[4]), "Photo mode (P): %s", mCamera.photo ? "On" : "Off");
 }
 
 void Menu::changeCameraValue(int item, int delta) {
@@ -254,6 +255,7 @@ void Menu::changeCameraValue(int item, int delta) {
     case 1: mCamera.speed = (mCamera.speed - 1 + delta + 5) % 5 + 1; break;
     case 2: mCamera.invertX = !mCamera.invertX; break;
     case 3: mCamera.invertY = !mCamera.invertY; break;
+    case 4: mCamera.photo = !mCamera.photo; break;
     default: return;
     }
     mCameraChanged = true;
@@ -337,7 +339,8 @@ void Menu::refreshProgress() {
     }
     std::snprintf(mProgressLabels[0], sizeof(mProgressLabels[0]), "<  %s  >", galaxy.name);
     std::snprintf(mProgressLabels[1], sizeof(mProgressLabels[1]), mProgressResetArmed ? "Press A again to erase everything" : "Reset progress...");
-    std::snprintf(mProgressLabels[2], sizeof(mProgressLabels[2]), "Back");
+    std::snprintf(mProgressLabels[2], sizeof(mProgressLabels[2]), "Badges: %s", Progress::badgesEnabled() ? "On" : "Off");
+    std::snprintf(mProgressLabels[3], sizeof(mProgressLabels[3]), "Back");
     std::snprintf(mProgressMessage, sizeof(mProgressMessage), "%s: %d of %d cleared here, %d in all. Your save is not changed.",
                   App::LaunchStage::domeName(galaxy.dome), clearedHere, galaxy.missions, Progress::clearedCount());
 }
@@ -472,7 +475,7 @@ View Menu::view() const {
     } else if (mPhase == Phase::Progress) {
         view.title = "My Progress";
         view.message = mProgressMessage;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             view.items[i].label = mProgressLabels[i];
         }
         view.lineCount = mProgressLineCount;
@@ -505,11 +508,11 @@ View Menu::view() const {
         view.items[shown + (folderPages() > 1 ? 1 : 0)].label = "Back";
     } else if (mPhase == Phase::Camera) {
         view.title = "Odyssey camera";
-        view.message = "Right stick or middle-drag orbits; wheel or Z/X zooms; C recentres.";
-        for (int i = 0; i < 4; i++) {
+        view.message = "Right stick or middle-drag orbits; wheel or Z/X zooms; C recentres. P: photo mode.";
+        for (int i = 0; i < 5; i++) {
             view.items[i].label = mCameraLabels[i];
         }
-        view.items[4].label = "Back";
+        view.items[5].label = "Back";
     } else if (mPhase == Phase::Levels) {
         view.title = "Level Select";
         view.message = mLevelMessage;
@@ -533,7 +536,7 @@ View Menu::view() const {
     view.itemCount = itemCount();
     if (controls || progressPage) {
         view.panel = {-kControlsHalfWidth / ax, kControlsTop, kControlsHalfWidth / ax,
-                      itemRect(progressPage ? 2 : 0).y1 + kPanelBottomMargin};
+                      itemRect(progressPage ? 3 : 0).y1 + kPanelBottomMargin};
         view.titleY = kControlsTitleY;
         view.messageY = kControlsMessageY;
     } else {
@@ -561,10 +564,10 @@ int Menu::itemCount() const {
         return folderShown() + (folderPages() > 1 ? 1 : 0) + 1;
     }
     if (mPhase == Phase::Progress) {
-        return 3;
+        return 4;
     }
     if (mPhase == Phase::Camera) {
-        return 5;
+        return 6;
     }
     if (mPhase == Phase::Levels) {
         return 4;
@@ -579,9 +582,10 @@ Rect Menu::itemRect(int index) const {
                 kControlsBackTop + kControlsBackHeight};
     }
     if (mPhase == Phase::Progress) {
-        // The galaxy selector under the message, Reset and Back side by side at the bottom.
+        // The galaxy selector under the message; Reset, Badges and Back side by side at the bottom.
         if (index == 0) return {-0.5f / ax, -0.64f, 0.5f / ax, -0.50f};
-        return index == 1 ? Rect{-0.6f / ax, 0.52f, -0.04f / ax, 0.67f} : Rect{0.04f / ax, 0.52f, 0.6f / ax, 0.67f};
+        const float left = -0.78f + 0.54f * static_cast<float>(index - 1);
+        return {left / ax, 0.52f, (left + 0.5f) / ax, 0.67f};
     }
     // Six or more items (the Mods page) use a tighter column so they fit.
     const bool compact = itemCount() > 5;
@@ -700,6 +704,10 @@ void Menu::activate(int index) {
                 Progress::reset();
             }
             refreshProgress();
+        } else if (index == 2) {
+            play(Sound::Select);
+            Progress::setBadgesEnabled(!Progress::badgesEnabled());
+            refreshProgress();
         } else {
             play(Sound::Cancel);
             mProgressResetArmed = false;
@@ -728,7 +736,7 @@ void Menu::activate(int index) {
             mRepeatDir = 0;
         }
     } else if (mPhase == Phase::Camera) {
-        if (index >= 0 && index < 4) {
+        if (index >= 0 && index < 5) {
             changeCameraValue(index, 1);
         } else {
             play(Sound::Cancel);
@@ -792,11 +800,11 @@ void Menu::back() {
     } else if (mPhase == Phase::ModFolder) {
         activate(itemCount() - 1);
     } else if (mPhase == Phase::Progress) {
-        activate(2);
+        activate(3);
     } else if (mPhase == Phase::Levels) {
         activate(3);
     } else if (mPhase == Phase::Camera) {
-        activate(4);
+        activate(5);
     } else {
         play(Sound::ReturnApp);
         close();

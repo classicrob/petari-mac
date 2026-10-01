@@ -41,6 +41,26 @@ void zoomHold(int direction);         // -1/0/+1, + = farther
 void recenter();
 void resetInput();
 
+// Photo mode (camera.txt PhotoMode=on|off, default off; PETARI_PHOTO_MODE=1|0
+// overrides). Independent of the orbit camera.
+bool photoEnabled();
+void setPhotoEnabled(bool on);
+// True from a PhotoMode press until the game has answered it, and while the game
+// is in photo mode: the host then sends the game no input.
+bool photoCapturing();
+bool photoActive();
+void photoToggle();                       // PhotoMode pressed
+void photoLeave();                        // Plus/Escape pressed while active
+void photoShot();                         // PhotoShot pressed
+void photoMove(float right, float forward, float up);  // held keys, -1..1 each
+void photoStick(float x, float y);        // left stick, x right and y up
+void photoLook(float yawDegrees, float pitchDegrees);  // drag/scroll since the last frame
+void photoLookHold(float x, float y);     // held look keys and the right stick, -1..1
+void photoFov(float steps);               // + = wider
+void photoFovHold(int direction);
+void photoSpeed(bool fast, bool slow);
+void resetPhotoInput();
+
 void resetForTesting();
 
 }  // namespace PetariNative::CameraSettings

@@ -42,6 +42,9 @@ public:
     void exeTimeUp();
     void exeGalaxyMap();
     void exeStaffRoll();
+#ifdef PETARI_NATIVE
+    void exePhotoMode();  // native photo mode (Game/Camera/PhotoCamera.hpp)
+#endif
     void initSequences();
     void initEffect();
     void drawMirror() const;

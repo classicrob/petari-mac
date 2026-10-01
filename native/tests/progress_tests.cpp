@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 namespace fs = std::filesystem;
 namespace P = PetariNative::Progress;
@@ -189,6 +190,45 @@ int main() {
     }
     check(!fs::exists(fs::path(file.string() + ".tmp")) && fs::exists(file), "atomic save leaves no temporary file");
     (void)entries;
+
+    // Badges: positions published by the game during the last two frames, joined with this record.
+    P::resetForTesting();
+    P::setClockForTesting(fakeClock);
+    check(P::load(file, &error), "load for the badge checks");
+    {
+        auto s1 = play("EggStarGalaxy", 1, 1);
+        run(s1, 30);
+        P::starGet(1, false);
+        std::vector<P::BadgeStar> stars;
+        P::frame(P::FrameState{});  // the mission select: not in a Game scene
+        P::publishBadge("EggStarGalaxy", 1, 0.25f, 0.5f);
+        P::publishBadge("EggStarGalaxy", 2, 0.75f, 0.5f);
+        P::publishBadge("EggStarGalaxy", 2, 0.80f, 0.55f);  // the same star again: updated, not duplicated
+        check(P::currentBadges(&stars) && stars.size() == 2, "two stars published this frame");
+        P::Mission recorded;
+        check(P::find("EggStarGalaxy", 1, &recorded), "the record exists");
+        check(stars[0].mission == 1 && stars[0].cleared && stars[0].bestTimeS == recorded.bestTimeS && stars[0].clears == recorded.clears &&
+                  stars[0].u == 0.25f,
+              "a cleared star carries its record");
+        check(stars[1].mission == 2 && !stars[1].cleared && stars[1].u == 0.80f, "an uncleared star is listed without one");
+        P::frame(P::FrameState{});
+        check(P::currentBadges(&stars), "still fresh one frame later");
+        P::frame(P::FrameState{});
+        P::frame(P::FrameState{});
+        check(!P::currentBadges(&stars), "gone once the mission select stops publishing");
+        P::publishBadge("HoneyBeeKingdomGalaxy", 1, 0.1f, 0.1f);
+        check(P::currentBadges(&stars) && stars.size() == 1 && !stars[0].cleared, "another galaxy's frame replaces the old list");
+        // The setting: on by default, persisted beside the record, kept by Reset.
+        check(P::badgesEnabled(), "badges default on");
+        P::setBadgesEnabled(false);
+        check(!P::badgesEnabled() && !P::currentBadges(&stars), "off hides the badges");
+        check(read(dir / "progress_settings.txt") == "badges=off\n", "the setting is saved in progress_settings.txt");
+        P::resetForTesting();
+        check(P::load(file, &error) && !P::badgesEnabled(), "the setting is read back");
+        P::reset();
+        check(!P::badgesEnabled() && fs::exists(dir / "progress_settings.txt"), "Reset wipes the record, not the setting");
+        P::setBadgesEnabled(true);
+    }
 
     fs::remove_all(dir);
     P::resetForTesting();

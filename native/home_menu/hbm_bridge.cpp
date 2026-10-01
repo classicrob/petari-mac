@@ -166,6 +166,7 @@ void refreshCamera() {
     options.speed = CameraSettings::speed();
     options.invertX = CameraSettings::invertX();
     options.invertY = CameraSettings::invertY();
+    options.photo = CameraSettings::photoEnabled();
     instance().setCamera(options);
 }
 
@@ -179,6 +180,7 @@ void applyCameraChange() {
     CameraSettings::setSpeed(options.speed);
     CameraSettings::setInvertX(options.invertX);
     CameraSettings::setInvertY(options.invertY);
+    CameraSettings::setPhotoEnabled(options.photo);
     std::string error;
     if (!CameraSettings::save(&error)) {
         std::fprintf(stderr, "petari: camera: %s\n", error.c_str());

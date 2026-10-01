@@ -134,6 +134,7 @@ struct CameraOptions {
     int speed = 3;  // 1..5
     bool invertX = false;
     bool invertY = false;
+    bool photo = false;  // photo mode (P), independent of the orbit camera
 };
 
 // One toggle of the Mods page: what the mod does, and whether it is on.
@@ -272,7 +273,7 @@ private:
     std::uint64_t mFolderToggles = 0;
     int mProgressGalaxy = 0;  // index into LaunchStage::galaxies
     bool mProgressResetArmed = false;
-    char mProgressLabels[3][96] = {};
+    char mProgressLabels[4][96] = {};
     char mProgressMessage[160] = {};
     ControlsEntry mProgressLines[8];
     int mProgressLineCount = 0;
@@ -290,7 +291,7 @@ private:
     void refreshLevelLabels();
     CameraOptions mCamera;
     bool mCameraChanged = false;
-    char mCameraLabels[4][48] = {};
+    char mCameraLabels[5][48] = {};
     void refreshCameraLabels();
     void changeCameraValue(int item, int delta);
     void changeLevelValue(int item, int delta);

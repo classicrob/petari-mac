@@ -43,6 +43,7 @@
 #ifdef PETARI_NATIVE
 // native/platform/include/petari/platform/os_host.hpp
 extern "C" void petari_os_preemption_point(void);
+#include "Game/Camera/PhotoCamera.hpp"
 #include "Game/System/GalaxyMoveArgument.hpp"
 #include "Game/System/GameSequenceFunction.hpp"
 #include <petari/player_launch.hpp>
@@ -70,6 +71,9 @@ namespace NrvGameScene {
     NEW_NERVE(GameSceneTimeUp, GameScene, TimeUp);
     NEW_NERVE(GameSceneGalaxyMap, GameScene, GalaxyMap);
     NEW_NERVE(GameSceneStaffRoll, GameScene, StaffRoll);
+#ifdef PETARI_NATIVE
+    NEW_NERVE(GameScenePhotoMode, GameScene, PhotoMode);
+#endif
 };  // namespace NrvGameScene
 
 GameScene::GameScene()
@@ -175,6 +179,13 @@ void GameScene::start() {
 }
 
 void GameScene::update() {
+#ifdef PETARI_NATIVE
+    // Photo mode: entered only where the pause menu could open (normal play).
+    if (!PhotoCamera::isActive() && PhotoCamera::takeEnterRequest(isPermitToPauseMenu() && isNerve(GET_NERVE(GameScene, GameSceneAction)))) {
+        PhotoCamera::start();
+        setNerve(GET_NERVE(GameScene, GameScenePhotoMode));
+    }
+#endif
     mPauseCtrl->updateNerve();
     updateNerve();
 
@@ -206,7 +217,10 @@ void GameScene::draw() const {
     CategoryList::execute(MR::DrawType_MiiFaceNew);
     drawMirror();
     draw3D();
-    draw2D();
+#ifdef PETARI_NATIVE
+    if (!PhotoCamera::isActive())  // photo mode: no HUD
+#endif
+        draw2D();
     MR::reinitGX();
 }
 
@@ -611,7 +625,20 @@ void GameScene::exePauseMenu() {
 void GameScene::exeSceneAction() {
     SceneFunction::movementStopSceneController();
     SceneFunction::executeMovementList();
+#ifdef PETARI_NATIVE
+    PhotoCamera::noteSceneFrame();
+#endif
 }
+
+#ifdef PETARI_NATIVE
+// Photo mode: like the pause menu, nothing moves; the free camera sets the view.
+void GameScene::exePhotoMode() {
+    if (PhotoCamera::update()) {
+        PhotoCamera::end();
+        setNerveAfterPauseMenu();
+    }
+}
+#endif
 
 void GameScene::exeScenarioStarter() {
     SceneFunction::movementStopSceneController();

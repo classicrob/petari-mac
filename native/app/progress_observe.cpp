@@ -77,3 +77,7 @@ extern "C" void petari_progress_star_get(int mission, int grand) {
     PetariNative::HostAllocationScope host;
     PetariNative::Progress::starGet(mission, grand != 0);
 }
+
+extern "C" void petari_progress_badge(const char* stage, int mission, float u, float v) {
+    PetariNative::Progress::publishBadge(stage, mission, u, v);
+}

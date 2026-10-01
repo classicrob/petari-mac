@@ -103,6 +103,9 @@ enum class Action : std::uint8_t {
     CameraOrbitRight,
     CameraPitchUp,
     CameraPitchDown,
+    // Photo mode (docs/dev/ODYSSEY_CAMERA.md "Photo mode"), only while it is on:
+    PhotoMode,  // freeze the game and fly the camera; again to return
+    PhotoShot,  // in photo mode: save a screenshot
     Count
 };
 

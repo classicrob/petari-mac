@@ -1110,9 +1110,9 @@ void testProgressPage() {
     menu.update(press(A));
     check(menu.phase() == HM::Phase::Progress && menu.focus() == 0 && played(HM::Sound::Select), "My Progress opens from the list");
     HM::View view = menu.view();
-    check(std::strcmp(view.title, "My Progress") == 0 && view.itemCount == 3 && std::strcmp(view.items[1].label, "Reset progress...") == 0 &&
-              std::strcmp(view.items[2].label, "Back") == 0,
-          "title, selector, Reset and Back");
+    check(std::strcmp(view.title, "My Progress") == 0 && view.itemCount == 4 && std::strcmp(view.items[1].label, "Reset progress...") == 0 &&
+              std::strcmp(view.items[2].label, "Badges: On") == 0 && std::strcmp(view.items[3].label, "Back") == 0,
+          "title, selector, Reset, Badges and Back");
     check(std::strstr(view.items[0].label, "Bowser Jr.'s Robot Reactor") != nullptr && view.lineCount == 2 &&
               std::strstr(view.lines[1].inputs, "Not cleared yet") != nullptr,
           "starts on the first galaxy, a one-mission galaxy has one row under the header");
@@ -1146,6 +1146,13 @@ void testProgressPage() {
     menu.update(press(A));
     menu.update(press(A));
     check(PR::clearedCount() == 0 && std::strcmp(menu.view().items[1].label, "Reset progress...") == 0, "second press erases the record");
+
+    // The badge setting toggles and persists in the settings file; the record is untouched.
+    menu.update(press(Down));
+    menu.update(press(A));
+    check(!PR::badgesEnabled() && std::strcmp(menu.view().items[2].label, "Badges: Off") == 0, "A on Badges turns the badges off");
+    menu.update(press(A));
+    check(PR::badgesEnabled() && std::strcmp(menu.view().items[2].label, "Badges: On") == 0, "and on again");
 
     // Back and Escape return to the list on My Progress.
     menu.update(press(Down));
@@ -1257,11 +1264,13 @@ void testCameraPage() {
     menu.update(press(A));
     check(menu.phase() == HM::Phase::Camera && menu.focus() == 0, "camera options open");
     HM::View view = menu.view();
-    check(std::strcmp(view.title, "Odyssey camera") == 0 && view.itemCount == 5 &&
+    check(std::strcmp(view.title, "Odyssey camera") == 0 && view.itemCount == 6 &&
               std::strcmp(view.items[0].label, "Odyssey camera: Off") == 0 && std::strcmp(view.items[1].label, "Speed: 4") == 0 &&
               std::strcmp(view.items[2].label, "Invert horizontal: Off") == 0 &&
-              std::strcmp(view.items[3].label, "Invert vertical: Off") == 0 && std::strcmp(view.items[4].label, "Back") == 0,
+              std::strcmp(view.items[3].label, "Invert vertical: Off") == 0 &&
+              std::strcmp(view.items[4].label, "Photo mode (P): Off") == 0 && std::strcmp(view.items[5].label, "Back") == 0,
           "camera page shows its options");
+    check(view.items[5].rect.y1 < view.panel.y1 && view.items[4].rect.y1 <= view.items[5].rect.y0, "six camera items fit");
     HM::CameraOptions changed;
     check(!menu.takeCameraChange(&changed), "no change yet");
     menu.update(press(A));
@@ -1277,6 +1286,11 @@ void testCameraPage() {
     menu.update(press(Down));
     menu.update(press(A));
     check(menu.takeCameraChange(&changed) && changed.invertX && changed.invertY && changed.speed == 5, "inverts toggle");
+    menu.update(press(Down));
+    menu.update(press(A));
+    check(menu.takeCameraChange(&changed) && changed.photo && changed.on &&
+              std::strcmp(menu.view().items[4].label, "Photo mode (P): On") == 0,
+          "photo mode toggles on its own");
     menu.update(press(Plus | B));
     check(menu.phase() == HM::Phase::Mods && menu.focus() == 3, "Escape returns to the camera entry");
 }

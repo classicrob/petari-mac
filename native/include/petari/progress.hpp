@@ -76,6 +76,25 @@ void resetForTesting();
 double currentRunTimeS();
 int currentRunDeaths();
 
+// --- badges on the mission-select screen (native/PROGRESS.md) ---
+// The game publishes where each shown mission star is (normalized game-image coordinates, origin top-left)
+// every frame the mission select is up; the overlay (home_menu imgui_overlay.cpp) draws a marker and the best
+// time by each mission you cleared yourself.
+struct BadgeStar {
+    int mission = 0;
+    float u = 0, v = 0;
+    bool cleared = false;
+    double bestTimeS = 0;
+    int clears = 0;
+};
+void publishBadge(const char* stage, int mission, float u, float v);  // game thread
+// The stars published in the last couple of frames, with this record's data; false when none (the mission select
+// is not up) or badges are switched off.
+bool currentBadges(std::vector<BadgeStar>* out, std::string* stage = nullptr);
+bool badgesEnabled();
+// Persisted in progress_settings.txt beside progress.json (not part of the record: Reset keeps it).
+void setBadgesEnabled(bool on);
+
 constexpr double kFramesPerSecond = 60.0;
 
 }  // namespace PetariNative::Progress

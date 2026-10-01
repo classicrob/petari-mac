@@ -52,6 +52,34 @@ All of these are remappable in `controls.txt` (`CameraOrbitHold`,
 `CameraZoomIn`, `CameraZoomOut`). `ScrollMode=orbit` or `zoom` in `camera.txt`
 makes every scroll orbit or zoom. Design and value sources: docs/dev/ODYSSEY_CAMERA.md.
 
+### Photo mode
+
+Freeze the game and fly a free camera to frame a picture. Turn it on in F1 → Mods
+→ Odyssey camera... → **Photo mode** (`PhotoMode=on` in `camera.txt`,
+`PETARI_PHOTO_MODE=1` for one run). It does not need the orbit camera. Then press
+**P** (gamepad: click the right stick) during normal play, wherever the pause menu
+could open. The game stops as it does in the pause menu, the HUD is hidden, and
+the camera starts where the game's camera was.
+
+| Input (photo mode) | Action |
+| --- | --- |
+| W A S D, left stick | fly forward, left, back, right |
+| Space / Shift | fly up / down |
+| Hold any mouse button and move the mouse, trackpad scroll, right stick, J / L / I / K, Q / E, arrows | look around |
+| Mouse wheel, pinch, Z / X | narrower / wider view (10 to 120 degrees) |
+| Hold Tab / Alt | 5x faster / 5x slower |
+| O or Return | save a screenshot |
+| P or Escape | back to the game, exactly where it was |
+
+Screenshots are the game's full rendered frame without the HUD, saved as PNG in
+`~/Pictures/Petari/` (`PETARI_PHOTO_DIR=<folder>` puts them elsewhere). While
+photo mode is on, the game receives no input. Keys held when you entered are let
+go. Mario, enemies, timers and the camera are exactly as they were when you
+leave. Objects the game had hidden because they were out of its camera's view
+stay hidden while you fly. `PhotoMode` and `PhotoShot` are remappable in
+`controls.txt`. The other photo controls follow the bindings they share with play
+(the stick keys, A, NunchukZ, the camera keys, TiltHold, Walk, Start, Plus).
+
 ## How they follow the game's rules
 
 Both mods act only where the game itself would let the pointer collect or

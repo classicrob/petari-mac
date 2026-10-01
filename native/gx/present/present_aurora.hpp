@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 // Aurora side of XFB presentation, used by the patched aurora_end_frame
 // (patch_aurora_present.py). Included with Aurora's lib/ on the quote path.
 
@@ -25,6 +26,13 @@ Frame take() noexcept;
 // Render worker: the bind group drawing the XFB with Aurora's copy pipeline.
 // False if nothing is drawn (black).
 bool bind_image(const Frame& frame, wgpu::BindGroup& out) noexcept;
+
+// Opt-in PETARI_SURFACE_DUMP=<dir> (present_aurora.cpp): copies the final window image (the presented
+// frame plus the Dear ImGui overlay: Home menu, badges) to a PNG. Render worker only. prepare() makes the
+// surface a copy source once; encode() returns the work to run after the frame was submitted, or an empty
+// function when this frame is not dumped.
+void surface_dump_prepare() noexcept;
+std::function<void()> surface_dump_encode(const wgpu::CommandEncoder& encoder, const wgpu::Texture& texture) noexcept;
 
 // Render worker: darkens the image drawn in the pass.
 void draw_dim(const wgpu::RenderPassEncoder& pass, const Frame& frame) noexcept;

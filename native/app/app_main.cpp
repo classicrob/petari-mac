@@ -299,6 +299,46 @@ App::FrameStats::Phase framePhaseForPipelines() {
     } else if (cameraTest) {
         PetariNative::CameraSettings::stick(0.0f, 0.0f);
     }
+    // Photo mode test driver (PETARI_PHOTO_TEST=N, with PETARI_PHOTO_MODE=1): after N
+    // gameplay frames, press PhotoMode (retried until the game takes it), fly forward
+    // and up, look round, narrow the view, take two screenshots, and leave.
+    static const long photoTest = std::getenv("PETARI_PHOTO_TEST") ? std::atol(std::getenv("PETARI_PHOTO_TEST")) : -1;
+    static long photoFrames = 0, photoStep = -1;
+    // (Once in photo mode the frame no longer counts as gameplay: keep driving it.)
+    if (photoTest >= 0 && (gameplay || PetariNative::CameraSettings::photoActive()) && PetariNative::CameraSettings::photoEnabled() &&
+        photoStep < 400) {
+        namespace Camera = PetariNative::CameraSettings;
+        if (++photoFrames > photoTest) {
+            if (photoStep < 0) {
+                if ((photoFrames - photoTest) % 30 == 1 && !Camera::photoActive()) {
+                    std::fputs("[photo-test] PhotoMode press\n", stderr);
+                    Camera::photoToggle();
+                }
+                if (Camera::photoActive()) {
+                    photoStep = 0;
+                    PetariNative::EfbDump::mark("photo");
+                }
+            } else {
+                const long t = ++photoStep;
+                Camera::photoMove(0.0f, t < 90 ? 1.0f : 0.0f, t < 60 ? 0.5f : 0.0f);
+                Camera::photoLookHold(t >= 100 && t < 172 ? 1.0f : 0.0f, t >= 100 && t < 120 ? -0.5f : 0.0f);
+                if (t == 180) Camera::photoFov(-4.0f);
+                if (t == 200 || t == 300) {
+                    std::fputs("[photo-test] PhotoShot press\n", stderr);
+                    Camera::photoShot();
+                }
+                if (t == 220) Camera::photoSpeed(true, false);
+                if (t >= 220 && t < 260) Camera::photoMove(-1.0f, 0.0f, 0.0f);
+                if (t == 260) Camera::photoSpeed(false, false);
+                if (t == 360) {
+                    std::fputs("[photo-test] PhotoMode press (leave)\n", stderr);
+                    Camera::photoMove(0.0f, 0.0f, 0.0f);
+                    Camera::photoToggle();
+                    photoStep = 400;
+                }
+            }
+        }
+    }
     static long gameplayFrames = 0;
     if (period > 1 && gameplay) {
         ++gameplayFrames;
