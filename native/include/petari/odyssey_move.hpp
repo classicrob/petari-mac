@@ -73,6 +73,7 @@ constexpr float WallJumpPower = 23.0f;
 constexpr float WallJumpGravity = 0.95f;
 constexpr int WallJumpInvalidateInputFrame = 25;
 constexpr float GravityWallSlide = 0.5f;
+constexpr int WallKeepFrame = 3;
 constexpr float SquatAccelRate = 1.2f;
 constexpr float SquatBrakeRate = 0.95f;
 constexpr float SquatBrakeEndSpeed = 3.5f;
@@ -212,10 +213,9 @@ inline float stepAir(AirState& s, bool jumpHeld, float stickFront, float stickSi
         rise = s.up;
     } else {
         s.extending = false;
-        s.up -= g;
+        s.up = std::max(s.up - g, -Const::FallSpeedMax);
         rise = s.up;
     }
-    s.up = std::max(s.up, -Const::FallSpeedMax);
 
     if (s.inputLockout > 0) {
         --s.inputLockout;
@@ -318,6 +318,15 @@ inline void stepRoll(RollState& r, bool boostPressed, float bump = 23.0f) {
     if (r.speed < Const::SlopeRollingSpeedEnd) r.rolling = false;
 }
 
+// Wall slide: held still for WallKeepFrame frames after touching the wall,
+// then falling with GravityWallSlide up to FallSpeedMax (the slide state
+// itself is not decompiled; these are its PlayerConst values). `down` is the
+// downward speed, `frame` counts from 1 on the first frame on the wall.
+inline float stepWallSlide(float down, int frame) {
+    if (frame <= Const::WallKeepFrame) return 0.0f;
+    return std::min(down + Const::GravityWallSlide, Const::FallSpeedMax);
+}
+
 // The game hooks' shared state (one player): MarioActor.cpp sets the Spin
 // requests, MarioWalk.cpp runs the roll, MarioJump.cpp turns a jump while
 // rolling into a long jump.
@@ -325,6 +334,7 @@ namespace Live {
 inline RollState roll;
 inline bool rollStart = false;  // Spin while crouching on the ground
 inline bool rollBoost = false;  // Spin while rolling
+inline bool noSpinAir = false;  // in the mod's dive or long jump: Spin does nothing (SMO), no spin cooldown
 }  // namespace Live
 
 }  // namespace PetariNative::Odyssey

@@ -3,6 +3,7 @@
 // community measured (docs/dev/ODYSSEY_MOVEMENT.md, section 6).
 #include "petari/odyssey_move.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -111,8 +112,9 @@ static void testAirControl() {
     check(near(wall.front, 7.6f), "then air control returns");
 
     AirState fall = startAir(Air::Fall, 0.0f);
-    for (int i = 0; i < 200; ++i) stepAir(fall, false, 0.0f, 0.0f);
-    check(near(fall.up, -35.0f), "falling is capped at 35");
+    float fastest = 0.0f;
+    for (int i = 0; i < 200; ++i) fastest = std::min(fastest, stepAir(fall, false, 0.0f, 0.0f));
+    check(near(fall.up, -35.0f) && near(fastest, -35.0f), "falling is capped at 35, also per frame");
 }
 
 static void testGround() {
@@ -152,6 +154,16 @@ static void testGroundPoundAndRoll() {
     check(!slow.rolling && frames > 50, "an unboosted roll decays below 17 and ends");
 }
 
+static void testWallSlide() {
+    float down = 0.0f;
+    for (int f = 1; f <= 3; ++f) down = stepWallSlide(down, f);
+    check(near(down, 0.0f), "wall slide: held 3 frames");
+    down = stepWallSlide(down, 4);
+    check(near(down, 0.5f), "then falls with gravity 0.5");
+    for (int f = 5; f < 200; ++f) down = stepWallSlide(down, f);
+    check(near(down, 35.0f), "capped at 35");
+}
+
 int main() {
     testJumpPower();
     testJumpArcs();
@@ -159,5 +171,6 @@ int main() {
     testAirControl();
     testGround();
     testGroundPoundAndRoll();
+    testWallSlide();
     std::printf("%d Odyssey movement model checks passed\n", checks);
 }

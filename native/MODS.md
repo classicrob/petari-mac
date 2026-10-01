@@ -7,7 +7,7 @@ unmodified game and every test run behave exactly as before.
 | --- | --- | --- |
 | Collect visible Star Bits (`CollectStarBits`) | G, controller L3 (left stick click) | Every Star Bit on screen flies to Mario, as if the pointer had touched each one |
 | Fire a Star Bit at the nearest enemy (`ShootEnemy`) | V (no controller default) | Shoots one Star Bit at the nearest enemy on screen |
-| Odyssey movement (`OdysseyMovement`) | none (a mode; it uses the normal Jump, Crouch and Spin buttons) | Mario moves with Super Mario Odyssey's physics (normal Mario on foot; swimming and the special suits stay Galaxy's). Run: SMO's speed and acceleration. Jumps: single, double and triple (SMO's chain rules and held-jump arc); long jump (run, Crouch, Jump); backflip (Crouch, Jump); sideflip (run, flick the stick back, Jump); ground-pound jump (Jump 5–30 frames after a ground pound lands); dive (Spin during a ground pound); roll (Crouch, then Spin on the ground; Spin again to boost, Jump for a long jump); wall jump (SMO's arc). Measured in the game, the heights and speeds match SMO's numbers exactly (for example jump 258 / 105, triple 550, backflip and sideflip 496, run 14 u/f); the wall jump is model-tested only. Not included: Cappy, the ground-pound roll and SMO's wall slide. Keyboard: Space jump, Shift crouch, F spin (controller: bottom button, LT, left button/RB). See docs/dev/ODYSSEY_MOVEMENT.md. Switching it mid-air takes effect from the next jump. |
+| Odyssey movement (`OdysseyMovement`) | none (a mode; it uses the normal Jump, Crouch and Spin buttons) | Mario moves with Super Mario Odyssey's physics and moveset: see "Odyssey movement" below. |
 
 ## Turning mods on
 
@@ -28,6 +28,51 @@ The buttons are remappable in `controls.txt` like any other action:
 `ModCollectStarBits=Key:G,Pad:LeftStick` and `ModShootEnemy=Key:V`
 (see native/CONTROLS.md for input names). A button press while its mod is
 off does nothing and is not remembered.
+
+## Odyssey movement
+
+Mario on foot moves with Super Mario Odyssey's physics: SMO's run speed and
+acceleration, jump heights, air control, gravity and moveset. Turn it on in
+F1 → Mods (`OdysseyMovement=on` in `mods.txt`, or `PETARI_MODS=OdysseyMovement`
+for one run). Switching it mid-air takes effect from the next jump. Swimming,
+the power-up suits (Bee, Boo, Spring, Fire, Ice, Flying) and riding things stay
+Galaxy's.
+
+| Move | Keyboard | Controller | Numbers (measured in the game unless marked) |
+| --- | --- | --- | --- |
+| Run | WASD | left stick | 14 u/f top speed after 40 frames (SMO 14) |
+| Single, double, triple jump (hold for height; the next jump within 10 frames of landing, at full speed, within 45° chains) | Space | bottom button | 258 / 346.5 / 550 high when held (SMO the same) |
+| Long jump | run, Shift, then Space | run, LT, then bottom button | 144 high |
+| Backflip | standing, Shift, then Space | standing, LT, then bottom button | 496 high |
+| Sideflip | run, flick the stick back, Space | run, flick the stick back, bottom button | 496 high |
+| Ground pound | Shift in the air | LT in the air | falls at up to 45 u/f (model) |
+| Ground-pound jump | Space 5–30 frames after a ground pound lands | bottom button, same timing | 513.5 high |
+| Dive | F during a ground pound | left button / RB during a ground pound | 182 up, 20 u/f forward |
+| Roll | Shift, then F, on the ground | LT, then left button / RB | 20 u/f, slowing 0.2% a frame; ends below 17 (model) |
+| Roll boost | F while rolling (15 frames apart) | left button / RB while rolling | back up to 23 u/f |
+| Long jump out of a roll | Space while rolling | bottom button while rolling | as the long jump |
+| Wall slide | jump into a wall and hold the stick toward it | same | held 3 frames, then slides down faster (0.5 u/f² up to 35) |
+| Wall jump | Space while on a wall | bottom button while on a wall | 267 high, 8.6 u/f away from the wall |
+
+The measured numbers were measured with the movement harness (`PETARI_SMOKE=movement`)
+and matches SMO's numbers exactly; details in docs/dev/ODYSSEY_MOVEMENT.md.
+`native/tools/movement_baseline.py` checks them (and, with the mod off, Galaxy's
+own numbers).
+
+Known gaps in this version:
+
+- No Cappy: no cap throw, cap jump, capture or cap bounce. F (Spin) keeps
+  Galaxy's Star Spin except for the dive and the roll.
+- Galaxy has no animations for some SMO moves. The dive uses Galaxy's high dive
+  into water (Mario rises upright and turns head-first on the way down); the roll
+  repeats the forward roll of a failed dive's landing, with run strides between.
+- No ground-pound roll (SMO: Y on a ground-pound landing) and no roll speed-up
+  on downhill slopes.
+- Slopes and slides keep Galaxy's behaviour; Galaxy's own wall-jump surfaces
+  decide where Mario can wall-slide (walls Galaxy does not let him cling to stay
+  that way).
+- Spin repeats about four times a second at most (the keyboard F emulates a
+  Wii Remote shake), so the fastest roll boosts are slower than SMO's.
 
 ## Odyssey camera
 

@@ -1575,6 +1575,8 @@ void Mario::procJump(bool a1) {
         moveWallSlide(1.0f);
     } else if ((mMovementStates._1) == 0) {
 #ifdef PETARI_NATIVE
+        PetariNative::Odyssey::Live::noSpinAir =
+            sOdyssey.active && (sOdyssey.air.kind == PetariNative::Odyssey::Air::Dive || sOdyssey.air.kind == PetariNative::Odyssey::Air::LongJump);
         if (sOdyssey.active && _430 != sOdyssey.jumpKind) {
             sOdyssey.active = false;  // the game turned the jump into something else (hip drop, ...)
             std::fprintf(stderr, "[odyssey] jump type %d became %d after %d frames: the game's own physics from here\n",
@@ -1650,6 +1652,7 @@ void Mario::procJump(bool a1) {
     if ((mMovementStates._1) != 0 && !a1) {
 #ifdef PETARI_NATIVE
         sOdyssey.active = false;
+        PetariNative::Odyssey::Live::noSpinAir = false;
 #endif
         doLanding();
 
@@ -1903,19 +1906,19 @@ bool Mario::jumpToHipDrop() {
 void Mario::procHipDrop() {
     f32 gravityHipDrop;
 #ifdef PETARI_NATIVE
-    if (odysseyOn() && !mMovementStates._1 && mActor->isRequestSpin()) {
+    if (odysseyOn() && getPlayerMode() == 0 && !mMovementStates._1 && mActor->isRequestSpin()) {
         // SMO's dive: Spin during a ground pound in the air (wind-up or fall) dives
         // forward along the facing: 20 forward, 28 up, gravity 2.0. Galaxy has no
-        // dive, so it uses the long-jump pose (_430 5, which also keeps a new
-        // ground pound from starting, as in SMO) and lands into its slide.
+        // dive; it uses _430 5 (the long jump's type, which also keeps a new ground
+        // pound from starting, as in SMO) with Galaxy's head-first high dive into
+        // water, whose landing is a belly flop.
         mMovementStates._B = false;
         _424 = 0;
         _430 = 5;
         stopAnimation(nullptr);
-        changeAnimationNonStop("幅とび");
-        changeAnimation(nullptr, "落下");
-        playSound("幅ジャンプ");
-        playSound("声幅ジャンプ");
+        changeAnimation("飛び込みジャンプ", "落下");
+        playSound("声高飛び込み");
+        playSound("ジャンプ踏切");
         TVec3f up(-mActor->_240);
         MR::normalizeOrZero(&up);
         odysseyStart(PetariNative::Odyssey::Air::Dive, getAirFrontVec(), up, 0.0f, _430);

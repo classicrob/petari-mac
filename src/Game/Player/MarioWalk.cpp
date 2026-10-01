@@ -605,6 +605,13 @@ void Mario::updateWalkSpeed() {
             Odyssey::Live::rollBoost = false;
             mMovementStates._A = false;
             mWalkSpeed = Odyssey::Live::roll.speed / unit;
+            // Galaxy has no rolling loop: restart the dive landing's forward roll
+            // (about 16 frames long) for as long as the roll lasts; otherwise Mario
+            // glides standing between boosts.
+            if (Odyssey::Live::roll.sinceBoost % 16 == 0) {
+                stopAnimation("飛び込み失敗回転着地");
+                changeAnimation("飛び込み失敗回転着地");
+            }
             return;
         }
         Odyssey::Live::rollBoost = false;

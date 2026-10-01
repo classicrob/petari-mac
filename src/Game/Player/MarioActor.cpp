@@ -1371,10 +1371,17 @@ void MarioActor::updateSwingAction() {
     switch (action) {
     case 1: {
 #ifdef PETARI_NATIVE
-        // OdysseyMovement: on the ground, Spin while crouching starts SMO's roll
-        // and Spin while rolling boosts it (Mario::updateWalkSpeed runs it).
+        // OdysseyMovement: on the ground, Spin while crouching (or holding the crouch
+        // button on the frame the crouch starts) starts SMO's roll and Spin while
+        // rolling boosts it (Mario::updateWalkSpeed runs it). In a ground pound,
+        // Spin is the dive (Mario::procHipDrop): no spin and no spin cooldown, so a
+        // roll can follow the dive's landing at once, as in SMO.
+        if (petari_mod_enabled(2) && mPlayerMode == 0 && isJumping() &&
+            (mMario->mMovementStates._B || PetariNative::Odyssey::Live::noSpinAir)) {
+            break;
+        }
         if (petari_mod_enabled(2) && mPlayerMode == 0 && !isJumping() && mMario->mMovementStates._1 &&
-            (mMario->mMovementStates._A || PetariNative::Odyssey::Live::roll.rolling)) {
+            (mMario->mMovementStates._A || mMario->checkSquat(false) || PetariNative::Odyssey::Live::roll.rolling)) {
             if (PetariNative::Odyssey::Live::roll.rolling) {
                 PetariNative::Odyssey::Live::rollBoost = true;
             } else {

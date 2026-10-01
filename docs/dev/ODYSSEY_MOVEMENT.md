@@ -53,9 +53,11 @@ Measured in the game (`PETARI_SMOKE=movement` on the observatory's flat start,
 | Ground-pound jump | 260.0 (a normal jump) | 513.500 | 513.5 (measured 513) |
 | Long jump | 240.4 | 144.000 | 144 |
 | Dive (from a ground pound) | none | 182.000 | 182 |
-| Backflip | 203.5 | 496.000 | 496 |
+| Backflip | 585.0 | 496.000 | 496 |
 | Sideflip | 284 (Galaxy's turn jump) | 496.000 | 496 |
-| Roll (crouch + Spin), boost at frame 20 | none | 20 → ×0.998, boost 22.95 | 20, ×0.998, boost 23 |
+| Roll (crouch + Spin), boost at frame 30 | none | 20 → ×0.998, boost 22.95 | 20, ×0.998, boost 23 |
+| Wall slide (fall per frame after touching) | Galaxy's wall stick | 0 while held, then 0.5, 1.0, ... (+0.5 a frame) | held 3 frames, gravity 0.5 |
+| Wall jump (from the slide) | Galaxy's (13 away, 30 up) | 267.000, 8.6 away | 267 |
 
 The long jump and dive values are from the per-frame trace
 (`PETARI_ODYSSEY_TRACE=1`: take-off at y 392.21, peak 536.21; dive start
@@ -63,7 +65,10 @@ The long jump and dive values are from the per-frame trace
 (the press frame can be mid crouch-slide), and the dive ran into higher ground
 after its peak on the observatory terrace. The roll is measured alone
 (`PETARI_MOVEMENT_ONLY=roll`) from the start point; at the end of the full
-sequence Mario faces a wall.
+sequence Mario faces a wall. The wall slide and wall jump are measured alone
+(`PETARI_MOVEMENT_ONLY=wall`) against an `InvisibleWallJump10x20` added to the
+observatory with `native/tools/stage_edit.py` (at 2800, 1700, -3100, `dir_x=-90`:
+the object's collision is a flat 1000 × 1990 plane that must be turned upright).
 
 On Good Egg (EggStarGalaxy, planet gravity) with the mod on, the stage smoke
 passes and the same harness measured the standstill jumps 258.000 / 105.000,
@@ -230,12 +235,18 @@ playability run, before the next step.
 - Slope walking in SMO is not well measured; the mod keeps Galaxy's slope
   behaviour except for the speed cap.
 - Animations are Galaxy's; some SMO moves (dive, roll) reuse the nearest Galaxy
-  animation. Between boosts the roll shows Galaxy's run animation.
+  animation, checked with XFB dumps (`PETARI_XFB_DUMP`; the harness marks each
+  move's name as the dump label): the dive uses Galaxy's high dive into water
+  (upright while rising, head-first on the way down, belly landing); the roll
+  restarts the failed-dive landing's forward roll every 16 frames, with run
+  strides between; the long jump, backflip, sideflip, ground-pound jump, wall
+  slide and wall jump use Galaxy's matching poses. No T-poses or wrong facing.
 - No ground-pound roll (SMO: Y on a ground-pound landing, 30 u/f) and no roll
   speed gain on downhill slopes; the roll ends on a turn slide (stick reversed
   after release) like Galaxy's run.
-- No SMO wall slide (gravity 0.5): Galaxy's own wall slide stays. The wall jump
-  itself (23 up, 8.6 away, gravity 0.95, stick ignored 25 frames) uses SMO's
-  values, with the wall direction from Galaxy; it is model-tested (267 high) but
-  not measured in the game (the harness has no scripted wall).
+- The wall slide replaces Galaxy's wall stick speed only: where Mario can cling
+  is still Galaxy's rule (falling, stick toward the wall, a wall Galaxy allows).
+  Holding the stick away lets go after 15 frames; Galaxy's 180-frame release is
+  not used. SMO's slide state itself is not decompiled; the slide uses its
+  PlayerConst values (WallKeepFrame 3, GravityWallSlide 0.5, FallSpeedMax 35).
 - No Cappy, cap bounce or captures; swimming is Galaxy's.

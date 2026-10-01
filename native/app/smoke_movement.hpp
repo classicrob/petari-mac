@@ -16,11 +16,19 @@
 //   7. a sideflip: run, flick the stick back, and jump 4 frames later;
 //   8. a dive: a hop, a ground pound at its peak, Spin 4 frames later (height
 //      from the point where Spin was pressed);
-//   9. a roll: crouch, Spin 3 frames later, Spin again 20 frames into the roll
+//   9. a roll: crouch, Spin 3 frames later, Spin again 30 frames into the roll
 //      (a boost); logs "MOVEMENT roll: ..." with the ground speed. At the end of
 //      the full sequence on the observatory Mario faces a wall, so measure the
-//      roll alone (PETARI_MOVEMENT_ONLY=roll) from the start point.
-// PETARI_MOVEMENT_ONLY=<text> keeps only the tasks whose name contains it.
+//      roll alone (PETARI_MOVEMENT_ONLY=roll) from the start point;
+//  10. a wall jump: run (stick PETARI_MOVEMENT_WALL_DIR, default up) until a wall
+//      stops Mario, jump against it, slide 20 frames once he hangs on it (logs
+//      "MOVEMENT wall slide: ..." with the fall per frame), then A held 15 frames
+//      ("MOVEMENT wall jump: apex ..." from the press). Run it alone
+//      (PETARI_MOVEMENT_ONLY=wall) where a wall is in reach.
+// With PETARI_XFB_DUMP, each move marks its name as the dump label (for example
+// PETARI_XFB_DUMP_LABELS="long jump,dive").
+// PETARI_MOVEMENT_ONLY=<name>[,<name>...] keeps only the tasks whose name
+// contains one of them.
 // Each jump logs "MOVEMENT <name>: apex <height> after <frames> frames, take-off
 // speed <s>"; heights are along -gravity from the take-off point. The run logs
 // "MOVEMENT run: max speed <v> u/f, frame <n> reached 95%". Compare with the
@@ -51,7 +59,7 @@ public:
     bool wantsPlayer() const { return mPhase != Phase::Boot || mBoot.wantsPlayer(); }
 
 private:
-    enum class Phase { Boot, Settle, Jump, Land, Run, Crouch, Hop, Pound, Reverse, Roll, Done };
+    enum class Phase { Boot, Settle, Jump, Land, Run, Crouch, Hop, Pound, Reverse, Roll, WallRun, WallClimb, WallSlide, Done };
     struct Release {
         unsigned long frame;
         Button button;
@@ -67,6 +75,7 @@ private:
         int reverse = 0;           // after the run, frames the stick is held back before the jump (sideflip)
         bool dive = false;         // with groundPound: Spin during the pound, measured from there
         int roll = 0;              // with crouch: Spin instead of A, then the ground speed is logged for this many frames
+        bool wall = false;         // run into a wall, jump against it, slide, wall-jump (measured from the press)
     };
 
     void finish(Result result, const std::string& reason, Step& step);
@@ -92,6 +101,8 @@ private:
     bool mLeftGround = false;
     float mLastX = 0, mLastY = 0, mLastZ = 0;
     float mMaxSpeed = 0.0f;
+    Button mWallStick = Button::StickUp;  // PETARI_MOVEMENT_WALL_DIR: up, down, left, right
+    float mFallLast = 0.0f;
     std::vector<float> mSpeeds;
 };
 

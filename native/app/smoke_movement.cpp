@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <petari/efb_dump_mark.hpp>
+
 namespace PetariNative::App::Smoke {
 
 namespace {
@@ -49,10 +51,26 @@ MovementDriver::MovementDriver(unsigned long frameLimit) : mBoot(frameLimit + 1,
         {"backflip", 6, false, 0, false, 8},
         {"sideflip", 6, true, 45, false, 0, false, 2},
         {"roll", 0, false, 0, false, 3, false, 0, false, 120},
+        {"wall jump", 15, false, 0, false, 0, false, 0, false, 0, true},
     };
-    // PETARI_MOVEMENT_ONLY=<text>: only the tasks whose name contains it.
+    if (const char* dir = std::getenv("PETARI_MOVEMENT_WALL_DIR"); dir != nullptr) {
+        const std::string d(dir);
+        mWallStick = d == "down" ? Button::StickDown : d == "left" ? Button::StickLeft : d == "right" ? Button::StickRight : Button::StickUp;
+    }
+    // PETARI_MOVEMENT_ONLY=<name>[,<name>...]: only the tasks whose name contains one of them.
     if (const char* only = std::getenv("PETARI_MOVEMENT_ONLY"); only != nullptr && *only != '\0') {
-        mTasks.erase(std::remove_if(mTasks.begin(), mTasks.end(), [&](const Task& t) { return std::strstr(t.name, only) == nullptr; }),
+        std::vector<std::string> keep;
+        std::string list = only;
+        for (size_t start = 0; start <= list.size();) {
+            const size_t comma = std::min(list.find(',', start), list.size());
+            if (comma > start) keep.push_back(list.substr(start, comma - start));
+            start = comma + 1;
+        }
+        mTasks.erase(std::remove_if(mTasks.begin(), mTasks.end(),
+                                    [&](const Task& t) {
+                                        return std::none_of(keep.begin(), keep.end(),
+                                                            [&](const std::string& k) { return std::strstr(t.name, k.c_str()) != nullptr; });
+                                    }),
                      mTasks.end());
     }
 }
@@ -68,6 +86,9 @@ const char* MovementDriver::phase() const {
     case Phase::Pound: return "movement: ground pound";
     case Phase::Reverse: return "movement: stick back before a sideflip";
     case Phase::Roll: return "movement: rolling";
+    case Phase::WallRun: return "movement: running to a wall";
+    case Phase::WallClimb: return "movement: jumping against the wall";
+    case Phase::WallSlide: return "movement: sliding down the wall";
     case Phase::Land: return "movement: landed";
     case Phase::Done: return "movement: done";
     }
@@ -153,7 +174,7 @@ Step MovementDriver::step(const Observation& o) {
     const float horizontal = len(sub(moved, scale(up, dot(moved, up))));
 
     if (mTask >= mTasks.size()) {
-        finish(Result::Pass, "movement measured: " + std::to_string(mTasks.size()) + " jumps and a run", step);
+        finish(Result::Pass, "movement measured: " + std::to_string(mTasks.size()) + " moves", step);
         return step;
     }
     const Task& task = mTasks[mTask];
@@ -170,6 +191,7 @@ Step MovementDriver::step(const Observation& o) {
         mLeftGround = button != Button::A;  // a dive starts in the air
         mTakeoffSpeed = horizontal;
         tap(button, static_cast< unsigned long >(button == Button::A ? task.holdA : kTapFrames), step);
+        PetariNative::EfbDump::mark(task.name);  // opt-in image dump (PETARI_XFB_DUMP); inert otherwise
         mPhase = Phase::Jump;
         mPhaseFrames = 0;
     };
@@ -179,6 +201,14 @@ Step MovementDriver::step(const Observation& o) {
     case Phase::Land: {
         if (task.afterLanding && mPhase == Phase::Land) {
             startJump();  // the frame after landing
+            break;
+        }
+        if (task.wall) {
+            step.presses.push_back({mWallStick, true});
+            step.assertFocus = true;
+            mPhase = Phase::WallRun;
+            mPhaseFrames = 0;
+            mReady = 0;
             break;
         }
         if (task.stick) {
@@ -206,7 +236,9 @@ Step MovementDriver::step(const Observation& o) {
         if (mReady >= kStandStill) {
             mReady = 0;
             if (task.crouch > 0) {
-                tap(Button::Z, static_cast< unsigned long >(task.crouch + task.holdA + 2), step);  // backflip: crouch, then jump
+                // Backflip: crouch, then jump. Roll: crouch, then Spin (Z held longer so
+                // the Spin lands inside the crouch whatever the input timing).
+                tap(Button::Z, static_cast< unsigned long >(task.crouch + task.holdA + (task.roll > 0 ? 10 : 2)), step);
                 mPhase = Phase::Crouch;
                 mPhaseFrames = 0;
             } else if (task.groundPound) {
@@ -248,6 +280,7 @@ Step MovementDriver::step(const Observation& o) {
         if (static_cast< int >(mPhaseFrames) >= task.crouch) {
             if (task.roll > 0) {
                 tap(Button::Spin, 2, step);
+                PetariNative::EfbDump::mark(task.name);
                 mPhase = Phase::Roll;
                 mPhaseFrames = 0;
                 mSpeeds.clear();
@@ -257,9 +290,68 @@ Step MovementDriver::step(const Observation& o) {
         }
         break;
     }
+    case Phase::WallRun: {
+        // Blocked: the stick is held but Mario barely moves for 10 frames.
+        mReady = (mPhaseFrames > 30 && o.playerOnGround && horizontal < 1.0f) ? mReady + 1 : 0;
+        if (mReady >= 10) {
+            note("wall reached at (" + num(pos.x) + ", " + num(pos.y) + ", " + num(pos.z) + ")");
+            tap(Button::A, static_cast< unsigned long >(task.holdA), step);
+            mStartX = pos.x; mStartY = pos.y; mStartZ = pos.z;
+            mUpX = up.x; mUpY = up.y; mUpZ = up.z;
+            mPhase = Phase::WallClimb;
+            mPhaseFrames = 0;
+            mReady = 0;
+            mLeftGround = false;
+        } else if (mPhaseFrames > 600) {
+            step.presses.push_back({mWallStick, false});
+            finish(Result::Fail, "no wall within 600 frames of running", step);
+        }
+        break;
+    }
+    case Phase::WallClimb: {
+        // On the wall: in the air and falling, then (almost) still along gravity.
+        if (!o.playerOnGround) mLeftGround = true;
+        const float rise = dot(moved, up);
+        if (mLeftGround && o.playerOnGround) {
+            step.presses.push_back({mWallStick, false});
+            finish(Result::Fail, "landed without hanging on the wall", step);
+            break;
+        }
+        if (dot(sub(pos, V{mStartX, mStartY, mStartZ}), V{mUpX, mUpY, mUpZ}) < -300.0f) {
+            step.presses.push_back({mWallStick, false});
+            finish(Result::Fail, "fell past the take-off point: no wall to hang on", step);
+            break;
+        }
+        if (mLeftGround && mPhaseFrames > 10 && std::fabs(rise) < 0.05f) {
+            PetariNative::EfbDump::mark("wall slide");
+            mPhase = Phase::WallSlide;
+            mPhaseFrames = 0;
+            mSpeeds.clear();
+        }
+        break;
+    }
+    case Phase::WallSlide: {
+        mSpeeds.push_back(-dot(moved, up));
+        if (o.playerOnGround) {
+            step.presses.push_back({mWallStick, false});
+            finish(Result::Fail, "slid to the ground before the wall jump", step);
+            break;
+        }
+        if (mPhaseFrames >= 20) {
+            std::string falls;
+            for (float f : mSpeeds) falls += (falls.empty() ? "" : " ") + num(f);
+            note("MOVEMENT wall slide: fall per frame " + falls);
+            step.presses.push_back({mWallStick, false});
+            startJump();
+            mLeftGround = true;  // measured from the press, in the air
+        }
+        break;
+    }
     case Phase::Roll: {
         if (mPhaseFrames > 1) mSpeeds.push_back(horizontal);
-        if (mPhaseFrames == 20) tap(Button::Spin, 2, step);  // a boost (15 frames apart at least)
+        // A boost (15 frames apart at least; the emulated shake behind Spin repeats
+        // about four times a second, so 30 frames after the start).
+        if (mPhaseFrames == 30) tap(Button::Spin, 2, step);
         if (static_cast< int >(mPhaseFrames) >= task.roll) {
             float top = 0.0f;
             std::string speeds;
@@ -321,6 +413,10 @@ Step MovementDriver::step(const Observation& o) {
         break;
     }
     case Phase::Jump: {
+        if (task.wall && mPhaseFrames == 1) {
+            // The press frame still slid down the wall: measure from the take-off.
+            mStartX = pos.x; mStartY = pos.y; mStartZ = pos.z;
+        }
         if (!mLeftGround && o.playerOnGround && mPhaseFrames % 20 == 0 && mPhaseFrames > 0 && mPhaseFrames <= 60) {
             // A 1-frame tap can fall between two game frames; press again.
             note(std::string(task.name) + ": no take-off after " + std::to_string(mPhaseFrames) + " frames, pressing again");
