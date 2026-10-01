@@ -178,13 +178,16 @@ set_target_properties(petari_gx_probe PROPERTIES
     MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0")
 target_compile_features(petari_gx_probe PRIVATE cxx_std_20)
 target_include_directories(petari_gx_probe PRIVATE "${aurora_SOURCE_DIR}/lib")
-target_link_libraries(petari_gx_probe PRIVATE petari_j3d petari_core petari_heaps petari_memory aurora::core aurora::gx aurora::main petari_vi_bridge)
+target_link_libraries(petari_gx_probe PRIVATE petari_j3d petari_core petari_heaps petari_memory aurora::core aurora::gx aurora::main petari_vi_bridge
+    absl::flat_hash_map absl::btree)  # Aurora internal headers include Abseil
 
 if(_petari_build_testing)
     add_executable(petari_gx_abi_tests abi_test.cpp backend_abi.cpp texture_cache.cpp)
     target_compile_features(petari_gx_abi_tests PRIVATE cxx_std_20)
     target_include_directories(petari_gx_abi_tests PRIVATE "${aurora_SOURCE_DIR}/lib")
-    target_link_libraries(petari_gx_abi_tests PRIVATE petari_native_config petari_memory aurora::gx aurora::core petari_vi_bridge)
+    # Aurora's internal headers (lib/) include Abseil; Aurora links it PRIVATE.
+    target_link_libraries(petari_gx_abi_tests PRIVATE petari_native_config petari_memory aurora::gx aurora::core petari_vi_bridge
+        absl::flat_hash_map absl::btree)
     add_test(NAME native_gx_abi COMMAND petari_gx_abi_tests)
 
     # The generated FIFO (patch_aurora_sync.py) with a fake command processor:
@@ -424,7 +427,7 @@ endforeach()
 add_executable(petari_gx_shader_tests "${CMAKE_SOURCE_DIR}/native/tests/gx_shader_tests.cpp")
 target_compile_features(petari_gx_shader_tests PRIVATE cxx_std_20)
 target_include_directories(petari_gx_shader_tests PRIVATE "${aurora_SOURCE_DIR}/lib" "${aurora_SOURCE_DIR}/lib/gx")
-target_link_libraries(petari_gx_shader_tests PRIVATE aurora::gx aurora::core)
+target_link_libraries(petari_gx_shader_tests PRIVATE aurora::gx aurora::core absl::flat_hash_map absl::btree)
 target_link_options(petari_gx_shader_tests PRIVATE -Wl,-dead_strip)
 if(_petari_build_testing)
     add_test(NAME native_gx_shader COMMAND petari_gx_shader_tests)
