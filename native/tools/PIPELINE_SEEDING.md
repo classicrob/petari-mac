@@ -214,6 +214,31 @@ For observed-only fallback, `export_pipeline_stage_seeds.py --cache CACHE --outp
 DIRECTORY` remains available. Its shared-observed provenance distinguishes it from
 actual replay; do not overwrite a replay directory unintentionally.
 
+## Repacking the seed pack
+
+`native/data/pipeline-seeds.v<N>.xz` (+ `.sha256`, N = the GX config version) is the git-tracked copy of
+`build/pipeline-seeds`: about 270 KB for the 50 stage databases and `__global__.db` (9,544 configs). It carries
+database rows only, never the `.json` provenance (disc hashes and local paths; `build/` is git-ignored and
+`native/tests/seedpack_tests.py` fails if anything else under `native/data` or any seed json is tracked).
+`native/tools/seedpack.py` has `pack`, `expand`, `verify`, `check` and `ensure`.
+
+- **Configure time.** `native/app/CMakeLists.txt` runs `seedpack.py ensure`: if `build/pipeline-seeds` is absent
+  (a fresh clone) the newest pack is checked against its sha256 and expanded there; the bundle step then copies it
+  into `Petari.app/Contents/Resources/pipeline-seeds` as before. Locally generated seeds (no `.seedpack.json`
+  marker) are never touched. A directory that is still an unmodified expansion is replaced when a newer pack
+  arrives; one that was edited is kept with a warning. A missing or corrupt pack only prints a warning.
+- **Refresh after a closure** (a new `build/pipeline-seeds` from the closure tooling, config version unchanged):
+
+  ```sh
+  python3 native/tools/seedpack.py pack build/pipeline-seeds native/data/pipeline-seeds.v13.xz
+  python3 native/tools/seedpack.py expand --force native/data/pipeline-seeds.v13.xz /tmp/seedcheck
+  python3 native/tools/seedpack.py verify build/pipeline-seeds /tmp/seedcheck   # must report 0 problems
+  ```
+
+  Commit the `.xz` and `.sha256`. When the GX `PipelineConfig` version changes, pack as `...v<new>.xz` and delete
+  the old pack: the loader rejects rows of another version, so an old pack is only dead weight.
+- **Use the pack instead of local seeds:** `seedpack.py expand --force native/data/pipeline-seeds.v13.xz build/pipeline-seeds`.
+
 ## Coverage accounting
 
 ```sh

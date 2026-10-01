@@ -191,6 +191,7 @@ if(BUILD_TESTING)
     target_compile_options(petari_game_compat_tests PRIVATE -Wno-deprecated-declarations)
     add_test(NAME native_game_compat COMMAND petari_game_compat_tests)
     add_test(NAME native_source_encoding COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/native/tests/source_encoding_tests.py")
+    add_test(NAME native_seedpack COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/native/tests/seedpack_tests.py")
 endif()
 
 option(PETARI_BUILD_GX_PROBE "Build the native GX/Metal integration probe (downloads Aurora dependencies)" OFF)

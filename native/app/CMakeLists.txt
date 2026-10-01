@@ -62,9 +62,27 @@ if(NOT _petari_app_standalone)
         MACOSX_BUNDLE_INFO_STRING "Petari: native Super Mario Galaxy for macOS")
     set(PETARI_PIPELINE_STAGE_SEEDS "${CMAKE_SOURCE_DIR}/build/pipeline-seeds" CACHE PATH
         "Offline-generated per-stage Aurora configuration manifests")
+    # Clones start from the tracked pack (native/data/pipeline-seeds.v*.xz). Locally generated seeds (no
+    # .seedpack.json marker) and edited expansions are never overwritten; a missing or bad pack only warns.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    file(GLOB _petari_seed_packs CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/native/data/pipeline-seeds.v*.xz")
+    if(Python3_Interpreter_FOUND AND _petari_seed_packs)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_petari_seed_packs})
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/native/tools/seedpack.py" ensure
+                --pack-dir "${CMAKE_SOURCE_DIR}/native/data" --out "${PETARI_PIPELINE_STAGE_SEEDS}"
+            RESULT_VARIABLE _petari_seedpack_result OUTPUT_VARIABLE _petari_seedpack_output
+            ERROR_VARIABLE _petari_seedpack_output)
+        string(STRIP "${_petari_seedpack_output}" _petari_seedpack_output)
+        message(STATUS "${_petari_seedpack_output}")
+        if(NOT _petari_seedpack_result EQUAL 0)
+            message(WARNING "pipeline seeds: seedpack.py failed (${_petari_seedpack_result}); continuing without the pack")
+        endif()
+    endif()
     if(IS_DIRECTORY "${PETARI_PIPELINE_STAGE_SEEDS}")
         file(GLOB _petari_stage_seeds CONFIGURE_DEPENDS
             "${PETARI_PIPELINE_STAGE_SEEDS}/*.db" "${PETARI_PIPELINE_STAGE_SEEDS}/*.json")
+        list(FILTER _petari_stage_seeds EXCLUDE REGEX "/\\.seedpack\\.json$")
         foreach(_seed IN LISTS _petari_stage_seeds)
             get_filename_component(_seed_name "${_seed}" NAME)
             set(_bundled_seed "${CMAKE_CURRENT_BINARY_DIR}/pipeline-seeds/${_seed_name}")

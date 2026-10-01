@@ -106,6 +106,13 @@ build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari --disc build/game-dat
 - There is no preparation screen: the game starts straight away. The first
   visit to each new area compiles Metal shaders, so it can hitch briefly. The
   shader cache is kept in `~/Library/Caches/Petari`, so later visits are smooth.
+  A fresh clone starts with the tracked shader seed: configuring (`cmake` or
+  the build presets) expands `native/data/pipeline-seeds.v13.xz` into
+  `build/pipeline-seeds`, and the app bundles it, so the common GX pipelines are
+  prepared up front. The seed holds render-state configs only (no shaders,
+  textures or disc data). Without it the game still runs; it just hitches more
+  on first visits. See
+  [native/tools/PIPELINE_SEEDING.md](native/tools/PIPELINE_SEEDING.md#repacking-the-seed-pack).
 - Saves, settings (`controls.txt`, `mods.txt`) and crash reports live in
   `~/Library/Application Support/Petari`. Use `--user DIR` for a separate save
   location. Native saves are not compatible with Wii saves.
