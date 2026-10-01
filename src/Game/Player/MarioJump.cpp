@@ -25,6 +25,26 @@ namespace {
     f32 cDropFrontSpeed = 2.0f;
 };  // namespace
 
+#ifdef PETARI_NATIVE
+// OdysseyMovement mod (docs/dev/ODYSSEY_MOVEMENT.md): with the mod on, the chain
+// jumps (single, double, triple) follow Super Mario Odyssey's model
+// (petari/odyssey_move.hpp). With it off none of this runs.
+#include <petari/odyssey_move.hpp>
+extern "C" bool petari_mod_enabled(int mod);
+namespace {
+    constexpr int kModOdysseyMovement = 2;  // PetariNative::Mods::Mod::OdysseyMovement
+    struct OdysseyAir {
+        PetariNative::Odyssey::AirState air;
+        TVec3f front = TVec3f(0.0f, 0.0f, 1.0f);  // reference direction (across gravity)
+        bool active = false;                       // the current jump is the mod's
+        s32 jumpKind = -1;                         // its _430 value
+        s32 lastChain = -1;                        // chain index of the last mod jump
+        TVec3f lastDir = TVec3f(0.0f, 0.0f, 1.0f);
+    };
+    OdysseyAir sOdyssey;
+}  // namespace
+#endif
+
 void MarioJump_FORCE_MATCH_SDATA2() {
     (void)1.0f;
     (void)0.0f;
@@ -321,6 +341,27 @@ void Mario::tryJump() {
         jumpRatio = 0.9f;
     }
 
+#ifdef PETARI_NATIVE
+    // OdysseyMovement: SMO's chain rules choose single/double/triple (within 10
+    // grounded frames, at full speed, within 45 degrees of the last jump).
+    const bool odysseyJump = petari_mod_enabled(kModOdysseyMovement) && _430 >= 0 && _430 <= 2 && !_1C._A && !_1C._B &&
+                             getFloorCode() != 0x20 && !_10._1A && getPlayerMode() != 4 && getPlayerMode() != 6;
+    TVec3f odysseyDir;
+    f32 odysseySpeed = 0.0f;
+    if (odysseyJump) {
+        TVec3f up(-mActor->_240);
+        MR::normalizeOrZero(&up);
+        odysseyDir = mJumpVec - up * up.dot(mJumpVec);
+        MR::normalizeOrZero(&odysseyDir);
+        if (MR::isNearZero(odysseyDir)) {
+            odysseyDir = mFrontVec - up * up.dot(mFrontVec);
+            MR::normalizeOrZero(&odysseyDir);
+        }
+        // The ground speed in units/frame (Galaxy keeps a ratio of its run speed).
+        odysseySpeed = mWalkSpeed * mActor->getConst().getTable()->mWalkSpeed;
+        _430 = PetariNative::Odyssey::nextChainIndex(sOdyssey.lastChain, _3CE, odysseySpeed, odysseyDir.dot(sOdyssey.lastDir));
+    }
+#endif
     mJumpVec += -mActor->_240 * mActor->getConst().getTable()->mJumpHeight[_430] * jumpRatio;
 
     mMovementStates._E = false;
@@ -335,6 +376,17 @@ void Mario::tryJump() {
         _430 = 0;
     }
 
+#ifdef PETARI_NATIVE
+    sOdyssey.active = false;
+    if (odysseyJump) {
+        sOdyssey.air = PetariNative::Odyssey::startAir(PetariNative::Odyssey::chainAir(_430), odysseySpeed);
+        sOdyssey.front = odysseyDir;
+        sOdyssey.jumpKind = _430;
+        sOdyssey.lastChain = _430;
+        sOdyssey.lastDir = odysseyDir;
+        sOdyssey.active = true;
+    }
+#endif
     procJump(true);
     mMovementStates.jumping = true;
 
@@ -1443,9 +1495,42 @@ void Mario::procJump(bool a1) {
         mJumpVec += mActor->_240 * jumpAcceleration * gravityScale * wallScale;
         moveWallSlide(1.0f);
     } else if ((mMovementStates._1) == 0) {
-        addVelocity(mJumpVec);
+#ifdef PETARI_NATIVE
+        if (sOdyssey.active && _430 != sOdyssey.jumpKind) {
+            sOdyssey.active = false;  // the game turned the jump into something else (hip drop, ...)
+        }
+        if (sOdyssey.active) {
+            // This frame's velocity from the model, in the current gravity frame:
+            // front/side across gravity, up against it (planets turn the frame).
+            TVec3f up(-mActor->_240);
+            MR::normalizeOrZero(&up);
+            TVec3f front(sOdyssey.front - up * up.dot(sOdyssey.front));
+            MR::normalizeOrZero(&front);
+            if (MR::isNearZero(front)) {
+                front = mFrontVec - up * up.dot(mFrontVec);
+                MR::normalizeOrZero(&front);
+            }
+            sOdyssey.front = front;
+            TVec3f side;
+            side.cross(up, front);
+            TVec3f stick;
+            calcMoveDir(mStickPos.x, mStickPos.y, &stick, true);
+            const f32 stickFront = std::clamp(stick.dot(front), -1.0f, 1.0f);
+            const f32 stickSide = std::clamp(stick.dot(side), -1.0f, 1.0f);
+            if (sOdyssey.air.up > 0.0f && calcDistToCeil(false) < 160.0f) {
+                sOdyssey.air.up = 0.0f;  // a ceiling ends the rise
+                sOdyssey.air.extending = false;
+            }
+            const f32 rise = PetariNative::Odyssey::stepAir(sOdyssey.air, checkLvlA(), stickFront, stickSide);
+            mJumpVec = front * sOdyssey.air.front + side * sOdyssey.air.side + up * rise;
+            addVelocity(mJumpVec);
+        } else
+#endif
+        {
+            addVelocity(mJumpVec);
 
-        mJumpVec += mActor->_240 * jumpAcceleration * gravityScale;
+            mJumpVec += mActor->_240 * jumpAcceleration * gravityScale;
+        }
     }
 
     checkWallRising();
@@ -1476,6 +1561,9 @@ void Mario::procJump(bool a1) {
     }
 
     if ((mMovementStates._1) != 0 && !a1) {
+#ifdef PETARI_NATIVE
+        sOdyssey.active = false;
+#endif
         doLanding();
 
         if (calcDistToCeil(false) < 80.0f) {

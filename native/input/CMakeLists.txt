@@ -159,4 +159,10 @@ if(BUILD_TESTING)
         target_compile_definitions(petari_input_tests PRIVATE PETARI_INPUT_TEST_SDL3=1)
     endif()
     add_test(NAME native_input COMMAND petari_input_tests)
+
+    # OdysseyMovement mod: the SMO movement model alone (header-only).
+    add_executable(petari_odyssey_move_tests ${PETARI_REPO_ROOT}/native/tests/odyssey_move_tests.cpp)
+    target_include_directories(petari_odyssey_move_tests PRIVATE ${PETARI_REPO_ROOT}/native/include)
+    target_compile_features(petari_odyssey_move_tests PRIVATE cxx_std_17)
+    add_test(NAME native_odyssey_move COMMAND petari_odyssey_move_tests)
 endif()

@@ -7,6 +7,7 @@ unmodified game and every test run behave exactly as before.
 | --- | --- | --- |
 | Collect visible Star Bits (`CollectStarBits`) | G, controller L3 (left stick click) | Every Star Bit on screen flies to Mario, as if the pointer had touched each one |
 | Fire a Star Bit at the nearest enemy (`ShootEnemy`) | V (no controller default) | Shoots one Star Bit at the nearest enemy on screen |
+| Odyssey movement (`OdysseyMovement`) | none (a mode) | Mario moves with Super Mario Odyssey's physics. In progress: the single, double and triple jump (heights, held-jump arc, SMO's chain rules, air control) so far; see docs/dev/ODYSSEY_MOVEMENT.md. A change takes effect from the next jump. |
 
 ## Turning mods on
 
