@@ -2,7 +2,7 @@
 // The native application: launch and the per-frame host seam.
 //
 // The game runs on the macOS main thread, which is also Aurora's and SDL's
-// thread (see native/app/INTEGRATION_PLAN.md). GameSystem::frameLoop calls
+// thread (see docs/dev/INTEGRATION_PLAN.md). GameSystem::frameLoop calls
 // petari_host_frame_seam() once per frame, after endFrame() (the frame's
 // GXCopyDisp was issued and its GXDrawDone returned) and before
 // waitForRetrace(). The seam draws the host overlays, ends the Aurora frame,

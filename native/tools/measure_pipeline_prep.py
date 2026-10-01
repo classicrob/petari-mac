@@ -104,6 +104,11 @@ def summarize_frames(path):
 
 
 def require_quiet_locks():
+    if not Path('build/locked-app.sh').is_file():
+        # Outside the shared test machine there are no locks: measure on an idle
+        # machine, one app at a time, with no concurrent builds.
+        print('measure_pipeline_prep: no build/locked-*.sh scripts; running directly (keep the machine idle)', file=sys.stderr)
+        return
     ancestors = set()
     pid = os.getppid()
     while pid > 1 and pid not in ancestors:

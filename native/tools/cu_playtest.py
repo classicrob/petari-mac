@@ -2,7 +2,8 @@
 """Bounded real-window playtest launcher. Input comes only from macOS/CUA.
 
 Prepare once, then run --session 1 (and --session 2 to reuse the isolated save).
-The script always acquires locked-app.sh before launching Petari.
+On the shared test machine the script acquires build/locked-app.sh (and the
+sweep lane) before launching Petari; without those scripts it runs directly.
 """
 import argparse
 import csv
@@ -82,6 +83,11 @@ def main():
         return
     if not FIXTURE.is_dir() or (FIXTURE / '.petari-test-fixture').read_text().strip() != 'observatory':
         parser.error('run --prepare first; an explicitly marked isolated fixture is required')
+    if not (ROOT / 'build/locked-app.sh').is_file():
+        args.inside_lock = args.inside_sweep = True  # no shared-machine locks: run directly
+        unlocked = True
+    else:
+        unlocked = False
     if not args.inside_lock:
         env = dict(os.environ, PETARI_LOCK_TIMEOUT='2700')
         result = subprocess.run([str(ROOT / 'build/locked-app.sh'), 'cu-playtest', sys.executable,
@@ -89,7 +95,7 @@ def main():
                                  '--seconds', str(args.seconds), '--app', str(args.app.resolve())], cwd=ROOT, env=env)
         raise SystemExit(result.returncode)
     lock = ROOT / 'build/.petari-app.lock'
-    if (lock / 'owner').read_text().strip() != 'cu-playtest':
+    if not unlocked and (lock / 'owner').read_text().strip() != 'cu-playtest':
         parser.error('inside-lock mode requires the cu-playtest app lock')
     if not args.inside_sweep:
         if int((lock / 'pid').read_text()) != os.getppid():
@@ -100,9 +106,9 @@ def main():
                                  '--app', str(args.app.resolve())], cwd=ROOT)
         raise SystemExit(result.returncode)
     lane = ROOT / 'build/.petari-sweep-lane.lock'
-    if (lane / 'owner').read_text().strip() != 'cu-playtest':
+    if not unlocked and (lane / 'owner').read_text().strip() != 'cu-playtest':
         parser.error('inside-sweep mode requires the cu-playtest sweep lane')
-    if int((lane / 'pid').read_text()) != os.getppid():
+    if not unlocked and int((lane / 'pid').read_text()) != os.getppid():
         parser.error('inside-sweep mode requires this launcher’s sweep-lane parent')
     prefix = OUT / f'session-{args.session}'
     log = prefix.with_suffix('.log')

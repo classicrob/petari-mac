@@ -46,7 +46,7 @@ Normal launcher: `Play Petari.command`. Normal user data is under `~/Library/App
 
 Extracted disc: `build/game-data/RMGE01`. The sibling `../aurora-reference` is the upstream renderer reference; do not edit it. Native renderer changes use generated-source patches in `native/gx`.
 
-This handoff is `HANDOFF.md` at the repository root. More detailed evidence is in `native/RELIABILITY.md` and `native/PLAYTEST.md`; build/control documentation is in `native/README.md` and `native/CONTROLS.md`.
+This handoff is `docs/dev/HANDOFF.md`. More detailed evidence is in `native/RELIABILITY.md` and `native/PLAYTEST.md`; build/control documentation is in `native/README.md` and `native/CONTROLS.md`.
 
 ## What is already working
 

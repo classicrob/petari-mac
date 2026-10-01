@@ -1,5 +1,5 @@
 // GP interrupts and GX synchronisation. See petari/platform/gx_sync.hpp and
-// native/platform/GX_SYNC_PLAN.md.
+// docs/dev/GX_SYNC_PLAN.md.
 //
 // Reports from the renderer's command-processor thread go into an unbounded
 // queue (never dropped) under a private mutex; that thread never touches the

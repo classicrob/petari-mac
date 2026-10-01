@@ -1,7 +1,7 @@
 #pragma once
 // GX synchronisation between game threads and the native graphics processor
 // (GP): draw-sync tokens, draw done, FIFO breakpoints, abort, and GP status.
-// See native/platform/GX_SYNC_PLAN.md.
+// See docs/dev/GX_SYNC_PLAN.md.
 //
 // Division of work:
 // - The renderer (root's native/gx and Aurora patches) owns the FIFO stream.

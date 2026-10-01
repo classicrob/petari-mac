@@ -295,9 +295,9 @@ resolve (under investigation). Audio: 1 replay (startup), 0 underrun frames,
 unrelated applications. Seeds were derived from earlier runs of this same
 route, so this does not demonstrate coverage for unvisited stages.
 
-### Overnight 2026-09-29/30 summary (lead)
+### Overnight 2026-09-29/30 summary
 
-Verified live on the current builds (details in the linked worker reports):
+Verified live on the current builds (details in the linked reports):
 - Whole-game stage sweep on the vector-blend fix build (0034df893): all 47
   enterable stages, missions 1-3, 83/83 runs with 0 crash, hang, heap failure,
   missing asset reference or renderer error (build/stage-sweep/all-s1-3-blendfix).
@@ -309,7 +309,7 @@ Verified live on the current builds (details in the linked worker reports):
   no dimming, zero audio underruns.
 - First-launch shader preparation (default): cold 3m41s then every stage gate
   <0.1 ms, gameplay p99 ~18.4 ms, 0 frames >33 ms; warm launch <1 s; Return/
-  controller skip verified live. Quiet-lock perf survey: 7/15 heavy stages at 60
+  controller skip verified live. Quiet-machine perf survey: 7/15 heavy stages at 60
   (0-0.3% late, p99 17.5-18.9 ms).
 - Soak: 86 cycles / 105 min, no crash/hang/stall/audio fault; ~0.3 MB/cycle host
   malloc growth under investigation.
@@ -325,7 +325,7 @@ and later missions not yet completed end to end; controller hardware untested.
 
 ## 2026-09-30 morning checkpoint
 
-- Build + ctest: 96/96 pass (build/lead-checkpoint-0930.log).
+- Build + ctest: 96/96 pass (local log).
 - Render-worker autorelease leak fixed: soak leak1 → leak2 per-cycle growth of the
   render worker's Metal/Dawn stacks +403 KB → -3 KB (build/soak/leak1, leak2).
   Per-compile autorelease pools added to the pipeline workers (regression test only).
@@ -356,7 +356,7 @@ on the game thread (fix in progress); StarBall tilt sign under investigation.
   169.458 us; final logged history checkpoints: 120,153 -> 65,536 entries.
 - Aurora's separate object-cache sweep is unchanged. Runtime confirms it runs
   on main, after CPU-baton release. Confirmation CPU p99: 179.583 / 170.417 us;
-  maxima: 256.542 / 366.708 us. The lead accepts this cost within the frame
+  maxima: 256.542 / 366.708 us. This cost is accepted within the frame
   budget; no LRU/lifetime rewrite was made. Larger wall-time outliers include
   scheduling time. This is measured-route evidence, not whole-game/long-soak or
   visual-effect equivalence. Full evidence: `build/texture-map/REPORT.md`,
@@ -364,7 +364,7 @@ on the game thread (fix in progress); StarBall tilt sign under investigation.
 
 ## 2026-09-30 midday checkpoint
 
-- Build + ctest: 99/99 pass (build/lead-checkpoint-0930b.log).
+- Build + ctest: 99/99 pass (local log).
 - Cosmic Mario race crash fix (64 post-matrix rows) verified live: OceanRing,
   IceVolcano, HoneyBee and ReverseKingdom s4 races reach racing with no crash or
   renderer error (the idle driver loses, so runs end DIED, not PASS).
@@ -380,32 +380,31 @@ on the game thread (fix in progress); StarBall tilt sign under investigation.
 
 ## 2026-09-30 afternoon
 
-Integrator notes from commits d4880e97d..f1c878614. Live results are the owning
-workers' reports unless stated; the integrator re-ran only the ctest targets.
+Notes for commits d4880e97d..f1c878614. Live results are from the individual
+test runs listed; only the ctest targets were re-run for this summary.
 
 - Tests: 106 targets. Full `ctest -j4` on 6c561d066 under machine load ~75
-  (other workers' apps, MTLCompilerService) passed 100/106 (build/integrator-ctest-full.log).
-  **Timing tests need a quiet machine.** Quiet reruns (PETARI_LOCK_CLASS=quiet,
+  (other running apps, MTLCompilerService) passed 100/106 (local log).
+  **Timing tests need a quiet machine.** Quiet reruns (otherwise idle machine,
   repeat until-fail) passed: native_platform_os 3/3, native_audio_pacing 3/3,
   native_rfl_render 3/3, native_pipeline_worker_async 5/5, native_platform_baton_diag
-  5/5 (it failed 1 of 3 at load ~26, passed 5/5 at load ~12;
-  build/integrator-ctest-quiet{,2}.log). native_gx_sync_backend failed under
+  5/5 (it failed 1 of 3 at load ~26, passed 5/5 at load ~12; local logs). native_gx_sync_backend failed under
   load and passed a serial rerun; it was not repeated quiet. The flaky
   native_pipeline_worker bounded-draw test was a test-timing bug and is now
   deterministic (f1c878614). No single full-ctest run has been clean since
   these commits; 14/14 pipeline and 8/8 smoke/seam/route targets pass.
 - DemoRabbit runaway velocity / Binder 6M-step fix verified live in loaded
   story HeavensDoor (d4880e97d); power-up tips keyed by PlayerMode (found in a
-  user playtest) and audit fixes (changeMorphString bound, WarpPod, RingBeam,
+  playtest) and audit fixes (changeMorphString bound, WarpPod, RingBeam,
   LavaGalaxyParts, OceanWaveFloater) landed with regressions.
 - Route recorder (PETARI_ROUTE_RECORD, recorded_route.py): Kick/Launch/Warp
-  waypoints (fe2de6ccf); the user's Engine Room route is live-verified 5/5
+  waypoints (fe2de6ccf); the recorded Engine Room route is live-verified 5/5
   (x3, kick chain first try, resume-24) after the kick-chain reliability
   changes (7c1214b96). Verified dome routes are split from the generated plan so
   regenerating cannot drop them (953b7b3eb). Not verified live: the west-ledge
   kick outcome (unit-tested only).
-- Background isolation: hidden window, muted audio, private caches, 3 app
-  slots that drop to 1 while a person plays. The smoke QoS boost is opt-in
+- Background isolation: hidden window, muted audio, private caches, up to 3
+  concurrent background apps, dropping to 1 while a person plays. The smoke QoS boost is opt-in
   (17f724b41): the on/off A/B showed no benefit once load was controlled.
 - Saves verified across all 6 domes for all-missions, grand-finale and
   complete-luigi; Luigi reload passes (opening demo advanced with A,

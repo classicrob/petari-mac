@@ -567,7 +567,7 @@ provided, so any real FAT use fails to link.
 ### GX synchronisation (`petari_platform_gx_sync`, `native/gx/sync_*`)
 
 `gx_sync/gx_sync.cpp`; API in `include/petari/platform/gx_sync.hpp`; design
-and the end-of-frame deadlock analysis in `GX_SYNC_PLAN.md`. The platform
+and the end-of-frame deadlock analysis in `docs/dev/GX_SYNC_PLAN.md`. The platform
 worker also owns the FIFO/processor half in native/gx:
 `patch_aurora_sync.py`, `sync_backend.{h,cpp}` (C ABI between Aurora and SDK
 headers), and `sync_bridge.cpp` (public SDK entry points). Root owns the

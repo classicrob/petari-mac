@@ -1,5 +1,5 @@
 # The native application: entry point, platform start-up, and the frame seam
-# (petari/app.hpp, INTEGRATION_PLAN.md).
+# (petari/app.hpp, docs/dev/INTEGRATION_PLAN.md).
 #
 # Root integration: add_subdirectory(native/app) after native/gx, native/input,
 # native/home_menu and native/audio. It defines:

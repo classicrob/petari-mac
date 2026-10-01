@@ -49,7 +49,7 @@ Unsupported paths call `OSPanic` loudly instead of returning success
 | --- | --- | --- |
 | `GXSetZTexture` | (b), worked around | Z-texture replace is not implemented. The two clears that use it (`MainLoopFramework` and `DrawUtil`) draw on the orthographic far plane natively instead (PLAYTEST.md "Depth clears"). The other callers (`GXInit`, `ut_CharWriter`, `ImageEffectLocalUtil`) only disable it. |
 | `GXInvalidateTexAll` | (b), fixed | See the fix above. |
-| `GXInitFifoBase` | (a) | The FIFO is owned by Aurora and the GX sync layer (native/platform/GX_SYNC_PLAN.md). |
+| `GXInitFifoBase` | (a) | The FIFO is owned by Aurora and the GX sync layer (docs/dev/GX_SYNC_PLAN.md). |
 | `THPInit` returns TRUE | (a) | The decoder needs no setup. |
 
 The display-copy setters (`GXSetDispCopy*`, `GXCopyDisp`, `GXSetCopyFilter`)

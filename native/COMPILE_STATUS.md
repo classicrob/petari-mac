@@ -7,7 +7,7 @@ Audited on 2026-09-28 against the working native-port branch. These are Clang sy
 | Game C++ | 1605 | 1605 |
 | JSystem / nw4r C++ | 200 | 200 |
 
-The library worker's latest audit includes the native resource additions and the
+The latest library audit includes the native resource additions and the
 DSP-facing units. Native mailbox handles now carry host addresses without
 truncating them. These counts describe that audit snapshot; subsequent additions
 need their own build validation.
@@ -17,5 +17,3 @@ application reaches original game initialization, where runtime debugging is
 ongoing; title-screen and gameplay behavior have not yet been verified. Resource,
 platform, and focused Metal tests provide separate evidence, summarized in
 [README.md](README.md) and the subsystem reports.
-
-Detailed local reports: `build/library-worker-game-audit.json` and `build/library-worker-audit.json`.

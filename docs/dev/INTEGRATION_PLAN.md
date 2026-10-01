@@ -12,7 +12,7 @@ says so at start-up instead of assuming them.
 
 Not covered, because other workers own it: GX readbacks and the XFB/EFB copy
 implementation (root), and FIFO draw-sync/draw-done/breakpoint semantics
-(platform, `native/platform/GX_SYNC_PLAN.md`). Where this plan depends on
+(platform, `docs/dev/GX_SYNC_PLAN.md`). Where this plan depends on
 them, it states the requirement and leaves the design to them.
 
 ## 1. What the game does (traced)

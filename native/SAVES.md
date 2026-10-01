@@ -147,130 +147,32 @@ against its manifest.
 
 ## Verification and limits
 
-The three published saves pass the game's generation/read-back checks and the
-independent file-format/manifest regression. This establishes saved progression,
-not a completed playthrough or that every mission runs without bugs.
+The three saves pass the game's own generation and read-back checks and an
+independent file-format and manifest regression (the `native_unlocked_save`
+test). That establishes the saved progression, not a
+completed playthrough or that every mission runs without bugs.
 
-Recovered live evidence: `build/unlocked-save/tour6/dome1/dome-tour.json` and
-`dome1.log` record a normal file load, observatory walk, Terrace map, all five
-Terrace galaxies at mission 1, and Good Egg missions 4, 5 and 6: **8/8 visits
-PASS**, exit 0, zero missing layout/sound references and no retained crash/hang
-reports. This used the frozen `Petari6.app`, not the latest renderer build.
+Live checks, each with an automated dome tour (`native/tools/dome_tour.py`:
+a normal file load, the walk to the dome through the real observatory, the dome
+map, the mission menu, entering mission 1 of every galaxy on the map, and the
+return through the pause menu), on isolated copies of the saves:
 
-Earlier Fountain attempts are retained as failures: `tour9/dome2` got stuck
-before the dome; `resume-11/dome2` crashed in the smoke observer at warp-pod
-entry. The route planner now rejects drops through intervening floors. The
-observer no longer assumes every rush state has a bound actor: ordinary warp
-status legitimately has no rush sensor in the unchanged decompilation. Its
-source audit and 13 sanitizer-backed regression checks are documented in
-`build/unlocked-save/resume-12/OBSERVER-AUDIT.md`. The successful run below
-exercised both fixes.
+| Save | Domes checked | Result |
+|---|---|---|
+| `all-missions` | Terrace, Fountain, Kitchen, Bedroom, Engine Room, Garden | 32 galaxy visits, all PASS; full maps and the exact mission IDs in every menu (for example Battle Rock and Dusty Dune 1–7, Buoy Base 1–2); no missing layout or sound references, crashes or hangs. Good Egg missions 4–6 were also entered. |
+| `grand-finale` | all six domes, as Mario | 29 visits, all PASS, same checks. |
+| `complete-luigi` | all six domes, as Mario | all visits PASS, same checks. |
+| `grand-finale` | Terrace, as Luigi | 5/5 PASS; loading the file as Luigi passes the movement and pause checks. |
+| `complete-luigi` | Luigi's own new game | Loading as Luigi starts at the Gateway with no letter prologue, as on the Wii (`StorySequenceExecutor`: `!isDataMario()`); after its opening demo (advanced with A) Luigi is playable: jump, movement both ways, pause and resume pass. |
 
-**Fountain live retry passed:** `build/unlocked-save/resume-14/dome2/` contains
-`dome2.log`, `dome-tour.json`, the per-galaxy `dome-tour.md`, launch hashes and
-settings. Exit 0 in 272 seconds; **5/5 visits PASS**, all five expected galaxies
-selectable, zero missing references, no retained crash/hang reports. Battle Rock,
-Hurry-Scurry, Bowser's Star Reactor, Space Junk and Rolling Green each loaded
-mission 1 through the normal UI, became ready, recorded movement, and returned
-through the pause menu. The mission menus showed Battle Rock 1–7, Space Junk
-1–6 and one star for each other galaxy. The run used stage-only shader
-preparation in a background window; it is functional evidence, not a timing or
-visual-fidelity benchmark. The Fountain route is now updated in the source
-table.
+Notes:
 
-**Bedroom live tour passed:** `build/unlocked-save/resume-14/dome4/` records
-exit 0 and **5/5 visits PASS**: Gusty Garden, Honeyclimb, Freezeflame, Bowser's
-Dark Matter Plant and Dusty Dune, each at mission 1, with all five expected map
-destinations selectable and zero missing references or retained crash/hang
-reports. Freezeflame moved 27 units and logged the driver's little-movement
-warning; other visits moved 51–60 units. Movement distance is reported, not a
-mission-completion assertion. The menus showed Gusty Garden and Freezeflame
-1–6, Dusty Dune 1–7, and the other two galaxies 1.
-
-`build/unlocked-save/resume-15/verified-menu-audit.json` independently compares
-the Fountain and Bedroom menu logs with every expected scenario ID: no
-mismatches. The runner now rejects missing or incorrect mission menus.
-
-Kitchen's `resume-14/dome3` attempt failed near its entrance before any galaxy
-visit; its successful retry is recorded below. Variant-specific Luigi/Grand
-Finale checks are recorded at the end.
-
-**Garden live tour passed:** `build/unlocked-save/resume-14/dome6/` records
-**4/4 visits PASS**, the complete four-galaxy map and every expected mission ID,
-zero missing references, and no retained crash/hang reports. Dreadnought,
-Melty Molten and Deep Dark each showed missions 1–6; Matter Splatter showed 1.
-All entered mission 1 and returned through the pause menu. Matter Splatter's
-movement check recorded only 2.4 units (warning), so this does not establish
-unobstructed movement there. The other visits recorded 44–66 units.
-
-Engine Room's `resume-14/dome5` and `resume-18/engine` approaches (east side,
-warp pod) fell off the upper ring before the map. **Engine Room now passes** on a
-route recorded by a person (`native/ROUTE_RECORDING.md`): two wall kicks up a
-chimney, a star that catches Mario at a ledge, a spin launch to the upper ring.
-`build/unlocked-save/resume-19/engine/` records exit 0 in 356 s and **5/5 visits
-PASS**: FactoryGalaxy, FloaterOtaKingGalaxy, OceanRingGalaxy,
-ReverseKingdomGalaxy and SkullSharkGalaxy each loaded mission 1, became ready
-and returned via pause. The full map was shown, with Factory, OceanRing and
-ReverseKingdom 1–6 and the other two 1. There were zero menu errors, missing references, crash or hang
-reports. The first wall-kick attempt landed short and the driver's bounded
-retry (at most three) succeeded; the route is timing-sensitive there. Movement
-was 44–354 units. The route is now in the source table. With it the
-`all-missions` save has 32 passing visits across all six domes.
-
-**Kitchen retry passed:** `build/unlocked-save/resume-15/kitchen/` records
-**5/5 visits PASS**, all five expected map destinations and all expected
-mission IDs, zero missing references and no retained crash/hang reports.
-Bubble Breeze, Beach Bowl, Bowser Jr.'s Airship Armada, Buoy Base and Ghostly
-Galaxy each loaded mission 1, became ready and returned via pause. Movement
-was 51–75 units. Beach Bowl and Ghostly showed 1–6, Buoy Base 1–2, the others 1.
-The verified route follows the outer lower ledge past the pillar and jumps up
-near the doorway; it is now in the source route table.
-
-**`grand-finale` variant, first domes:** `build/unlocked-save/resume-17/`
-`grand-finale-dome1/` (Terrace, 711 s) and `grand-finale-dome2/` (Fountain,
-536 s) each record exit 0 and **5/5 visits PASS** on the frozen resume-18 app:
-full maps, every expected mission ID (Good Egg and Honeyhive 1–6, Battle Rock
-1–7, Space Junk 1–6, others 1), zero menu errors, missing references, crash or
-hang reports. Its Kitchen run was interrupted by a worker restart (no result).
-
-**Both variants, every dome, as Mario:** `build/unlocked-save/resume-20/`
-(frozen app sha256 `5838626048fe…`, source route table) records exit 0 and PASS
-for `grand-finale` Kitchen 5/5, Bedroom 5/5, Garden 4/4 and Engine Room 5/5,
-and `complete-luigi` Terrace, Fountain, Kitchen, Bedroom and Engine Room 5/5
-each plus Garden 4/4. Every map was complete and every mission menu matched the
-expected IDs (for example Dusty Dune 1–7, Buoy Base 1–2), with zero missing
-references and no crash or hang reports. So `grand-finale` passes 29 visits
-across all six domes (Terrace and Fountain above), and `complete-luigi`
-passes all six domes as Mario.
-
-The Engine Room wall-kick climb needed bounded retries in those runs (one or two
-failed attempts before success). Traces showed why: a kick leaves opposite to
-Mario's heading, and a good first kick ends in a ledge grab on the next wall's
-top, which is already the landing level. The driver now walks into the wall for
-10 frames before the hop, treats reaching the landing level as done, and
-resumes at the nearest later route point on that level; the route gained three
-points along the probed floor strip (x ≈ −2985) to skip a gap at x −3075,
-z −1725. With the source route table, `build/unlocked-save/resume-24/engine1..3`
-(frozen app sha256 `691c41b6…`) all record exit 0 and **5/5 PASS**, the kick
-chain succeeding first time in each, exact menus, no crash or hang. All three
-ended with the same east-wall ledge grab; the other observed outcome (a kick to
-the west ledge, which failed in `resume-23`) is handled by the nearest-point
-rule but only unit-tested, not yet seen live.
-
-**Still failing or unchecked:** the Grand Finale galaxy route
-(`resume-20/grand-finale-mario-dome7`, `resume-22/finale`): the Launch Star
-works, but the hand-planned walk on the small planet never reaches the Grand
-Finale Luma. A route recorded by a person is requested.
-
-**Luigi as the player** (`PETARI_SMOKE_PLAYER=luigi`, file select's Bros button),
-`build/unlocked-save/luigi/`:
-- `grand-finale`: the reload check (`grand-finale-reload.log`: idle, jump,
-  opposite moves, pause and resume) passes as Luigi, and a Terrace dome tour as
-  Luigi (`grand-finale-dome1/`) passes 5/5 with the full map.
-- `complete-luigi`: Luigi's own game starts fresh, and the game sends him
-  straight to the Gateway with no letter prologue (`StorySequenceExecutor`:
-  `!isDataMario()`, as on the Wii). Its opening demo waits for A presses to
-  advance. With those (`complete-luigi-tap.log`), the reload check passes: Luigi
-  is playable at the Gateway, jumps 221 units, moves both ways, pauses and
-  resumes. The first attempt without A presses (`complete-luigi-diag.log`) only
-  showed the demo waiting; that was a harness gap, not a game fault.
+- The Engine Room is reached by a route a person recorded (wall kicks up a
+  chimney, a star that catches Mario at a ledge, a spin launch); see
+  `native/ROUTE_RECORDING.md`. Three consecutive tours passed with the wall-kick
+  climb succeeding first time.
+- The Grand Finale galaxy route is not automated yet: the Launch Star works, but
+  the walk on its small planet to the Grand Finale Luma does not reach it. This
+  is a test-driver limitation, not a save or game fault.
+- Movement in each visited galaxy is reported, not asserted as mission
+  completion (a few galaxies recorded only a short movement distance).

@@ -26,8 +26,8 @@ reaches the stage, or completing the mission.
   Requires `--test-fixture stage`. Tests: `native_app_smoke_stage`.
 - `native/tools/stage_sweep.py`: enumerates stages and scenarios from the disc
   (scenariodata.bcsv; domes from AstroDome placement layers A–F and the hidden
-  galaxies' `Appear<Galaxy>` flags), runs each through the single-app lock `build/locked-app.sh` (`--lock-script`)
-  with a per-run in-lock alarm, and classifies the log and exit status.
+  galaxies' `Appear<Galaxy>` flags), runs each with a per-run alarm, and
+  classifies the log and exit status.
 
 ## Running
 
@@ -143,11 +143,9 @@ run instrumentation evidence rather than a timing baseline.
 
 ## Concurrent functional runs
 
-`--jobs 1..3` schedules bounded scenarios concurrently. Each instance still enters
-`build/locked-app.sh` independently; the lead controls available slots in
-`build/.app-slots`. `--lock-class functional` is the default.
-`--lock-class quiet --jobs 1` requests exclusive access for timing/audio
-measurements. Parallel batches and detected overlaps are marked as not
+`--jobs 1..3` schedules bounded scenarios concurrently. Run timing/audio
+measurements with `--jobs 1` on an otherwise idle machine, one app at a time,
+with no concurrent builds. Parallel batches and detected overlaps are marked as not
 performance evidence; no gameplay verdict is relaxed. Results publish atomically.
 
 Background mode now also requests a never-shown window and gain-zero SDL output.

@@ -25,7 +25,9 @@ guard let record = try JSONSerialization.jsonObject(with: data) as? [String: Any
     fail("The recorded playtest app must be alive with the expected bundle path")
 }
 let root = recordURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-for name in [".petari-app.lock"] {
+// The lock exists only on the shared test machine (build/locked-app.sh); elsewhere there is none to check.
+let sharedLocks = FileManager.default.fileExists(atPath: root.appendingPathComponent("build/locked-app.sh").path)
+for name in [".petari-app.lock"] where sharedLocks {
     let owner = try String(contentsOf: root.appendingPathComponent("build/" + name + "/owner"), encoding: .utf8)
     guard owner.trimmingCharacters(in: .whitespacesAndNewlines) == "cu-playtest" else { fail("Playtest must own app lock") }
 }

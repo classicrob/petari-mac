@@ -32,8 +32,8 @@ resume/movement checks. Jump height was 203.5 units; movement after resuming was
 360.38 units. PASS at frame 5411, followed by normal power-off and exit status 0.
 
 Component verification: `native_app_smoke`, `native_app_seam`, and `native_input`
-pass in the root build. The smoke worker also ran its 137 checks and 27 seam
-checks under ASan/UBSan.
+pass in the root build. The 137 smoke checks and 27 seam checks also pass
+under ASan/UBSan.
 
 ## Bug reproduced and fixed
 
@@ -199,8 +199,8 @@ records the frame, phase, position, event count and latest event in the first
 observed input batch. Pointer motion and focus changes are logged separately;
 they do not steer the story route and do not alone change its result.
 
-The user reported supplying a jump and steering around a wall in story run 6
-(`Downloads/IMG_2242.mov`). That run establishes HeavensDoorGalaxy loading and
+A playtest observer supplied a jump and steered around a wall in story run 6
+(screen recording). That run establishes HeavensDoorGalaxy loading and
 heap headroom, but not autonomous traversal. The revised castle route avoids
 the curb and building using a collision-derived path with stricter step and
 clearance limits. Story run 7 then completed the revised route with no physical gameplay input,
@@ -288,19 +288,19 @@ isolated fixture once, then launch each bounded session through the helper:
 
 ```sh
 python3 native/tools/cu_playtest.py --prepare
-# Freeze the current app while holding the shared build lock:
-build/locked-build.sh cu-freeze ditto build/macos-gx/native/app/Petari.app build/cu-playtest/frozen/Petari.app
+# Freeze the current app (with no build running):
+ditto build/macos-gx/native/app/Petari.app build/cu-playtest/frozen/Petari.app
 shasum -a 256 build/cu-playtest/frozen/Petari.app/Contents/MacOS/Petari
 python3 native/tools/cu_playtest.py --session 1 --app build/cu-playtest/frozen/Petari.app
 # After clean quit, use the same isolated save to check persistence:
 python3 native/tools/cu_playtest.py --session 2 --app build/cu-playtest/frozen/Petari.app
 ```
 
-The helper owns `build/cu-playtest/user`, obtains the lead-dispatched `locked-app.sh` lock followed by `locked-sweep-lane.sh`,
+The helper owns `build/cu-playtest/user`,
 launches only the app binary with that directory and the observatory marker,
-and limits each actual app session to 25 minutes (20 minutes by default). Computer-use sessions do not
-hold the build lock; dedicated timing measurements still require app → sweep-lane
-→ build locks. It records binary/save hashes,
+and limits each actual app session to 25 minutes (20 minutes by default).
+Run timing measurements on an otherwise idle machine, one app at a time, with
+no concurrent builds. It records binary/save hashes,
 PID, UTC times, exit status, boot/audio logs and frame CSV. It enables baton
 diagnostics with `PETARI_BATON_SAMPLE=0` to avoid sampling-induced pauses. A forced deadline exit
 is reported as failure, not a clean quit. `--prepare` refuses to overwrite an
@@ -344,7 +344,7 @@ Repeatable scenario script (observe between steps; do not run blind coordinates)
    for these steps. Check a zero exit and save writes. Relaunch as the next numbered
    session and verify the same file and any earned progress; do not infer save
    persistence merely from fixture state or a changed save-file hash.
-6. Quit the final session. Run `build/locked-build.sh cu-playtest python3 native/tools/cu_playtest.py --summarize`
+6. Quit the final session. Run `python3 native/tools/cu_playtest.py --summarize`
    to refresh `build/cu-playtest/analysis.json` without launching anything.
    Write a prioritized issue/coverage report at
    `build/cu-playtest/REPORT.md`, linking screenshots and timestamped log context.
@@ -365,12 +365,12 @@ Report observed facts separately from likely causes and untested scenarios. A
 screenshot is not continuous video, and device/audio counters are not a listening
 assessment. Do not modify game code during this diagnostic task.
 
-For this playtest the user explicitly authorized the optional macOS CGEvent
-keyboard-hold helper, because CUA has no held-key API. Compile it **before**
-launching the app, using the build lock for compilation only:
+For this playtest the optional macOS CGEvent keyboard-hold helper was
+authorized, because CUA has no held-key API. Compile it **before**
+launching the app:
 
 ```sh
-build/locked-build.sh cu-input swiftc native/tools/cu_hold_input.swift -o build/cu-playtest/cu-hold-input
+swiftc native/tools/cu_hold_input.swift -o build/cu-playtest/cu-hold-input
 ```
 
 After binding the running app with CUA and making it frontmost, a bounded forward
@@ -383,7 +383,7 @@ build/cu-playtest/cu-hold-input build/cu-playtest/active-session.json w 1.0
 Use fresh CUA accessibility/screenshot observations after each hold. Supported
 keys are W/A/S/D, Space, F, Q/E, C and Shift (lowercase argument names); up to three
 may be combined with commas. Holds are capped at three seconds. The helper checks
-the recorded PID and bundle, frontmost application and both app/sweep lock owners.
+the recorded PID and bundle and the frontmost application.
 It logs every key event to `actions.jsonl` and sends cleanup key-up events only
 to the original PID on normal return, focus loss, SIGTERM, SIGINT or SIGHUP.
 It does not open a macOS permission prompt if event-post access is unavailable.

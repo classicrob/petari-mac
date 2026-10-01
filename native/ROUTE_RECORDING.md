@@ -1,28 +1,26 @@
 # Record a foreground route
 
 Run from the repository root after quitting any previous Petari instance.
-This command uses your playtest copy; it does not install or replace a save.
+This command uses your normal save directory; it does not install or replace a save.
 The recorder itself only writes the CSV, while normal gameplay can save progress.
 
 ```sh
 env -u PETARI_SMOKE -u PETARI_DOME_ROUTE PETARI_SMOKE_BACKGROUND=0 \
-  PETARI_ROUTE_RECORD="$PWD/build/engine-room-$(date +%Y%m%d-%H%M%S).csv" \
-  build/locked-app.sh unlocked-save \
-  build/unlocked-save/recorder/Petari.app/Contents/MacOS/Petari \
-  --user "$HOME/Petari-playtest/all-missions"
+  PETARI_ROUTE_RECORD="$PWD/build/route-$(date +%Y%m%d-%H%M%S).csv" \
+  build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari --disc build/game-data/RMGE01
 ```
 
-Select file 1, walk to the Engine Room, and quit once you enter the dome.
+Load a file and play the stretch you want to record (for example the walk from
+the observatory start to a dome), then quit.
 The terminal prints the recording path. Use a fresh launch for each route.
 Recording is off unless `PETARI_ROUTE_RECORD` is set, refuses existing files,
 and is disabled in background mode. Parent directories must already exist.
-The app lock serializes this with automated tests; it may wait for their slot.
 
 Convert the recording (replace the timestamp):
 
 ```sh
 python3 native/tools/recorded_route.py \
-  build/engine-room-TIMESTAMP.csv build/engine-room-waypoints.csv
+  build/route-TIMESTAMP.csv build/route-waypoints.csv
 ```
 
 The converter selects one continuous AstroGalaxy visit. It rejects recordings
@@ -53,8 +51,7 @@ termination can lose the final buffered frames. Data is read under the game
 thread's ownership with a host-allocation scope and the observer's scene/core
 validity guards. Recording never changes game state or emits input.
 
-Build and five targeted CTests passed in `build/unlocked-save/recorder/`.
-The CSV writer is exercised under UBSan, including background rejection,
+Covered by the native_route_record tests. The CSV writer is exercised under UBSan, including background rejection,
 escaping and no-overwrite behavior; conversion tests cover jump/spin/landing
 markers and multiple-stage-visit rejection. Full human-route recording and
 replay remain to be verified with an actual recording.
@@ -84,7 +81,7 @@ Replay a star segment in a stage fixture:
 python3 native/tools/create_observatory_fixture.py --source build/observatory-user-2 --output build/<dir> --kind stage
 PETARI_SMOKE=replay PETARI_STAGE=EggStarGalaxy PETARI_SCENARIO=2 \
   PETARI_REPLAY_ROUTE=$PWD/build/replays/NAME/02-EggStarGalaxy-s2.csv \
-  build/locked-app.sh <owner> build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari \
+  build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari \
   --disc build/game-data/RMGE01 --user build/<dir> --test-fixture stage
 ```
 

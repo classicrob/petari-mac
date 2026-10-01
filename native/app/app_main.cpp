@@ -1,5 +1,5 @@
 // Native entry point: window, platform start-up, then the game's main loop
-// on this (the macOS main) thread. See native/app/INTEGRATION_PLAN.md.
+// on this (the macOS main) thread. See docs/dev/INTEGRATION_PLAN.md.
 
 #include <aurora/aurora.h>
 #include <aurora/main.h>

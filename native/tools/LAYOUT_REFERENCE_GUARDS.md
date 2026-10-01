@@ -35,11 +35,11 @@ Logging happens once per pair; e.g.:
 [layout] missing animation layout="Race" name="Record" count=2; operation skipped
 ```
 
-The lead/sweep worker should require both occurrence counters to be zero before
+The smoke/sweep harness should require both occurrence counters to be zero before
 reporting smoke PASS, and include their values in final run diagnostics. No
 counter reset is exposed; startup failures must not disappear at scene changes.
-This worker exposes the hooks but does not modify the concurrently edited smoke
-state machine or claim that PASS gating has already been wired.
+This change exposes the hooks but does not modify the smoke state machine;
+PASS gating has not yet been wired.
 
 The diagnostic ledger is thread-safe, has process lifetime, and enters
 `PetariNative::HostAllocationScope` before all standard-library storage operations.
@@ -98,9 +98,9 @@ The fixture's HostAllocationScope implementation is a counting stub; full engine
 compilation and the existing allocation tests remain separate validation.
 
 ```sh
-build/locked-build.sh asset-guards cmake --build build/macos-gx \
+cmake --build build/macos-gx \
   --target petari_game_objects petari_host_runtime -j4
-build/locked-build.sh asset-guards ctest --test-dir build/macos-gx \
+ctest --test-dir build/macos-gx \
   -R '^native_(layout_asset_guards|asset_reference_sweep|galaxy_name_plate)$' \
   --output-on-failure
 ```

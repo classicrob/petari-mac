@@ -128,7 +128,7 @@ target_link_libraries(petari_platform_nwc24 PUBLIC petari_platform_os petari_nat
 target_compile_features(petari_platform_nwc24 PUBLIC cxx_std_17)
 
 # GP interrupts and GX synchronisation (draw sync, draw done, FIFO
-# breakpoints) for the renderer's GX wrappers. See GX_SYNC_PLAN.md.
+# breakpoints) for the renderer's GX wrappers. See docs/dev/GX_SYNC_PLAN.md.
 add_library(petari_platform_gx_sync STATIC gx_sync/gx_sync.cpp)
 target_include_directories(petari_platform_gx_sync PUBLIC include PRIVATE os)
 target_link_libraries(petari_platform_gx_sync PUBLIC petari_platform_os petari_native_config petari_host_runtime)

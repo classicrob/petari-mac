@@ -15,8 +15,9 @@ through [Aurora](https://github.com/encounter/aurora). There is no emulator.
 > from a disc you own. This repository contains no Nintendo assets and no
 > download links for them.
 >
-> Much of the native port (everything under `native/` and the `PETARI_NATIVE`
-> hooks) was written with AI assistance. It is not decompilation work and is not
+> Most of the native port (everything under `native/` and the `PETARI_NATIVE`
+> hooks) was written by AI models under the repository owner's direction (see
+> [Acknowledgments](#acknowledgments)). It is not decompilation work and is not
 > intended for submission upstream.
 
 The game is playable but this is still a development build: expect bugs, and
@@ -143,6 +144,10 @@ Detailed test coverage: [native/RELIABILITY.md](native/RELIABILITY.md) and
 
 - **Petari decompilation**: the [SMGCommunity/Petari](https://github.com/SMGCommunity/Petari)
   contributors. Released under CC0 1.0 ([LICENSE](LICENSE)).
+- **This port's own code** (the native port, its tools and documentation) is
+  also released under **CC0 1.0**, the same terms as the decompilation: you can
+  use it for any purpose without asking. The dependencies below keep their own
+  licenses.
 - **Aurora** by Luke Street ([encounter/aurora](https://github.com/encounter/aurora)),
   the GX-to-WebGPU/Metal backend: MIT License, Copyright (c) 2022 Luke Street.
 - **Dawn** ([dawn.googlesource.com](https://dawn.googlesource.com/dawn)), the
@@ -161,6 +166,19 @@ These dependencies are downloaded at build time, not included in this
 repository; their license files come with their sources (Dawn's prebuilt
 package does not include one; see the Dawn repository). If you distribute a
 built app, include those licenses with it.
+
+## Acknowledgments
+
+Most of this port was written by AI models, working under the direction of the
+repository owner ([classicrob](https://github.com/classicrob)), who chose the
+goals, played the builds and reviewed the results:
+
+- **Claude**, by Anthropic, used through Claude Code.
+- **Astra**, an OpenAI model, used through Codex.
+
+Many of their commits carry `Co-Authored-By` trailers. The port builds on
+the work of the Petari decompilation contributors and on Aurora; without them it
+would not exist.
 
 Super Mario Galaxy is a trademark of Nintendo. This project is not affiliated
 with or endorsed by Nintendo.

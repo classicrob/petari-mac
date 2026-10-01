@@ -154,9 +154,9 @@ some have no model, while dynamic factory callbacks can add dependencies.
 python3 native/tools/collect_pipeline_seed_inputs.py \
   --files build/game-data/RMGE01/files --all-stages \
   --output build/pipeline-all-stage-inputs.json
-build/locked-build.sh pipeline cmake --build build/macos-gx \
+cmake --build build/macos-gx \
   --target petari_pipeline_replay -j2
-build/locked-build.sh pipeline python3 native/tools/build_pipeline_stage_seeds.py \
+python3 native/tools/build_pipeline_stage_seeds.py \
   --files build/game-data/RMGE01/files \
   --inputs build/pipeline-all-stage-inputs.json \
   --baseline build/observatory-user-2/pipeline_cache.db
@@ -245,7 +245,7 @@ geometry visits, not that many distinct runtime draws or shaders.
 48 scenario roots plus ScenarioSelect/GalaxyMap produce 50 manifests. Every one
 merges all 602 baseline rows. AstroGalaxy has 1,658 configs from 165 mapped archives;
 EggStarGalaxy has 1,385 from 202; each overlay has 631 from all 92 layout archives.
-The seed range is 631–1,658 configs. A locked `petari` build passed; all 100
+The seed range is 631–1,658 configs. A `petari` build passed; all 100
 bundled DB/JSON files match generated sources byte-for-byte (212.1 MiB total). Larger seeds increase cold compilation work;
 Blocking remains default, the ten-second stage gate can time out, and no claim of
 locked 60 fps or eliminated stalls follows from this corpus check. Observed
@@ -327,8 +327,8 @@ uses CMake's configured Aurora source directory rather than requiring a sibling
 reference checkout.
 
 ```sh
-build/locked-build.sh pipeline-build cmake --build build/macos-gx -j2
-build/locked-build.sh pipeline-build ctest --test-dir build/macos-gx \
+cmake --build build/macos-gx -j2
+ctest --test-dir build/macos-gx \
   -R '^native_pipeline_' --output-on-failure
 ```
 
@@ -337,9 +337,9 @@ in 141.78 seconds (`build/pipeline-prep-measure/resume-background/full-ctest.log
 The seven pipeline tests took 0.04–5.24 seconds each. This is a shared-build
 suite result, not a separate clean-build or live-play verification.
 
-These are component and source checks. Cold/warm route measurements are separate
-and must hold app, sweep-lane and build locks in that order. All heavy CPU work,
-including standalone compilations and sanitizer/stress runs, holds the build lock.
+These are component and source checks. Cold/warm route measurements are separate:
+run them on an otherwise idle machine, one app at a time, with no concurrent
+builds, compilations or sanitizer/stress runs.
 
 
 ## Default startup preparation and retained observations
@@ -394,7 +394,7 @@ stage gates and blocking resolves. Cold fixtures contain only isolated NAND and
 the fixture marker. OS Metal caches are not cleared; “cold” means empty app caches.
 Warm runs require a successful preceding cold route. The first corrected run was
 aborted under host load above 200; it is explicitly rejected as a performance
-comparison. Requeued runs acquire all three locks before their timers start.
+comparison. Requeued runs wait for an idle machine before their timers start.
 
 
 ## Controlled app-cache cold/warm route, checkpoint 8c4c107cf
@@ -402,7 +402,7 @@ comparison. Requeued runs acquire all three locks before their timers start.
 Artifacts: `build/pipeline-prep-measure/resume-8c4/{stage-cold,stage-warm}`.
 Both runs passed the galaxy smoke through Good Egg mission 1 using the same
 frozen app/seeds, automatic four-worker pool, Blocking policy, global preparation
-off and owner tracing off. Each held app, sweep-lane and build locks. Cold means
+off and owner tracing off. Each ran alone on an otherwise idle machine. Cold means
 empty **app** caches; the OS Metal cache was not cleared. All comparisons below
 are this pair, not the earlier load-contaminated aborted run.
 
@@ -454,7 +454,7 @@ explain or eliminate those stalls, and these results do not establish locked 60.
 
 `build/pipeline-prep-measure/resume-8c4/global-cold` passed the same galaxy
 route with an independent empty app-cache fixture, the same frozen app, four
-compile workers, and all three quiet locks. macOS's own Metal cache was not
+compile workers, and an otherwise idle machine. macOS's own Metal cache was not
 cleared. `PETARI_PIPELINE_GLOBAL_PRECOMPILE=1` prepared all 8,355 GX configs
 in 221.016 seconds (8,363 runtime builds including clear masks); whole-process
 elapsed time was 331.590 seconds. Early work progressed around 21 configs/s;
@@ -570,7 +570,7 @@ finalization itself only computes a key.
 `patch_aurora_pipeline_imgui.py` moves ImGui device-object creation immediately
 after backend initialization in Aurora initialization, before `startOS()`.
 It records `[gx pipeline prewarm] kind=imgui ready=... build_ms=...` and preserves
-the SDL renderer branch. The lead separately added the normal host-blocking
+the SDL renderer branch. A separate change added the normal host-blocking
 release around first-frame event/presentation work in `frame_seam.cpp`; this
 also protects any remaining lazy host work on that frame.
 
@@ -625,7 +625,7 @@ apps retain their original 8,355-config manifests.
 
 ## Completed frozen preparation comparisons
 
-The triple-lock runs below passed their synthetic observatory-to-Good-Egg smoke.
+The quiet-machine runs below passed their synthetic observatory-to-Good-Egg smoke.
 Application-cold means an empty isolated application cache; the system Metal
 cache was not cleared. Sources and exact binary hashes are in each `run.json`
 under `build/pipeline-prep-measure/`.
@@ -670,7 +670,7 @@ For a user accepting a few minutes once, full preparation with progress is
 the best-supported option for avoiding first-visit shader gates: the measured
 warm repeat took 1.56 s. Background preparation is a promising immediate-play
 alternative, but its uncached loading benefit and total completion time still
-need measurement. Based on this evidence, the lead approved default full
+need measurement. Based on this evidence, the project adopted default full
 preparation with a skippable native progress screen. Corrected-build live
 validation of that new screen is pending; no completion-marker shortcut is used.
 
