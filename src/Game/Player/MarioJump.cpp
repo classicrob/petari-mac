@@ -44,6 +44,7 @@ namespace {
     };
     OdysseyAir sOdyssey;
     bool sOdysseyGroundPoundJump = false;  // the next tryJump is a ground-pound jump
+    PetariNative::Odyssey::Air sOdysseyLanded = PetariNative::Odyssey::Air::None;  // the mod's move that just landed (doLanding)
 
     bool odysseyOn() { return petari_mod_enabled(kModOdysseyMovement); }
 
@@ -1651,6 +1652,7 @@ void Mario::procJump(bool a1) {
 
     if ((mMovementStates._1) != 0 && !a1) {
 #ifdef PETARI_NATIVE
+        sOdysseyLanded = sOdyssey.active ? sOdyssey.air.kind : PetariNative::Odyssey::Air::None;
         sOdyssey.active = false;
         PetariNative::Odyssey::Live::noSpinAir = false;
 #endif
@@ -2717,6 +2719,40 @@ void Mario::doLanding() {
 
     fixFrontVecByGravity();
 
+#ifdef PETARI_NATIVE
+    {
+        // OdysseyMovement: a long jump or dive landed with a direction held goes
+        // straight into a run at the landing speed (SMO keeps the momentum; the run
+        // then slows to its cap at 14/120 per frame). Galaxy would drop the long
+        // jump's speed and end the dive in a belly flop. The dive lands with the
+        // failed dive's forward roll as the get-up. Stick released: Galaxy's landing.
+        const PetariNative::Odyssey::Air landed = sOdysseyLanded;
+        sOdysseyLanded = PetariNative::Odyssey::Air::None;
+        if (odysseyOn() && !doHardLanding && isStickOn() &&
+            (landed == PetariNative::Odyssey::Air::LongJump || landed == PetariNative::Odyssey::Air::Dive)) {
+            TVec3f up(-mActor->_240);
+            MR::normalizeOrZero(&up);
+            TVec3f horizontal(mJumpVec - up * up.dot(mJumpVec));
+            const f32 speed = horizontal.length();
+            if (speed > 1.0f) {
+                MR::normalize(&horizontal);
+                setFrontVecKeepUp(horizontal);
+                if (mMovementStates._A) {
+                    cancelSquatMode();
+                }
+                mWalkSpeed = speed / mActor->getConst().getTable()->mWalkSpeed;
+                if (landed == PetariNative::Odyssey::Air::Dive) {
+                    changeAnimation("飛び込み失敗回転着地", "基本");
+                } else {
+                    stopAnimation(nullptr, "基本");
+                }
+                std::fprintf(stderr, "[odyssey] %s landed running at %.3f\n",
+                             landed == PetariNative::Odyssey::Air::Dive ? "dive" : "long jump", speed);
+                goto POST_LANDING;
+            }
+        }
+    }
+#endif
     if (!doHardLanding && !mDrawStates._C && _430 != 0xE && !isAnimationRun("飛び込みジャンプ") && !isAnimationRun("後方飛び込みジャンプ") &&
         !_10._8 && !isAnimationRun("水上ダメージ中")) {
         if (_430 == 5 && checkSquat(false)) {

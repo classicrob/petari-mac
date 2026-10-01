@@ -24,7 +24,10 @@
 //      stops Mario, jump against it, slide 20 frames once he hangs on it (logs
 //      "MOVEMENT wall slide: ..." with the fall per frame), then A held 15 frames
 //      ("MOVEMENT wall jump: apex ..." from the press). Run it alone
-//      (PETARI_MOVEMENT_ONLY=wall) where a wall is in reach.
+//      (PETARI_MOVEMENT_ONLY=wall) where a wall is in reach;
+//  11. landings: a long jump and a dive, each landed with the stick held and
+//      released; logs "MOVEMENT <name> landing: speed <v> on the landing frame;
+//      every 5th frame: ..." over the 30 frames after it.
 // With PETARI_XFB_DUMP, each move marks its name as the dump label (for example
 // PETARI_XFB_DUMP_LABELS="long jump,dive").
 // PETARI_MOVEMENT_ONLY=<name>[,<name>...] keeps only the tasks whose name
@@ -59,7 +62,7 @@ public:
     bool wantsPlayer() const { return mPhase != Phase::Boot || mBoot.wantsPlayer(); }
 
 private:
-    enum class Phase { Boot, Settle, Jump, Land, Run, Crouch, Hop, Pound, Reverse, Roll, WallRun, WallClimb, WallSlide, Done };
+    enum class Phase { Boot, Settle, Jump, Land, Run, Crouch, Hop, Pound, Reverse, Roll, WallRun, WallClimb, WallSlide, Landed, Done };
     struct Release {
         unsigned long frame;
         Button button;
@@ -76,6 +79,9 @@ private:
         bool dive = false;         // with groundPound: Spin during the pound, measured from there
         int roll = 0;              // with crouch: Spin instead of A, then the ground speed is logged for this many frames
         bool wall = false;         // run into a wall, jump against it, slide, wall-jump (measured from the press)
+        int land = 0;              // after landing, log the ground speed for this many frames
+        bool releaseStick = false; // release the stick at take-off (lands with it released)
+        bool airStick = false;     // hold the stick from take-off (lands with it held)
     };
 
     void finish(Result result, const std::string& reason, Step& step);

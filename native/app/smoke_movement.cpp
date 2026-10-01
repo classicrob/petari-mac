@@ -52,6 +52,10 @@ MovementDriver::MovementDriver(unsigned long frameLimit) : mBoot(frameLimit + 1,
         {"sideflip", 6, true, 45, false, 0, false, 2},
         {"roll", 0, false, 0, false, 3, false, 0, false, 120},
         {"wall jump", 15, false, 0, false, 0, false, 0, false, 0, true},
+        {"long jump landing (stick held)", 6, true, 40, false, 3, false, 0, false, 0, false, 30},
+        {"long jump landing (stick released)", 6, true, 40, false, 3, false, 0, false, 0, false, 30, true},
+        {"dive landing (stick held)", 6, false, 0, false, 0, true, 0, true, 0, false, 30, false, true},
+        {"dive landing (stick released)", 6, false, 0, false, 0, true, 0, true, 0, false, 30},
     };
     if (const char* dir = std::getenv("PETARI_MOVEMENT_WALL_DIR"); dir != nullptr) {
         const std::string d(dir);
@@ -89,6 +93,7 @@ const char* MovementDriver::phase() const {
     case Phase::WallRun: return "movement: running to a wall";
     case Phase::WallClimb: return "movement: jumping against the wall";
     case Phase::WallSlide: return "movement: sliding down the wall";
+    case Phase::Landed: return "movement: ground speed after landing";
     case Phase::Land: return "movement: landed";
     case Phase::Done: return "movement: done";
     }
@@ -192,6 +197,14 @@ Step MovementDriver::step(const Observation& o) {
         mTakeoffSpeed = horizontal;
         tap(button, static_cast< unsigned long >(button == Button::A ? task.holdA : kTapFrames), step);
         PetariNative::EfbDump::mark(task.name);  // opt-in image dump (PETARI_XFB_DUMP); inert otherwise
+        if (task.releaseStick && mStickHeld) {
+            step.presses.push_back({Button::StickUp, false});
+            mStickHeld = false;
+        }
+        if (task.airStick && !mStickHeld) {
+            step.presses.push_back({Button::StickUp, true});
+            mStickHeld = true;
+        }
         mPhase = Phase::Jump;
         mPhaseFrames = 0;
     };
@@ -347,6 +360,19 @@ Step MovementDriver::step(const Observation& o) {
         }
         break;
     }
+    case Phase::Landed: {
+        mSpeeds.push_back(horizontal);
+        if (static_cast< int >(mPhaseFrames) >= task.land) {
+            std::string speeds;
+            for (size_t i = 0; i < mSpeeds.size(); i += 5) speeds += (speeds.empty() ? "" : " ") + num(mSpeeds[i]);
+            note(std::string("MOVEMENT ") + task.name + ": speed " + num(mSpeeds[0]) + " on the landing frame; every 5th frame: " + speeds);
+            ++mTask;
+            mPhase = Phase::Land;
+            mPhaseFrames = 0;
+            mReady = 0;
+        }
+        break;
+    }
     case Phase::Roll: {
         if (mPhaseFrames > 1) mSpeeds.push_back(horizontal);
         // A boost (15 frames apart at least; the emulated shake behind Spin repeats
@@ -439,6 +465,12 @@ Step MovementDriver::step(const Observation& o) {
             note(std::string("MOVEMENT ") + task.name + ": apex " + num(mApex) + " after " + std::to_string(mApexFrame) +
                  " frames, take-off speed " + num(mTakeoffSpeed) + ", landed after " + std::to_string(mPhaseFrames) + " frames, from (" +
                  num(mStartX) + ", " + num(mStartY) + ", " + num(mStartZ) + ")");
+            if (task.land > 0) {
+                mSpeeds.assign(1, horizontal);  // the landing frame
+                mPhase = Phase::Landed;
+                mPhaseFrames = 0;
+                break;
+            }
             ++mTask;
             mPhase = Phase::Land;
             mPhaseFrames = 0;

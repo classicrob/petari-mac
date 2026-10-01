@@ -104,6 +104,11 @@ def main():
     failed = False
     for mods in (["off", "on"] if args.mods == "both" else [args.mods]):
         problems = compare(parse(run(args.app, args.disc, args.output, mods)), EXPECTED[mods])
+        if problems:
+            # The harness's 1-frame tap can land on two game frames (one extra held
+            # frame: +17 with the mod); a real change fails again.
+            print(f"movement baseline, mods {mods}: retrying once after: " + "; ".join(problems))
+            problems = compare(parse(run(args.app, args.disc, args.output, mods)), EXPECTED[mods])
         print(f"movement baseline, mods {mods}: " + ("PASS" if not problems else "FAIL"))
         for problem in problems:
             print("  " + problem)

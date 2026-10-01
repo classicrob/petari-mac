@@ -58,6 +58,9 @@ Measured in the game (`PETARI_SMOKE=movement` on the observatory's flat start,
 | Roll (crouch + Spin), boost at frame 30 | none | 20 → ×0.998, boost 22.95 | 20, ×0.998, boost 23 |
 | Wall slide (fall per frame after touching) | Galaxy's wall stick | 0 while held, then 0.5, 1.0, ... (+0.5 a frame) | held 3 frames, gravity 0.5 |
 | Wall jump (from the slide) | Galaxy's (13 away, 30 up) | 267.000, 8.6 away | 267 |
+| Long jump landing, stick held (ground speed on the frames after) | 7.85, then back up to 11.6 by frame 30 | 22.60, slowing 0.117/frame to 19.68 at frame 30 | keeps its speed |
+| Dive landing, stick held | stop (belly flop), then a walk from 0 | 18.16 at frame 5, slowing to 15.25 at frame 30 (landed at 19.91) | see below |
+| Long jump / dive landing, stick released | stop | stop (Galaxy's landing) | |
 
 The long jump and dive values are from the per-frame trace
 (`PETARI_ODYSSEY_TRACE=1`: take-off at y 392.21, peak 536.21; dive start
@@ -69,6 +72,19 @@ sequence Mario faces a wall. The wall slide and wall jump are measured alone
 (`PETARI_MOVEMENT_ONLY=wall`) against an `InvisibleWallJump10x20` added to the
 observatory with `native/tools/stage_edit.py` (at 2800, 1700, -3100, `dir_x=-90`:
 the object's collision is a flat 1000 × 1990 plane that must be turned upright).
+
+Landings (user feedback, 2026-10-01): with a direction held, a long jump or a
+dive lands straight into a run at its landing speed. The run then slows to its
+cap at SMO's 14/120 per frame, and the dive's get-up is the failed dive's
+forward roll. This is a design decision. The decomp's dive state
+(`PlayerStateHeadSliding`) ends when Mario touches the ground, and the code that
+picks the next state (`PlayerActorHakoniwa`) is not decompiled. smo.wiki only
+says that holding ZL on landing turns the dive into a roll, and the movement
+sheet has no landing data. So SMO's belly-slide speed, friction and get-up timing
+are unknown. With the stick released, Galaxy's landing stays (a stop).
+Measured with the harness's landing tasks
+(`PETARI_MOVEMENT_ONLY="dive landing (stick held)"` and so on), each run alone
+from the start point.
 
 On Good Egg (EggStarGalaxy, planet gravity) with the mod on, the stage smoke
 passes and the same harness measured the standstill jumps 258.000 / 105.000,
