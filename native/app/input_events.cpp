@@ -163,7 +163,8 @@ void pressButton(int button, bool down) {
     static const Input::Action kActions[] = {Input::Action::A,         Input::Action::B,     Input::Action::StickUp,
                                              Input::Action::StickDown, Input::Action::Plus,  Input::Action::Minus,
                                              Input::Action::StickLeft, Input::Action::StickRight,
-                                             Input::Action::Shake,     Input::Action::DpadLeft, Input::Action::DpadRight};
+                                             Input::Action::Shake,     Input::Action::DpadLeft, Input::Action::DpadRight,
+                                             Input::Action::NunchukZ};
     if (button < 0 || button >= static_cast<int>(sizeof(kActions) / sizeof(kActions[0]))) {
         return;
     }

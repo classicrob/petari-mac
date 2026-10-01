@@ -22,6 +22,7 @@ extern "C" void petari_gx_pipeline_report();
 #include "smoke.hpp"
 #include "route_record.hpp"
 #include "smoke_domes.hpp"
+#include "smoke_movement.hpp"
 #include "smoke_replay.hpp"
 #include "smoke_goodegg.hpp"
 #include "smoke_soak.hpp"
@@ -224,6 +225,7 @@ Smoke::SoakDriver* gSoak = nullptr;
 // Or the dome tour (smoke_domes.hpp), PETARI_SMOKE=domes.
 Smoke::DomesDriver* gDomes = nullptr;
 Smoke::ReplayDriver* gReplay = nullptr;
+Smoke::MovementDriver* gMovement = nullptr;
 
 unsigned long environmentNumber(const char* name, unsigned long fallback) {
     const char* value = std::getenv(name);
@@ -255,6 +257,15 @@ void startSmoke() {
         gSoak = new Smoke::SoakDriver(frames, soak);
         std::fprintf(stderr, "PETARI SMOKE: script soak (%zu stage(s), %.0f minutes), stage frame limit %lu, stall limit %lu s\n",
                      soak.stages.size(), soak.minutes, frames, stall);
+        std::fflush(stderr);
+        Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
+        return;
+    }
+    if (Smoke::movementEnabledFromEnvironment()) {
+        const unsigned long frames = environmentNumber("PETARI_SMOKE_FRAMES", 36000);
+        const unsigned long stall = environmentNumber("PETARI_SMOKE_STALL_SECONDS", 60);
+        gMovement = new Smoke::MovementDriver(frames);
+        std::fprintf(stderr, "PETARI SMOKE: script movement, frame limit %lu, stall limit %lu s\n", frames, stall);
         std::fflush(stderr);
         Smoke::startWatchdog(static_cast<unsigned>(stall), 20);
         return;
@@ -611,6 +622,8 @@ extern "C" void petari_host_frame_seam(void) {
         runSmoke(gDomes);
     } else if (gReplay != nullptr) {
         runSmoke(gReplay);
+    } else if (gMovement != nullptr) {
+        runSmoke(gMovement);
     }
     if (Soak::telemetryActive()) {  // PETARI_SOAK_CSV: frame times and, periodically, the JKR heaps
         static unsigned long frames = 0;

@@ -40,6 +40,28 @@ run turning), which matches the constants wherever it was checked.
 | Frame rate | 60 | 60 | 1 |
 | First jump | 17–19.5 u/f up, gravity 1.5 (105–312 u high) | `mJumpHeight[0]` 22 up, gravity 1.8 | similar |
 
+Measured in the game (`PETARI_SMOKE=movement` on the observatory's flat start,
+2026-10-01; heights along gravity from the take-off point):
+
+| | Galaxy (mod off) | Odyssey mod on | SMO (decomp/community) |
+|---|---|---|---|
+| Standstill jump, A held / tapped | 260.0 / 156.4 | 258.000 / 105.000 | 258 / 105 |
+| Run top speed, frames to 95% | 11.97 u/f, 46 | 13.998 u/f, 41 | 14, 40 |
+| Running jump, held | 260.0 | 312.000 | 312 |
+| Double jump (chained) | 345.2 | 346.500 | 346.5 |
+| Triple jump (chained) | 738.0 | 550.000 | 550 |
+| Ground-pound jump | 260.0 (a normal jump) | 513.500 | 513.5 (measured 513) |
+| Long jump | 240.4 | 144.000 | 144 |
+| Dive (from a ground pound) | none | 182.000 | 182 |
+| Backflip | 203.5 | 496.000 | 496 |
+| Sideflip | 284 (Galaxy's turn jump) | 496.000 | 496 |
+
+The long jump and dive values are from the per-frame trace
+(`PETARI_ODYSSEY_TRACE=1`: take-off at y 392.21, peak 536.21; dive start
+493.71, peak 675.71); the harness now measures from the last grounded position
+(the press frame can be mid crouch-slide), and the dive ran into higher ground
+after its peak on the observatory terrace.
+
 Both games use the same unit size for Mario (about 160 units tall) and run at
 60 frames per second, so distances, speeds (units/frame) and accelerations
 (units/frame²) carry over directly. **Decision: scale factor 1.0.** Scaling

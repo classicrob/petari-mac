@@ -8,6 +8,11 @@
 #include "Game/Player/MarioConst.hpp"
 #include "Game/Player/MarioMapCode.hpp"
 #include "Game/Player/MarioModule.hpp"
+#ifdef PETARI_NATIVE
+// OdysseyMovement mod (docs/dev/ODYSSEY_MOVEMENT.md): SMO's run speed rules.
+#include <petari/odyssey_move.hpp>
+extern "C" bool petari_mod_enabled(int mod);
+#endif
 #include "Game/Player/MarioMove.hpp"
 #include "Game/Player/MarioSwim.hpp"
 #include "Game/Util.hpp"
@@ -662,6 +667,21 @@ void Mario::updateWalkSpeed() {
     }
 
     targetWalkSpeed = targetWalkSpeed * static_cast< f32 >(256 - mSinkTimer) / 256.0f;
+#ifdef PETARI_NATIVE
+    // OdysseyMovement (Mods::Mod::OdysseyMovement = 2): on normal ground, SMO's
+    // run: cap 3 + 11*stick (14), accelerate 14/40, slow 14/120 above the cap,
+    // brake 1.4 with the stick released. Crouching, sinking, tornado and the
+    // special player modes keep Galaxy's speed.
+    if (petari_mod_enabled(2) && getPlayerMode() == 0 && !mMovementStates._A && !mMovementStates._F && mSinkTimer == 0 &&
+        !isStatusActive(17)) {
+        const f32 unit = mActor->getConst().getTable()->mWalkSpeed;  // Galaxy's full run, units/frame
+        // Galaxy's target is the stick after its dead zone (0..1); undo SMO's dead
+        // zone so stepRun sees the same tilt.
+        const f32 stick = targetWalkSpeed > 0.0f ? 0.1f + 0.9f * targetWalkSpeed : 0.0f;
+        mWalkSpeed = PetariNative::Odyssey::stepRun(mWalkSpeed * unit, stick) / unit;
+        return;
+    }
+#endif
     mWalkSpeed = mWalkSpeed * inertia + targetWalkSpeed * (1.0f - inertia);
 }
 #pragma pop
