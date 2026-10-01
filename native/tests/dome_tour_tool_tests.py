@@ -18,7 +18,10 @@ class DomeToolTests(unittest.TestCase):
         self.assertIn((1, "drop"), edges[0])
 
     def test_diagonal_ray_reaches_neighbor_cell(self):
-        import numpy as np
+        try:
+            import numpy as np  # observatory_routes.py's static collision needs numpy
+        except ImportError:
+            self.skipTest("numpy is not installed (pip install numpy); static-wall rays not checked")
         wall = np.array([[[65., 0., 20.], [65., 200., 20.], [65., 0., 100.]],
                          [[65., 200., 20.], [65., 200., 100.], [65., 0., 100.]]])
         clear = StaticWalls(wall).clear(25., 0., 25., (0, 0))

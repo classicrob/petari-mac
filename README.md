@@ -88,7 +88,10 @@ ctest --test-dir build/macos-gx -j 4
 (The app and some test executables are not part of the default `all` target;
 `--target petari` and `--target petari_tests` build them.)
 
-Timing-sensitive tests can fail on a heavily loaded machine; rerun them alone.
+Tests labelled `timing` check real-time behaviour (thread hand-off latency,
+audio pacing, the audio thread during shader compiles). They need a quiet,
+real Mac: run them alone with `ctest --test-dir build/macos-gx -L timing`, and
+skip them on shared or virtual machines with `-LE timing` (CI does).
 More build detail, including the sanitizer core-library presets, is in
 [native/README.md](native/README.md).
 

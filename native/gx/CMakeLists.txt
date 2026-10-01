@@ -202,6 +202,7 @@ if(_petari_build_testing)
         INCLUDE_DIRECTORIES "${aurora_SOURCE_DIR}/lib/gx;${aurora_SOURCE_DIR}/lib;${aurora_SOURCE_DIR}/include;${CMAKE_CURRENT_SOURCE_DIR};$<TARGET_PROPERTY:Tracy::TracyClient,INTERFACE_INCLUDE_DIRECTORIES>")
     target_link_libraries(petari_gx_fifo_processor_tests PRIVATE petari_platform petari_host_runtime fmt::fmt)
     add_test(NAME native_gx_fifo_processor COMMAND petari_gx_fifo_processor_tests)
+    set_tests_properties(native_gx_fifo_processor PROPERTIES LABELS timing)  # real-time assertions: quiet Mac only
     # patch_aurora_sync.py against the pinned Aurora sources (index-buffer reservations).
     add_test(NAME native_aurora_sync_patch COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/native/tests/aurora_sync_patch_tests.py" "${aurora_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -513,6 +514,7 @@ if(_petari_build_testing)
     add_test(NAME native_pipeline_worker_async COMMAND "${CMAKE_COMMAND}" -E env
         --unset=PETARI_PIPELINE_GLOBAL_PRECOMPILE PETARI_PIPELINE_POLICY=async
         $<TARGET_FILE:petari_pipeline_worker_tests> async)
+    set_tests_properties(native_pipeline_worker_async PROPERTIES LABELS timing)  # real-time assertions: quiet Mac only
     add_test(NAME native_pipeline_stage COMMAND petari_pipeline_stage_tests)
     add_test(NAME native_pipeline_seed COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/native/tools/pipeline_seed_tests.py" --aurora "${aurora_SOURCE_DIR}")

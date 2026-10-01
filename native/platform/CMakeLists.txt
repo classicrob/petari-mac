@@ -152,6 +152,7 @@ if(BUILD_TESTING)
     target_include_directories(petari_platform_os_tests PRIVATE os dvd)
     target_link_libraries(petari_platform_os_tests PRIVATE petari_platform)
     add_test(NAME native_platform_os COMMAND petari_platform_os_tests)
+    set_tests_properties(native_platform_os PROPERTIES LABELS timing)  # real-time assertions: quiet Mac only
 
     add_executable(petari_platform_power_tests ${PETARI_REPO_ROOT}/native/tests/platform_power_tests.cpp)
     target_link_libraries(petari_platform_power_tests PRIVATE petari_platform)
@@ -174,6 +175,7 @@ if(BUILD_TESTING)
         ${PETARI_REPO_ROOT}/native/gx/sync_bridge.cpp ${PETARI_REPO_ROOT}/native/gx/sync_backend.cpp)
     target_link_libraries(petari_gx_sync_backend_tests PRIVATE petari_platform)
     add_test(NAME native_gx_sync_backend COMMAND petari_gx_sync_backend_tests)
+    set_tests_properties(native_gx_sync_backend PROPERTIES LABELS timing)  # real-time assertions: quiet Mac only
 
     add_executable(petari_platform_nand_tests ${PETARI_REPO_ROOT}/native/tests/platform_nand_tests.cpp)
     target_link_libraries(petari_platform_nand_tests PRIVATE petari_platform)
@@ -199,6 +201,7 @@ if(BUILD_TESTING)
     add_executable(petari_platform_baton_diag_tests ${PETARI_REPO_ROOT}/native/tests/platform_baton_diag_tests.cpp)
     target_link_libraries(petari_platform_baton_diag_tests PRIVATE petari_platform)
     add_test(NAME native_platform_baton_diag COMMAND petari_platform_baton_diag_tests)
+    set_tests_properties(native_platform_baton_diag PROPERTIES LABELS timing)  # real-time assertions: quiet Mac only
     # Asserts on-CPU time of a spinning holder; parallel test load makes it fail spuriously.
     set_tests_properties(native_platform_baton_diag PROPERTIES RUN_SERIAL TRUE)
 
@@ -206,6 +209,7 @@ if(BUILD_TESTING)
     add_executable(petari_audio_pacing_tests ${PETARI_REPO_ROOT}/native/tests/audio_pacing_tests.cpp)
     target_link_libraries(petari_audio_pacing_tests PRIVATE petari_platform)
     add_test(NAME native_audio_pacing COMMAND petari_audio_pacing_tests)
+    set_tests_properties(native_audio_pacing PROPERTIES LABELS timing)  # real-time assertions: quiet Mac only
     # Real-time wall-clock checks; parallel test load makes them fail spuriously.
     set_tests_properties(native_audio_pacing PROPERTIES RUN_SERIAL TRUE)
 

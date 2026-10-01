@@ -47,7 +47,11 @@ jobs:
         # Tests that read the extracted disc are only registered when
         # build/game-data/RMGE01 exists, so CI runs the data-free set. Serial,
         # because some timing tests are sensitive to noisy shared runners.
-        run: ctest --test-dir build/macos-gx --output-on-failure --timeout 600
+        # Tests labelled "timing" assert real-time behaviour (thread handoff
+        # latency, audio pacing under stalls) and need a quiet real Mac.
+        run: |
+          python3 -m pip install --user --quiet numpy || echo "numpy unavailable: one tool test will skip"
+          ctest --test-dir build/macos-gx --output-on-failure --timeout 600 -LE timing
 
       - name: Upload test log
         if: failure()

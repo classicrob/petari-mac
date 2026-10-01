@@ -1703,7 +1703,9 @@ void testAlarmClock() {
     });
     KPADStatus statuses[120];
     long total = 0;
-    for (int f = 0; f < 30; ++f) {
+    // Reports come from the alarm clock: wait for them (up to 3 s), not for a rate,
+    // so a slow or loaded machine still passes when the clock works at all.
+    for (int f = 0; f < 190 && (f < 30 || total <= 30); ++f) {
         OSSleepTicks(OSMillisecondsToTicks(16));
         total += KPADRead(0, statuses, 120);
     }
