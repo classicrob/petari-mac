@@ -100,7 +100,7 @@ compiled unchanged. `os/os_sdk_private.h` is force-included to declare
   holding the CPU. In between, blocking OS calls on that thread abort, and
   platform waits (GX drain, VI, DVD) treat it as a host thread. Nesting,
   interrupts disabled, and end without begin abort. Requested by the app
-  worker (thr_zz84igjatu).
+  worker.
 - **Alarms** (`os_alarm.cpp`, port of `OSAlarm.c`). The alarm queue and
   periodic arithmetic are the SDK's. A timer host thread replaces the
   decrementer and runs handlers with interrupts and the scheduler disabled,
@@ -773,7 +773,7 @@ Counts are distinct call sites in `src/Game`, `src/JSystem`, and `src/nw4r`.
      the game, where root links the game audio objects;
    - listening validation of mixed game scenes;
    - the Wii Remote speaker (`WPADSendStreamData`), which belongs to input.
-6. **Controllers.** (thr_puzfji2kap owns this, in `native/input`.) `KPADInit`, `KPADRead`, and `KPADSet*` parameters, plus
+6. **Controllers.** (Handled in `native/input`.) `KPADInit`, `KPADRead`, and `KPADSet*` parameters, plus
    `WPADProbe`, extension and connect callbacks, `WPADControlMotor`,
    `WPADGetSensorBarPosition`, and `WPADRegisterAllocator`. This needs a
    keyboard, mouse, or game-controller mapping that produces KPAD pointer,

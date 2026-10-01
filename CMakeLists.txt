@@ -216,6 +216,15 @@ if(PETARI_BUILD_GX_PROBE)
     add_subdirectory(native/movie)
     target_link_libraries(petari_sdk_helpers PUBLIC petari_movie)
     add_subdirectory(native/app EXCLUDE_FROM_ALL)
+    # native/app (and a few tests) stay out of `all`: `--target petari_tests`
+    # builds every test executable registered with ctest that `all` skips.
+    add_custom_target(petari_tests)
+    foreach(_petari_test petari_j3d_material_anm_tests petari_app_smoke_storage_tests petari_app_smoke_domes_tests
+            petari_app_seam_tests petari_app_input_events_tests petari_app_smoke_tests petari_app_smoke_stage_tests)
+        if(TARGET ${_petari_test})
+            add_dependencies(petari_tests ${_petari_test})
+        endif()
+    endforeach()
     target_link_libraries(petari_game_objects PRIVATE petari_milestone)
     target_link_libraries(petari_app_platform PUBLIC petari_present)
     target_link_libraries(petari_link_check PRIVATE petari_app_host petari_app_platform petari_rfl)

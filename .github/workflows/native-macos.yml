@@ -1,0 +1,45 @@
+name: Native macOS (Apple Silicon)
+
+# Builds the native port and runs its tests that need no game data or GPU-heavy
+# full-game runs. Game data is never available in CI.
+on:
+  push:
+    branches: [port/macos-arm64]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15  # arm64
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencies
+        run: brew install sqlite
+
+      - name: Configure
+        run: >
+          cmake -S . -B build/macos-gx
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES=arm64
+          -DPETARI_BUILD_GX_PROBE=ON
+          -DCMAKE_PREFIX_PATH="$(brew --prefix sqlite)"
+
+      - name: Build
+        run: |
+          cmake --build build/macos-gx -j "$(sysctl -n hw.ncpu)"
+          cmake --build build/macos-gx --target petari petari_tests -j "$(sysctl -n hw.ncpu)"
+
+      - name: Test
+        # Tests that read the extracted disc are only registered when
+        # build/game-data/RMGE01 exists, so CI runs the data-free set. Serial,
+        # because some timing tests are sensitive to noisy shared runners.
+        run: ctest --test-dir build/macos-gx --output-on-failure --timeout 600
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log
+          path: build/macos-gx/Testing/Temporary/LastTest.log

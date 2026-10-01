@@ -1,14 +1,180 @@
+# Petari for Apple Silicon (unofficial native port)
+
+A native macOS (Apple Silicon) build of **Super Mario Galaxy**, made from the
+[Petari](https://github.com/SMGCommunity/Petari) decompilation. The original game
+code is compiled for arm64 and runs directly on your Mac, rendering with Metal
+through [Aurora](https://github.com/encounter/aurora). There is no emulator.
+
+> [!IMPORTANT]
+> **This is an unofficial fork, not affiliated with the Petari project or its
+> Discord, and not with Nintendo.** The Petari decompilation itself is not meant
+> to be a PC port: please do **not** ask the Petari maintainers or their Discord
+> about this port. Report problems here instead.
+>
+> **No game data is included.** You need your own copy of the game, extracted
+> from a disc you own. This repository contains no Nintendo assets and no
+> download links for them.
+>
+> Much of the native port (everything under `native/` and the `PETARI_NATIVE`
+> hooks) was written with AI assistance. It is not decompilation work and is not
+> intended for submission upstream.
+
+The game is playable but this is still a development build: expect bugs, and
+see [Known issues](#known-issues).
+
+## Requirements
+
+- A Mac with Apple Silicon (M1 or newer). Intel Macs are not supported.
+- macOS with a current Xcode or the Xcode Command Line Tools. Developed and
+  tested with Xcode 26.4 on macOS 27. The app is built for the macOS version of
+  your SDK (no older deployment target has been tested).
+- [CMake](https://cmake.org/) 3.25 or newer, and SQLite 3.37 or newer
+  (Homebrew: `brew install cmake sqlite`).
+- An internet connection for the first configure: CMake downloads Aurora and its
+  dependencies (SDL3, Dawn, Dear ImGui, Tracy, xxHash) at pinned versions.
+- About 10 GB of disk space for the build, plus the extracted game.
+
+## Your game data
+
+Petari needs the **USA release of Super Mario Galaxy, revision 0 (game ID
+`RMGE01`)**. Other regions and revisions have not been tested.
+
+Make a backup of your own disc (for example with a Wii and a disc-dumping
+homebrew tool), then extract its data partition:
+
+- [Dolphin](https://dolphin-emu.org/): right-click the game, **Properties >
+  Filesystem**, right-click the **Data Partition**, **Extract Entire Partition**.
+- Or Wiimms ISO Tools: `wit extract <your-image> build/game-data/RMGE01`.
+
+Put the result at `build/game-data/RMGE01` in this repository (or anywhere,
+and point `PETARI_GAME_DIR` at it). Either layout works:
+
+```
+build/game-data/RMGE01/
+  files/          the game's files (StageData/, ObjectData/, AudioRes/, ...)
+  sys/            boot.bin, fst.bin, ... (optional, but used when present)
+```
+
+or Dolphin's `build/game-data/RMGE01/DATA/files` and `DATA/sys`.
+
+## Build
+
+From the repository root:
+
+```sh
+brew install cmake sqlite
+cmake -S . -B build/macos-gx \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DPETARI_BUILD_GX_PROBE=ON \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix sqlite)"
+cmake --build build/macos-gx --target petari -j 8
+```
+
+The first build compiles the whole game and takes a while. To run the native
+test suite as well (no game data needed for most tests):
+
+```sh
+cmake --build build/macos-gx -j 8
+cmake --build build/macos-gx --target petari_tests -j 8
+ctest --test-dir build/macos-gx -j 4
+```
+
+(The app and some test executables are not part of the default `all` target;
+`--target petari` and `--target petari_tests` build them.)
+
+Timing-sensitive tests can fail on a heavily loaded machine; rerun them alone.
+More build detail, including the sanitizer core-library presets, is in
+[native/README.md](native/README.md).
+
+## First launch
+
+Double-click **`Play Petari.command`** in the repository root, or run:
+
+```sh
+build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari --disc build/game-data/RMGE01
+```
+
+- There is no preparation screen: the game starts straight away. The first
+  visit to each new area compiles Metal shaders, so it can hitch briefly. The
+  shader cache is kept in `~/Library/Caches/Petari`, so later visits are smooth.
+- Saves, settings (`controls.txt`, `mods.txt`) and crash reports live in
+  `~/Library/Application Support/Petari`. Use `--user DIR` for a separate save
+  location. Native saves are not compatible with Wii saves.
+- At the title screen press **Return** (the game's "press A and B").
+
+## Controls
+
+Keyboard and mouse by default, with game controller support. The main keys:
+**WASD** move, **Space** jump, **F** spin, **Shift** crouch, mouse aims the Star
+Pointer, left click shoots Star Bits, **Q/E** rotate the camera, **Escape**
+pauses. Everything is listed, and remappable, in
+[native/CONTROLS.md](native/CONTROLS.md).
+
+## Saves
+
+Unlocked saves (the observatory restored, so you can jump straight to later
+galaxies) are made from your own save file by a script, through the game's own
+save code. How to make one, install it, and restore your previous save with a
+backup: [native/SAVES.md](native/SAVES.md).
+
+## Mods
+
+Optional gameplay helpers, all **off by default**: see
+[native/MODS.md](native/MODS.md). With every mod off the game behaves as the
+original.
+
+## Known issues
+
+- This is a development build. Early game (the opening, the observatory, the
+  domes and missions that have been played) works; complete story progression,
+  every galaxy, boss and effect has not been verified.
+- New areas can hitch on first visit while shaders compile.
+- Visual fidelity is close but not yet systematically compared with the Wii;
+  some effects may differ.
+- The original small UI textures are low resolution by design.
+- Report bugs in this repository's issues with what you did and the log
+  printed in Terminal. Do not report them to the Petari project.
+
+Detailed test coverage: [native/RELIABILITY.md](native/RELIABILITY.md) and
+[native/PLAYTEST.md](native/PLAYTEST.md).
+
+## Credits and licenses
+
+- **Petari decompilation**: the [SMGCommunity/Petari](https://github.com/SMGCommunity/Petari)
+  contributors. Released under CC0 1.0 ([LICENSE](LICENSE)).
+- **Aurora** by Luke Street ([encounter/aurora](https://github.com/encounter/aurora)),
+  the GX-to-WebGPU/Metal backend: MIT License, Copyright (c) 2022 Luke Street.
+- **Dawn** ([dawn.googlesource.com](https://dawn.googlesource.com/dawn)), the
+  WebGPU implementation used by Aurora, fetched as a prebuilt package: BSD
+  3-Clause License, Copyright 2017-2023 The Dawn & Tint Authors.
+- **SDL3** ([libsdl.org](https://www.libsdl.org/)): zlib License,
+  Copyright (C) 1997-2026 Sam Lantinga.
+- **Dear ImGui** ([ocornut/imgui](https://github.com/ocornut/imgui)): MIT License,
+  Copyright (c) 2014-2025 Omar Cornut.
+- **Tracy** ([wolfpld/tracy](https://github.com/wolfpld/tracy)): BSD 3-Clause License.
+- **xxHash** ([Cyan4973/xxHash](https://github.com/Cyan4973/xxHash)): BSD 2-Clause
+  License, Copyright (c) 2012-2021 Yann Collet.
+- **SQLite**: public domain.
+
+These dependencies are downloaded at build time, not included in this
+repository; their license files come with their sources (Dawn's prebuilt
+package does not include one; see the Dawn repository). If you distribute a
+built app, include those licenses with it.
+
+Super Mario Galaxy is a trademark of Nintendo. This project is not affiliated
+with or endorsed by Nintendo.
+
+---
+
+# About the Petari decompilation
+
+The rest of this file is the upstream Petari README, kept as is. It describes
+the decompilation project and its matching Wii build, not this port.
+
 Petari
 [![Build Status]][actions] ![Progress] [![Discord Badge]][discord]
 =============
-
-This fork has an **in-progress native Apple Silicon port** on `port/macos-arm64`.
-See [native build instructions and current limitations](native/README.md).
-The native app now completes the opening, creates a save, and moves Mario in
-Peach's Castle Garden using keyboard/mouse input. **Later gameplay and overall
-visual fidelity are not yet verified.** On this development checkout, double-click
-`Play Petari.command` to launch. The original Wii build instructions
-below are retained for the matching build.
 
 [Build Status]: https://github.com/SMGCommunity/Petari/actions/workflows/build.yml/badge.svg
 [actions]: https://github.com/SMGCommunity/Petari/actions/workflows/build.yml

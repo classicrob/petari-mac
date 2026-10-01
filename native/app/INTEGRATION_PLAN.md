@@ -1,6 +1,6 @@
 # Native game launch and frame loop: integration plan
 
-Written for root (thr_xi2xyxi3dz). Line references are to the tree as of
+Written for the port's integration work. Line references are to the tree as of
 this plan. "Aurora" means the pinned `aurora-reference` checkout.
 
 **Status.** §3 (start-up) and §4 (frame seam) are implemented in
@@ -315,7 +315,7 @@ Notes:
 
 ## 7. Requests to other owners
 
-- **R1, platform OS (thr_kh97bkaraf):** a CPU release for host work. Proposed
+- **R1, platform OS:** a CPU release for host work. Proposed
   to them as `extern "C" petari_os_begin_host_blocking()` /
   `petari_os_end_host_blocking()`; the app binds them through
   `App::setCpuRelease`.

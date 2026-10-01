@@ -9,8 +9,8 @@ if [[ ! -x "$app" ]]; then
     print -u2 -- "Build Petari first: cmake --build build/macos-gx --target petari -j 8"
     exit 1
 fi
-if [[ ! -d "$disc/files" ]]; then
-    print -u2 -- "Extracted disc not found at $disc (expected files/). Set PETARI_GAME_DIR to its location."
+if [[ ! -d "$disc/files" && ! -d "$disc/DATA/files" ]]; then
+    print -u2 -- "Extracted disc not found at $disc (expected files/ or DATA/files/). Set PETARI_GAME_DIR to its location."
     exit 1
 fi
 

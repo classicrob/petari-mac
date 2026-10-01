@@ -6,6 +6,8 @@ on:
 
 jobs:
   build:
+    # The matching Wii build needs upstream's private container: forks skip it.
+    if: github.repository == 'SMGCommunity/Petari'
     # This is a *private* build container.
     # See docs/github_actions.md for more information.
     container: ghcr.io/smgcommunity/petari-build:main

@@ -98,8 +98,16 @@ It refuses to overwrite an existing directory, so pass `--output` with a new
 path, or remove the old directory first. It needs a built app and a seed user
 directory whose file 1 exists. The default seed is `build/observatory-user-2`,
 which is only read. File 1 keeps the seed's icon. Other files are copied from
-the seed unchanged. In the shared development checkout, run the whole command
-under the app lock (`build/locked-app.sh NAME python3 ...`).
+the seed unchanged. If several automated runs share one checkout, run them one
+at a time.
+
+In a fresh clone `build/saves/` and `build/observatory-user-2` do not exist
+(they are local, untracked files). Make your own seed first: launch the game with
+`--user build/my-seed`, start a new game in file 1 and let it save, quit, then
+
+```sh
+python3 native/tools/make_unlocked_save.py --variant grand-finale --seed build/my-seed
+```
 
 The save is made by the game's own code, not by editing bytes directly:
 

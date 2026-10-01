@@ -3,7 +3,8 @@
 // await playtest.bind(); await playtest.capture('title');
 // Use observed coordinates only. Inspect fresh state after every action batch.
 var playtest = {
-    root: '/Users/roberthaisfield/.bb/plugins/environment-personal-workspace/host-data/workspaces/thr_xi2xyxi3dz/petari',
+    // The repository root: PETARI_REPO, else the REPL's working directory.
+    root: (typeof process !== 'undefined' && process.env.PETARI_REPO) || (typeof process !== 'undefined' ? process.cwd() : '.'),
     app: null,
     async init() {
         this.fs = await import('node:fs/promises');

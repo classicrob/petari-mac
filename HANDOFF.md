@@ -29,7 +29,7 @@ Communicate plainly and concisely, with meaningful progress updates rather than 
 Repository:
 
 ```text
-/Users/roberthaisfield/.bb/plugins/environment-personal-workspace/host-data/workspaces/thr_xi2xyxi3dz/petari
+petari/ (this repository; paths below are relative to its root)
 ```
 
 Branch: `port/macos-arm64`.
