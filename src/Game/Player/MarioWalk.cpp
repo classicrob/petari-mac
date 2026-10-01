@@ -17,6 +17,7 @@ extern "C" bool petari_mod_enabled(int mod);
 #include "Game/Player/MarioSwim.hpp"
 #include "Game/Util.hpp"
 #include <cstdio>
+#include <cstdlib>
 
 namespace {
     static f32 sSpeedTableA[] = {0.15f, 0.3f, 0.45f, 0.6f, 0.7f, 0.85f, 0.99f};
@@ -565,6 +566,50 @@ void Mario::updateBrakeAnimation() {
 #pragma push
 #pragma opt_common_subs off
 void Mario::updateWalkSpeed() {
+#ifdef PETARI_NATIVE
+    // OdysseyMovement: SMO's roll (crouch + Spin; Spin again to boost). It sets
+    // the speed directly; Galaxy's walking steers it. It ends below 17 (the run
+    // then slows to its cap), in the air, or when Mario stops being normal Mario.
+    {
+        namespace Odyssey = PetariNative::Odyssey;
+        const bool canRoll = petari_mod_enabled(2) && getPlayerMode() == 0 && mMovementStates._1 && !mMovementStates.jumping &&
+                             !mMovementStates._4 && mSinkTimer == 0 && !isStatusActive(17);
+        const f32 unit = mActor->getConst().getTable()->mWalkSpeed;
+        if (Odyssey::Live::rollStart && canRoll && !Odyssey::Live::roll.rolling) {
+            Odyssey::Live::roll = Odyssey::startRoll(mWalkSpeed * unit, false);
+            mMovementStates._A = false;
+            _20._A = false;
+            mMovementStates._26 = false;
+            stopAnimation("しゃがみ基本");
+            changeAnimation("飛び込み失敗回転着地");
+            playSound("スピンジャンプ");
+            std::fprintf(stderr, "[odyssey] roll at %.2f\n", Odyssey::Live::roll.speed);
+        } else if (Odyssey::Live::rollBoost && Odyssey::Live::roll.rolling && canRoll &&
+                   Odyssey::Live::roll.sinceBoost + 1 >= Odyssey::Const::SlopeRollingReStartInterval) {
+            changeAnimation("飛び込み失敗回転着地");
+            playSound("スピンジャンプ");
+        }
+        Odyssey::Live::rollStart = false;
+        static const bool trace = std::getenv("PETARI_ODYSSEY_TRACE") != nullptr;
+        if (trace && Odyssey::Live::roll.rolling) {
+            std::fprintf(stderr, "[odyssey] roll speed %.3f walk %.3f ground %d jumping %d slip %d sink %d status17 %d\n",
+                         Odyssey::Live::roll.speed, mWalkSpeed, static_cast< int >(mMovementStates._1),
+                         static_cast< int >(mMovementStates.jumping), static_cast< int >(mMovementStates._4), static_cast< int >(mSinkTimer),
+                         static_cast< int >(isStatusActive(17)));
+        }
+        if (Odyssey::Live::roll.rolling && !canRoll) {
+            Odyssey::Live::roll.rolling = false;
+        }
+        if (Odyssey::Live::roll.rolling) {
+            Odyssey::stepRoll(Odyssey::Live::roll, Odyssey::Live::rollBoost);
+            Odyssey::Live::rollBoost = false;
+            mMovementStates._A = false;
+            mWalkSpeed = Odyssey::Live::roll.speed / unit;
+            return;
+        }
+        Odyssey::Live::rollBoost = false;
+    }
+#endif
     f32 targetWalkSpeed = getTargetWalkSpeed();
     f32 f2 = 1.0f;
 

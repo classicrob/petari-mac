@@ -282,6 +282,14 @@ void Mario::tryJump() {
 
     floorCode = getFloorCode();
     if (floorCode != 0x20 && getPlayerMode() != 4 && _430 != 3) {
+#ifdef PETARI_NATIVE
+        // OdysseyMovement: jumping out of a roll is a long jump.
+        if (PetariNative::Odyssey::Live::roll.rolling && odysseyOn() && ((mMovementStates._23) == 0)) {
+            PetariNative::Odyssey::Live::roll.rolling = false;
+            trySquatJump();
+            return;
+        }
+#endif
         if (isSquat && mWalkSpeed > 0.3f && ((mMovementStates._23) == 0)) {
             trySquatJump();
             return;

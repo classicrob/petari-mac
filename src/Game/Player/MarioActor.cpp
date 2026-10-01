@@ -1,4 +1,8 @@
 #include "Game/Player/MarioActor.hpp"
+#ifdef PETARI_NATIVE
+#include <petari/odyssey_move.hpp>
+extern "C" bool petari_mod_enabled(int mod);
+#endif
 #include "Game/Animation/XanimeCore.hpp"
 #include "Game/Camera/CameraTargetArg.hpp"
 #include "Game/Enemy/KarikariDirector.hpp"
@@ -1366,6 +1370,19 @@ void MarioActor::updateSwingAction() {
     u8 action = selectAction("スピンアタック");
     switch (action) {
     case 1: {
+#ifdef PETARI_NATIVE
+        // OdysseyMovement: on the ground, Spin while crouching starts SMO's roll
+        // and Spin while rolling boosts it (Mario::updateWalkSpeed runs it).
+        if (petari_mod_enabled(2) && mPlayerMode == 0 && !isJumping() && mMario->mMovementStates._1 &&
+            (mMario->mMovementStates._A || PetariNative::Odyssey::Live::roll.rolling)) {
+            if (PetariNative::Odyssey::Live::roll.rolling) {
+                PetariNative::Odyssey::Live::rollBoost = true;
+            } else {
+                PetariNative::Odyssey::Live::rollStart = true;
+            }
+            break;
+        }
+#endif
         bool didSpinPunch = true;
         if (!mMario->mMovementStates._F && isJumping() && !mMario->isDamaging() && !mMario->mMovementStates._2B) {
             bool tmp = false;

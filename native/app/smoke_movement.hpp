@@ -15,7 +15,12 @@
 //   6. a backflip: standing, crouch, and jump 8 frames later;
 //   7. a sideflip: run, flick the stick back, and jump 4 frames later;
 //   8. a dive: a hop, a ground pound at its peak, Spin 4 frames later (height
-//      from the point where Spin was pressed).
+//      from the point where Spin was pressed);
+//   9. a roll: crouch, Spin 3 frames later, Spin again 20 frames into the roll
+//      (a boost); logs "MOVEMENT roll: ..." with the ground speed. At the end of
+//      the full sequence on the observatory Mario faces a wall, so measure the
+//      roll alone (PETARI_MOVEMENT_ONLY=roll) from the start point.
+// PETARI_MOVEMENT_ONLY=<text> keeps only the tasks whose name contains it.
 // Each jump logs "MOVEMENT <name>: apex <height> after <frames> frames, take-off
 // speed <s>"; heights are along -gravity from the take-off point. The run logs
 // "MOVEMENT run: max speed <v> u/f, frame <n> reached 95%". Compare with the
@@ -46,7 +51,7 @@ public:
     bool wantsPlayer() const { return mPhase != Phase::Boot || mBoot.wantsPlayer(); }
 
 private:
-    enum class Phase { Boot, Settle, Jump, Land, Run, Crouch, Hop, Pound, Reverse, Done };
+    enum class Phase { Boot, Settle, Jump, Land, Run, Crouch, Hop, Pound, Reverse, Roll, Done };
     struct Release {
         unsigned long frame;
         Button button;
@@ -61,6 +66,7 @@ private:
         bool groundPound = false;  // hop, ground pound, then the measured jump
         int reverse = 0;           // after the run, frames the stick is held back before the jump (sideflip)
         bool dive = false;         // with groundPound: Spin during the pound, measured from there
+        int roll = 0;              // with crouch: Spin instead of A, then the ground speed is logged for this many frames
     };
 
     void finish(Result result, const std::string& reason, Step& step);

@@ -48,7 +48,13 @@ MovementDriver::MovementDriver(unsigned long frameLimit) : mBoot(frameLimit + 1,
         {"dive", 6, false, 0, false, 0, true, 0, true},
         {"backflip", 6, false, 0, false, 8},
         {"sideflip", 6, true, 45, false, 0, false, 2},
+        {"roll", 0, false, 0, false, 3, false, 0, false, 120},
     };
+    // PETARI_MOVEMENT_ONLY=<text>: only the tasks whose name contains it.
+    if (const char* only = std::getenv("PETARI_MOVEMENT_ONLY"); only != nullptr && *only != '\0') {
+        mTasks.erase(std::remove_if(mTasks.begin(), mTasks.end(), [&](const Task& t) { return std::strstr(t.name, only) == nullptr; }),
+                     mTasks.end());
+    }
 }
 
 const char* MovementDriver::phase() const {
@@ -61,6 +67,7 @@ const char* MovementDriver::phase() const {
     case Phase::Hop: return "movement: hop before a ground pound";
     case Phase::Pound: return "movement: ground pound";
     case Phase::Reverse: return "movement: stick back before a sideflip";
+    case Phase::Roll: return "movement: rolling";
     case Phase::Land: return "movement: landed";
     case Phase::Done: return "movement: done";
     }
@@ -238,7 +245,34 @@ Step MovementDriver::step(const Observation& o) {
         break;
     }
     case Phase::Crouch: {
-        if (static_cast< int >(mPhaseFrames) >= task.crouch) startJump();
+        if (static_cast< int >(mPhaseFrames) >= task.crouch) {
+            if (task.roll > 0) {
+                tap(Button::Spin, 2, step);
+                mPhase = Phase::Roll;
+                mPhaseFrames = 0;
+                mSpeeds.clear();
+            } else {
+                startJump();
+            }
+        }
+        break;
+    }
+    case Phase::Roll: {
+        if (mPhaseFrames > 1) mSpeeds.push_back(horizontal);
+        if (mPhaseFrames == 20) tap(Button::Spin, 2, step);  // a boost (15 frames apart at least)
+        if (static_cast< int >(mPhaseFrames) >= task.roll) {
+            float top = 0.0f;
+            std::string speeds;
+            for (size_t i = 0; i < mSpeeds.size(); ++i) {
+                top = std::max(top, mSpeeds[i]);
+                if (i % 5 == 0) speeds += (speeds.empty() ? "" : " ") + num(mSpeeds[i]);
+            }
+            note("MOVEMENT roll: max speed " + num(top) + " u/f; every 5th frame: " + speeds);
+            ++mTask;
+            mPhase = Phase::Land;
+            mPhaseFrames = 0;
+            mReady = 0;
+        }
         break;
     }
     case Phase::Reverse: {
@@ -287,6 +321,11 @@ Step MovementDriver::step(const Observation& o) {
         break;
     }
     case Phase::Jump: {
+        if (!mLeftGround && o.playerOnGround && mPhaseFrames % 20 == 0 && mPhaseFrames > 0 && mPhaseFrames <= 60) {
+            // A 1-frame tap can fall between two game frames; press again.
+            note(std::string(task.name) + ": no take-off after " + std::to_string(mPhaseFrames) + " frames, pressing again");
+            tap(Button::A, static_cast< unsigned long >(task.holdA), step);
+        }
         if (!mLeftGround && o.playerOnGround) {
             // Measure from the last grounded position before take-off (the press
             // frame can still be in a crouch slide).

@@ -318,4 +318,13 @@ inline void stepRoll(RollState& r, bool boostPressed, float bump = 23.0f) {
     if (r.speed < Const::SlopeRollingSpeedEnd) r.rolling = false;
 }
 
+// The game hooks' shared state (one player): MarioActor.cpp sets the Spin
+// requests, MarioWalk.cpp runs the roll, MarioJump.cpp turns a jump while
+// rolling into a long jump.
+namespace Live {
+inline RollState roll;
+inline bool rollStart = false;  // Spin while crouching on the ground
+inline bool rollBoost = false;  // Spin while rolling
+}  // namespace Live
+
 }  // namespace PetariNative::Odyssey

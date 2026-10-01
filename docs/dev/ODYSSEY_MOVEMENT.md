@@ -55,12 +55,21 @@ Measured in the game (`PETARI_SMOKE=movement` on the observatory's flat start,
 | Dive (from a ground pound) | none | 182.000 | 182 |
 | Backflip | 203.5 | 496.000 | 496 |
 | Sideflip | 284 (Galaxy's turn jump) | 496.000 | 496 |
+| Roll (crouch + Spin), boost at frame 20 | none | 20 → ×0.998, boost 22.95 | 20, ×0.998, boost 23 |
 
 The long jump and dive values are from the per-frame trace
 (`PETARI_ODYSSEY_TRACE=1`: take-off at y 392.21, peak 536.21; dive start
 493.71, peak 675.71); the harness now measures from the last grounded position
 (the press frame can be mid crouch-slide), and the dive ran into higher ground
-after its peak on the observatory terrace.
+after its peak on the observatory terrace. The roll is measured alone
+(`PETARI_MOVEMENT_ONLY=roll`) from the start point; at the end of the full
+sequence Mario faces a wall.
+
+On Good Egg (EggStarGalaxy, planet gravity) with the mod on, the stage smoke
+passes and the same harness measured the standstill jumps 258.000 / 105.000,
+the ground-pound jump 513.500, the running jump 312.000 and the triple jump
+550.000 (double 341.5: chained from 13.85 u/f, below full speed). The run before
+the long jump then ran into terrain, so the later moves are not measured there.
 
 Both games use the same unit size for Mario (about 160 units tall) and run at
 60 frames per second, so distances, speeds (units/frame) and accelerations
@@ -119,7 +128,7 @@ mod changes Galaxy.
 | Backflip | up 32, gravity 1.0, back 5, horizontal cap 9 (D); 496 u | `tryBackJump` (crouch + jump standing) | `tryBackJump` initial velocity + air update | 3 |
 | Sideflip | up 32, gravity 1.0, horizontal 9, accel 0.25/0.5/0.075 (D); 496 u | `tryTurnJump` | `tryTurnJump` initial velocity + air update | 3 |
 | Dive | horizontal 20, up 28, gravity 2.0, brake 0.5, side 0.125 (D); +182 u | not in Galaxy | new: in the air, during a ground pound's stall, Spin starts a dive (SMO: GP then Y). Uses the hip-drop state's start, then the mod's dive air update; land into a belly slide (Galaxy's slide animation) | 4 |
-| Roll | start ≥20 (GP roll 30), max 35, decay ×0.998, ends <17, boosts to 23/26 with ≥15 f between (D+C) | not in Galaxy (closest: Galaxy's slide on slopes) | new: crouching + Spin on the ground starts a roll (SMO: crouch + Y); Spin while rolling boosts. Uses Galaxy's slide/skate animation and the ground speed hook | 5 |
+| Roll | start ≥20 (GP roll 30), max 35, decay ×0.998, ends <17, boosts to 23/26 with ≥15 f between (D+C) | not in Galaxy (closest: Galaxy's slide on slopes) | new: crouching + Spin on the ground starts a roll (SMO: crouch + Y); Spin while rolling boosts; A while rolling is a long jump. The speed is set in `updateWalkSpeed` and Galaxy's walking steers it; the start and each boost play Galaxy's dive-landing forward roll | 5 |
 | Wall slide / wall jump | slide gravity 0.5; jump up 23, gravity 0.95, horizontal 8.6, input lockout 25 f (D) | `MarioWall`, `tryWallJump` (`mWallJumpPowerXZ/Y` 13/30), Galaxy wall stick | `tryWallJump` velocities and lockout; `moveWallSlide` speed | 6 |
 | Spin | Galaxy's Star Spin stays | Spin (shake / F): attacks, Launch Stars, Pull Stars, Spin Drills | **unchanged.** It is essential to Galaxy's levels | — |
 | Spin jump | SMO's comes from a stick spin (rotate twice) | Galaxy spin jump (Spin in the air) | unchanged | — |
@@ -221,5 +230,12 @@ playability run, before the next step.
 - Slope walking in SMO is not well measured; the mod keeps Galaxy's slope
   behaviour except for the speed cap.
 - Animations are Galaxy's; some SMO moves (dive, roll) reuse the nearest Galaxy
-  animation.
+  animation. Between boosts the roll shows Galaxy's run animation.
+- No ground-pound roll (SMO: Y on a ground-pound landing, 30 u/f) and no roll
+  speed gain on downhill slopes; the roll ends on a turn slide (stick reversed
+  after release) like Galaxy's run.
+- No SMO wall slide (gravity 0.5): Galaxy's own wall slide stays. The wall jump
+  itself (23 up, 8.6 away, gravity 0.95, stick ignored 25 frames) uses SMO's
+  values, with the wall direction from Galaxy; it is model-tested (267 high) but
+  not measured in the game (the harness has no scripted wall).
 - No Cappy, cap bounce or captures; swimming is Galaxy's.
