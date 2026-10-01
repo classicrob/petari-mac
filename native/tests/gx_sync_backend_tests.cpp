@@ -763,6 +763,10 @@ void testStressTicketsAndAborts() {
     }
     gPoolChanged.notify_all();
     pool.join();
+    // Every ticket is now complete, but the GP interrupt thread delivers the
+    // last callbacks asynchronously: wait as the game's frame boundary does
+    // before counting them (failed 1/30 under load when counted at once).
+    PetariNative::Platform::GXSync::waitTokensDelivered();
     check(gStressAborts.load() == 10, "every hang was recovered by the abort alarm");
     check(gStressOrderErrors.load() == 0, "tickets issued in order; callbacks in stream order, each with its ticket");
     check(gStressDelivered.size() == gStressTicketsIssued.load(), "every processed token got exactly one ticket and one callback");
