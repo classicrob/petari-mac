@@ -161,13 +161,53 @@ def sysconf_time_sent(blob: bytes) -> tuple:
     return record + offset, record + offset + 8
 
 
+def game_chunks(blob: bytes) -> list:
+    """[(signature, header hash, payload)] of a game data blob, in order, and the end offset."""
+    out, offset = [], 4
+    for _ in range(blob[1]):
+        sig, hash_, size = struct.unpack_from("<3I", blob, offset)
+        out.append((signature(sig), hash_, blob[offset + 12:offset + size]))
+        offset += size
+    return out, offset
+
+
+def spin_driver_records(payload: bytes) -> dict:
+    """SPN1 (SpinDriverPathStorage): {(galaxy hash, scenario, zone, launch star id): drawn state}.
+
+    A zone header with no records (written for a Launch Star registered with nothing
+    drawn yet) holds no state; the game drops it when it saves the file again."""
+    records, pos = {}, 1
+    for _ in range(payload[0]):
+        galaxy, block, scenarios = struct.unpack_from("<HHB", payload, pos)
+        at = pos + 6
+        for scenario in range(scenarios):
+            size = struct.unpack_from("<H", payload, at)[0]
+            q, zone = at + 2, None
+            while payload[q] != 0xFF:
+                value = payload[q]
+                if value & 0xC0 == 0xC0:
+                    zone, q = value & 0x3F, q + 1
+                    continue
+                if value & 0x80:
+                    records[(galaxy, scenario, zone, value & 0x3F)] = ("range", payload[q + 1])
+                    q += 2
+                else:
+                    records[(galaxy, scenario, zone, value & 0x3F)] = ("complete" if value & 0x40 else "none",)
+                    q += 1
+            at += size
+        pos += block
+    return records
+
+
 def check_feed(before: bytes, after: bytes) -> list:
     """The changes a feed-galaxy-lumas run made; raises ValueError on any other change.
 
     Allowed: in a mario<N>/luigi<N> game data entry, PCE1 seeds listed in
     GALAXY_TICO_FED raised from below to exactly their count. The game's save also
     rewrites sysconf; there only its Wii Mail timestamp (mTimeSent) may change, as
-    it does in ordinary play. Returns [(entry, seed)]."""
+    it does in ordinary play. Saving again may also drop empty zone headers from
+    SPN1 (Launch Star paths): its decoded records must stay the same. Every other
+    chunk must be byte for byte the same. Returns [(entry, seed)]."""
     old, new = parse_entries(before), parse_entries(after)
     if list(old) != list(new) or any(len(old[name]) != len(new[name]) for name in old):
         raise ValueError("entry layout changed")
@@ -184,11 +224,19 @@ def check_feed(before: bytes, after: bytes) -> list:
             continue
         if not (name.startswith("mario") or name.startswith("luigi")) or not any(old[name]):
             raise ValueError(f"{name} changed")
-        start, end = chunk_ranges(old[name])["PCE1"]
-        if chunk_ranges(new[name])["PCE1"] != (start, end) or old[name][:start] != new[name][:start] or old[name][end:] != new[name][end:]:
-            raise ValueError(f"{name} changed outside the Star Bit (PCE1) counts")
-        seeds_old = struct.unpack_from("<16H", old[name], start)
-        seeds_new = struct.unpack_from("<16H", new[name], start)
+        (chunks_old, end_old), (chunks_new, end_new) = game_chunks(old[name]), game_chunks(new[name])
+        if old[name][:4] != new[name][:4] or [c[:2] for c in chunks_old] != [c[:2] for c in chunks_new]:
+            raise ValueError(f"{name} changed outside the Star Bit (PCE1) counts: chunk layout")
+        if any(old[name][end_old:]) or any(new[name][end_new:]):
+            raise ValueError(f"{name} changed outside the Star Bit (PCE1) counts: data after the chunks")
+        payloads = {sig: (a, b) for (sig, _, a), (_, _, b) in zip(chunks_old, chunks_new)}
+        for sig, (a, b) in payloads.items():
+            if sig == "SPN1" and a != b and spin_driver_records(a) == spin_driver_records(b):
+                continue
+            if sig != "PCE1" and a != b:
+                raise ValueError(f"{name} changed outside the Star Bit (PCE1) counts: {sig}")
+        seeds_old = struct.unpack_from("<16H", payloads["PCE1"][0], 0)
+        seeds_new = struct.unpack_from("<16H", payloads["PCE1"][1], 0)
         for seed, (was, now) in enumerate(zip(seeds_old, seeds_new)):
             if was == now:
                 continue
@@ -204,7 +252,10 @@ def feed_galaxy_lumas(user: Path, app: Path, disc: Path, timeout: float) -> list
     save = user / SAVE_RELATIVE
     if not save.is_file():
         raise ValueError(f"no saved file: {save}")
-    running = subprocess.run(["pgrep", "-f", f"Petari.*{user}"], capture_output=True, text=True).stdout.split()
+    # A Petari executable with this --user directory (not shells or wrappers that
+    # merely mention the path, e.g. the lock script running this tool).
+    pattern = f"/MacOS/Petari( .*)? --user[ =]{user}(/| |$)"
+    running = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True).stdout.split()
     if running:
         raise ValueError(f"Petari is running with {user} (pids {' '.join(running)}); quit it first")
     original = save.read_bytes()

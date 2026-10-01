@@ -162,6 +162,28 @@ class FeedGalaxyLumasTests(unittest.TestCase):
             unlocked.check_feed(self.before, self.edit(self.before, config, 0x1234))
 
 
+class SpinDriverRecordTests(unittest.TestCase):
+    """SPN1: a played save can hold an empty zone header (a Launch Star registered,
+    nothing drawn) that the game drops when it saves again; real path records must
+    match (found on a playtest save, 2026-10-01)."""
+
+    @staticmethod
+    def spn(*scenarios: bytes) -> bytes:
+        blocks = b"".join(struct.pack("<H", len(body) + 3) + body + b"\xff" for body in scenarios)
+        return bytes([1]) + struct.pack("<HHBB", 0x1234, 6 + len(blocks), len(scenarios), 0) + blocks
+
+    def test_empty_zone_header_is_no_state(self):
+        empty_zone = self.spn(b"\xc0", b"")
+        self.assertEqual(unlocked.spin_driver_records(empty_zone), unlocked.spin_driver_records(self.spn(b"", b"")))
+        self.assertEqual(unlocked.spin_driver_records(empty_zone), {})
+
+    def test_path_records_are_compared(self):
+        drawn = unlocked.spin_driver_records(self.spn(b"\xc0\x81\x40", b"\xc2\x83\x00"))
+        self.assertEqual(drawn, {(0x1234, 0, 0, 1): ("range", 0x40), (0x1234, 1, 2, 3): ("range", 0)})
+        self.assertNotEqual(drawn, unlocked.spin_driver_records(self.spn(b"\xc0\x81\x41", b"\xc2\x83\x00")))
+        self.assertNotEqual(drawn, unlocked.spin_driver_records(self.spn(b"", b"\xc2\x83\x00")))
+
+
 class IsolationTests(unittest.TestCase):
     def test_refuses_existing_output_and_missing_seed(self):
         with tempfile.TemporaryDirectory() as directory:
