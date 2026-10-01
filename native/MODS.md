@@ -48,7 +48,7 @@ Galaxy's.
 | Ground pound | Shift in the air | LT in the air | falls at up to 45 u/f (model) |
 | Ground-pound jump | Space 5–30 frames after a ground pound lands | bottom button, same timing | 513.5 high |
 | Dive | F during a ground pound | left button / RB during a ground pound | 182 up, 20 u/f forward; landing with a direction held rolls forward into a run at the landing speed (about 20 u/f); stick released: belly landing and stop |
-| Roll | Shift, then F, on the ground | LT, then left button / RB | 20 u/f, slowing 0.2% a frame; ends below 17 (model) |
+| Roll | Shift, then F, on the ground | LT, then left button / RB | 20 u/f, slowing 0.2% a frame; ends below 17 (about 80 frames), then runs on at that speed with a direction held, or skids to a stop with the stick released |
 | Roll boost | F while rolling (15 frames apart) | left button / RB while rolling | back up to 23 u/f |
 | Long jump out of a roll | Space while rolling | bottom button while rolling | as the long jump |
 | Wall slide | jump into a wall and hold the stick toward it | same | held 3 frames, then slides down faster (0.5 u/f² up to 35) |
@@ -65,7 +65,7 @@ Known gaps in this version:
   Galaxy's Star Spin except for the dive and the roll.
 - Galaxy has no animations for some SMO moves. The dive uses Galaxy's high dive
   into water (Mario rises upright and turns head-first on the way down); the roll
-  repeats the forward roll of a failed dive's landing, with run strides between.
+  repeats the forward roll of a failed dive's landing back to back.
 - No ground-pound roll (SMO: Y on a ground-pound landing) and no roll speed-up
   on downhill slopes.
 - Slopes and slides keep Galaxy's behaviour; Galaxy's own wall-jump surfaces

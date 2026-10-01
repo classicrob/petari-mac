@@ -1,5 +1,6 @@
 #include "Game/Player/MarioActor.hpp"
 #ifdef PETARI_NATIVE
+#include <cstdlib>
 #include <petari/odyssey_move.hpp>
 extern "C" bool petari_mod_enabled(int mod);
 #endif
@@ -1318,6 +1319,18 @@ void MarioActor::updateSwingAction() {
     if (!requestRush) {
         return;
     }
+#ifdef PETARI_NATIVE
+    if (petari_mod_enabled(2)) {
+        static const bool trace = std::getenv("PETARI_ODYSSEY_TRACE") != nullptr;
+        if (trace) {
+            std::fprintf(stderr, "[odyssey] spin request: ground %d jumping %d squat %d/%d rolling %d cooldown %d mode %d\n",
+                         static_cast< int >(mMario->mMovementStates._1), static_cast< int >(isJumping()),
+                         static_cast< int >(mMario->mMovementStates._A), static_cast< int >(mMario->checkSquat(false)),
+                         static_cast< int >(PetariNative::Odyssey::Live::roll.rolling), static_cast< int >(_946),
+                         static_cast< int >(mPlayerMode));
+        }
+    }
+#endif
 
     if (mMario->isAnimationRun("壁はじき")) {
         canRush = false;

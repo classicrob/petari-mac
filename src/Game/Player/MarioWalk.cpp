@@ -605,10 +605,25 @@ void Mario::updateWalkSpeed() {
             Odyssey::Live::rollBoost = false;
             mMovementStates._A = false;
             mWalkSpeed = Odyssey::Live::roll.speed / unit;
+            // Keep Galaxy's run target following the stick through the roll (its
+            // animator only updates it while a walk animation runs), so the run
+            // picks up where the roll ends.
+            decideWalkSpeed();
+            if (!Odyssey::Live::roll.rolling) {
+                // The roll ended (below 17): a direction held runs on at this speed,
+                // slowing to the cap; released, Galaxy's brake skid to a stop.
+                stopAnimation("飛び込み失敗回転着地", "基本");
+                _404 = 0;  // no slow start: the stick already holds a run
+                if (!isStickOn()) {
+                    doBrakingAnimation();
+                    _71F = mActor->getConst().getTable()->mBrakeSecondTimer;
+                }
+                return;
+            }
             // Galaxy has no rolling loop: restart the dive landing's forward roll
-            // (about 16 frames long) for as long as the roll lasts; otherwise Mario
-            // glides standing between boosts.
-            if (Odyssey::Live::roll.sinceBoost % 16 == 0) {
+            // (about 12 frames long) for as long as the roll lasts; otherwise Mario
+            // glides standing between rolls.
+            if (Odyssey::Live::roll.sinceBoost % 12 == 0) {
                 stopAnimation("飛び込み失敗回転着地");
                 changeAnimation("飛び込み失敗回転着地");
             }

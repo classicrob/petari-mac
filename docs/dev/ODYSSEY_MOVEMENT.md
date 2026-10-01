@@ -61,6 +61,7 @@ Measured in the game (`PETARI_SMOKE=movement` on the observatory's flat start,
 | Long jump landing, stick held (ground speed on the frames after) | 7.85, then back up to 11.6 by frame 30 | 22.60, slowing 0.117/frame to 19.68 at frame 30 | keeps its speed |
 | Dive landing, stick held | stop (belly flop), then a walk from 0 | 18.16 at frame 5, slowing to 15.25 at frame 30 (landed at 19.91) | see below |
 | Long jump / dive landing, stick released | stop | stop (Galaxy's landing) | |
+| Roll end (below 17, about frame 81, no boost) | none | stick held: 17.0, then 16.5, 15.9, 15.3, ... to 14; released: 11.4, 4.4, 0 (brake skid) | un-roll below 17 |
 
 The long jump and dive values are from the per-frame trace
 (`PETARI_ODYSSEY_TRACE=1`: take-off at y 392.21, peak 536.21; dive start
@@ -254,8 +255,9 @@ playability run, before the next step.
   animation, checked with XFB dumps (`PETARI_XFB_DUMP`; the harness marks each
   move's name as the dump label): the dive uses Galaxy's high dive into water
   (upright while rising, head-first on the way down, belly landing); the roll
-  restarts the failed-dive landing's forward roll every 16 frames, with run
-  strides between; the long jump, backflip, sideflip, ground-pound jump, wall
+  restarts the failed-dive landing's forward roll every 12 frames (back to back),
+  and when it ends runs on with a direction held (Galaxy's run target is kept
+  following the stick during the roll) or plays Galaxy's brake skid; the long jump, backflip, sideflip, ground-pound jump, wall
   slide and wall jump use Galaxy's matching poses. No T-poses or wrong facing.
 - No ground-pound roll (SMO: Y on a ground-pound landing, 30 u/f) and no roll
   speed gain on downhill slopes; the roll ends on a turn slide (stick reversed

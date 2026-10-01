@@ -56,6 +56,8 @@ MovementDriver::MovementDriver(unsigned long frameLimit) : mBoot(frameLimit + 1,
         {"long jump landing (stick released)", 6, true, 40, false, 3, false, 0, false, 0, false, 30, true},
         {"dive landing (stick held)", 6, false, 0, false, 0, true, 0, true, 0, false, 30, false, true},
         {"dive landing (stick released)", 6, false, 0, false, 0, true, 0, true, 0, false, 30},
+        {"roll to the end (stick held)", 0, false, 0, false, 3, false, 0, false, 140, false, 0, false, true, true},
+        {"roll to the end (stick released)", 0, false, 0, false, 3, false, 0, false, 140, false, 0, false, false, true},
     };
     if (const char* dir = std::getenv("PETARI_MOVEMENT_WALL_DIR"); dir != nullptr) {
         const std::string d(dir);
@@ -294,6 +296,10 @@ Step MovementDriver::step(const Observation& o) {
             if (task.roll > 0) {
                 tap(Button::Spin, 2, step);
                 PetariNative::EfbDump::mark(task.name);
+                if (task.airStick && !mStickHeld) {
+                    step.presses.push_back({Button::StickUp, true});
+                    mStickHeld = true;
+                }
                 mPhase = Phase::Roll;
                 mPhaseFrames = 0;
                 mSpeeds.clear();
@@ -377,7 +383,7 @@ Step MovementDriver::step(const Observation& o) {
         if (mPhaseFrames > 1) mSpeeds.push_back(horizontal);
         // A boost (15 frames apart at least; the emulated shake behind Spin repeats
         // about four times a second, so 30 frames after the start).
-        if (mPhaseFrames == 30) tap(Button::Spin, 2, step);
+        if (mPhaseFrames == 30 && !task.noBoost) tap(Button::Spin, 2, step);
         if (static_cast< int >(mPhaseFrames) >= task.roll) {
             float top = 0.0f;
             std::string speeds;
@@ -385,7 +391,7 @@ Step MovementDriver::step(const Observation& o) {
                 top = std::max(top, mSpeeds[i]);
                 if (i % 5 == 0) speeds += (speeds.empty() ? "" : " ") + num(mSpeeds[i]);
             }
-            note("MOVEMENT roll: max speed " + num(top) + " u/f; every 5th frame: " + speeds);
+            note(std::string("MOVEMENT ") + task.name + ": max speed " + num(top) + " u/f; every 5th frame: " + speeds);
             ++mTask;
             mPhase = Phase::Land;
             mPhaseFrames = 0;
