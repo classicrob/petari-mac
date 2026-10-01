@@ -21,11 +21,30 @@
 namespace {
     enum Phase { Phase_Load, Phase_Saving, Phase_Reload, Phase_Done };
 
-    enum Variant { Variant_AllMissions, Variant_CompleteLuigi, Variant_GrandFinale };
+    enum Variant { Variant_AllMissions, Variant_CompleteLuigi, Variant_GrandFinale, Variant_FeedGalaxyLumas };
 
     // The last story event (StoryEvent.bcsv): the observatory's restoration story is over.
     const char cLastStoryEvent[] = "クッパＪｒクリーチャープラント発見";
     const u32 cGameDataSize = 0xF80;
+
+    // Every TicoFat placed in a galaxy (stage data: Obj_arg7 seed, Obj_arg1 star
+    // bits wanted). Fed in full, TicoFat::disappear(true) stores exactly that
+    // count in its seed and turns on SW_A, which wakes what it turns into (Toy
+    // Time's CrossRingZone, switch 1005). Seeds 0 and 7 are unused.
+    // mFedBy: the missions whose star shows the Luma was fed: those it appears
+    // in, and those played on the planet it turns into (Toy Time 4 and 6,
+    // Battlerock 6). Zero-terminated.
+    struct GalaxyTicoFed {
+        const char* mGalaxyName;
+        s32 mSeed;
+        s32 mStarPieceNum;
+        s32 mFedBy[4];
+    };
+    const GalaxyTicoFed cGalaxyTicoFed[] = {
+        {"SandClockGalaxy", 1, 20, {2}},       {"StarDustGalaxy", 2, 50, {3}},          {"OceanRingGalaxy", 3, 40, {3}},
+        {"FactoryGalaxy", 4, 50, {2, 4, 6}},   {"HellProminenceGalaxy", 5, 80, {1, 6}}, {"BattleShipGalaxy", 6, 30, {2, 6}},
+    };
+    const s32 cUserFileNum = 6;
 
     Phase sPhase = Phase_Load;
     // The game data and config binaries as stored, compared after the reload.
@@ -43,6 +62,10 @@ namespace {
 
         if (rName == "grand-finale") {
             return Variant_GrandFinale;
+        }
+
+        if (rName == "feed-galaxy-lumas") {
+            return Variant_FeedGalaxyLumas;
         }
 
         return Variant_AllMissions;
@@ -105,6 +128,12 @@ namespace {
             pHolder->addStarPieceGivingToTicoSeed(idx + 8, pHolder->getStarPieceNumMaxGivingToTicoSeed(idx + 8));
         }
 
+        // Hungry Lumas inside galaxies, fed during a mission whose star is held:
+        // the planet they turn into stays for every later mission.
+        for (u32 idx = 0; idx < sizeof(cGalaxyTicoFed) / sizeof(cGalaxyTicoFed[0]); idx++) {
+            pHolder->addStarPieceGivingToTicoSeed(cGalaxyTicoFed[idx].mSeed, cGalaxyTicoFed[idx].mStarPieceNum);
+        }
+
         pHolder->followStoryEventByName(cLastStoryEvent);
         // Opened after the Grand Star 3 return and one more star.
         pHolder->setGameEventValue("LibraryOpenNewStarCount", 0);
@@ -137,6 +166,97 @@ namespace {
         }
 
         pHolder->setPictureBookChapterAlreadyRead(pHolder->getPictureBookChapterCanRead());
+    }
+
+    // feed-galaxy-lumas: an existing save with real progress. Only the in-galaxy
+    // Hungry Lumas whose mission star the file holds are fed, as the game would
+    // have stored it; nothing else in the file changes.
+    u8 sFeedStored[cUserFileNum][2][cGameDataSize];
+    bool sFeedChanged[cUserFileNum][2];
+    s32 sFeedNum = 0;
+
+    bool isGalaxyTicoFedBy(const GameDataHolder* pHolder, const GalaxyTicoFed& rTico) {
+        for (s32 idx = 0; idx < 4 && rTico.mFedBy[idx] != 0; idx++) {
+            if (pHolder->hasPowerStar(rTico.mGalaxyName, rTico.mFedBy[idx])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool isGalaxyTicoMissing(const GameDataHolder* pHolder, const GalaxyTicoFed& rTico) {
+        return isGalaxyTicoFedBy(pHolder, rTico) && pHolder->getStarPieceNumGivingToTicoSeed(rTico.mSeed) < rTico.mStarPieceNum;
+    }
+
+    // Restores file `slot` as Mario or Luigi, keeping the file's own "last
+    // played as" in its config data so storing it changes nothing there.
+    bool restoreForFeed(SaveDataHandleSequence* pSequence, UserFile* pFile, s32 slot, bool isMario) {
+        pSequence->restoreUserFile(pFile, slot);
+        const bool isLastLoadedMario = pFile->isLastLoadedMario();
+        pSequence->restoreUserFile(pFile, slot, isMario);
+        pFile->setLastLoadedMario(isLastLoadedMario);
+        return pFile->isCreated() && !pFile->mIsGameDataCorrupted && !pFile->mIsConfigDataCorrupted;
+    }
+
+    void feedUserFiles(SaveDataHandleSequence* pSequence, UserFile* pFile, SaveDataHandler* pHandler) {
+        for (s32 slot = 1; slot <= cUserFileNum; slot++) {
+            for (s32 player = 0; player < 2; player++) {
+                const bool isMario = player == 0;
+                u8* pStored = sFeedStored[slot - 1][player];
+                sFeedChanged[slot - 1][player] = false;
+
+                if (!restoreForFeed(pSequence, pFile, slot, isMario)) {
+                    continue;
+                }
+
+                GameDataHolder* pHolder = pFile->mGameDataHolder;
+
+                for (u32 idx = 0; idx < sizeof(cGalaxyTicoFed) / sizeof(cGalaxyTicoFed[0]); idx++) {
+                    const GalaxyTicoFed& rTico = cGalaxyTicoFed[idx];
+
+                    if (isGalaxyTicoMissing(pHolder, rTico)) {
+                        pHolder->addStarPieceGivingToTicoSeed(rTico.mSeed,
+                                                              rTico.mStarPieceNum - pHolder->getStarPieceNumGivingToTicoSeed(rTico.mSeed));
+                        sFeedChanged[slot - 1][player] = true;
+                        sFeedNum++;
+                        std::fprintf(stderr, "PETARI UNLOCKED SAVE: file %d %s: fed the Hungry Luma in %s (seed %d, %d star bits)\n",
+                                     static_cast< int >(slot), isMario ? "Mario" : "Luigi", rTico.mGalaxyName, static_cast< int >(rTico.mSeed),
+                                     static_cast< int >(rTico.mStarPieceNum));
+                    }
+                }
+
+                std::memset(pStored, 0, cGameDataSize);
+                pFile->makeGameDataBinary(pStored, cGameDataSize);
+
+                if (sFeedChanged[slot - 1][player]) {
+                    pHandler->storeUserFile(pFile);
+                }
+            }
+        }
+    }
+
+    void checkFedUserFiles(SaveDataHandleSequence* pSequence, UserFile* pFile) {
+        for (s32 slot = 1; slot <= cUserFileNum; slot++) {
+            for (s32 player = 0; player < 2; player++) {
+                const bool isMario = player == 0;
+
+                if (!restoreForFeed(pSequence, pFile, slot, isMario)) {
+                    continue;
+                }
+
+                char detail[32];
+                std::snprintf(detail, sizeof(detail), "file %d %s", static_cast< int >(slot), isMario ? "Mario" : "Luigi");
+                std::memset(sReloaded, 0, sizeof(sReloaded));
+                pFile->makeGameDataBinary(sReloaded, cGameDataSize);
+                check(std::memcmp(sReloaded, sFeedStored[slot - 1][player], cGameDataSize) == 0,
+                      "reloaded game data differs from the stored binary for", detail);
+
+                for (u32 idx = 0; idx < sizeof(cGalaxyTicoFed) / sizeof(cGalaxyTicoFed[0]); idx++) {
+                    check(!isGalaxyTicoMissing(pFile->mGameDataHolder, cGalaxyTicoFed[idx]), "hungry Luma in galaxy not fed:", detail);
+                }
+            }
+        }
     }
 
     void unlockUserFile(SaveDataHandleSequence* pSequence, UserFile* pFile, SaveDataHandler* pHandler, bool isMario, u8* pStored) {
@@ -238,6 +358,11 @@ namespace {
             check(pHolder->isOnGameEventFlag(flagName), "hungry Luma not fed:", flagName);
         }
 
+        for (u32 idx = 0; idx < sizeof(cGalaxyTicoFed) / sizeof(cGalaxyTicoFed[0]); idx++) {
+            check(pHolder->getStarPieceNumGivingToTicoSeed(cGalaxyTicoFed[idx].mSeed) >= cGalaxyTicoFed[idx].mStarPieceNum,
+                  "hungry Luma in galaxy not fed:", cGalaxyTicoFed[idx].mGalaxyName);
+        }
+
         std::fprintf(stderr,
                      "PETARI UNLOCKED SAVE: %s file %d: %d/%d stars, grand stars %d/7, normal ending %d, 120-star ending %d, "
                      "Mario ending %d, Luigi ending %d, storybook %d/9, corrupt game %d config %d\n",
@@ -266,6 +391,21 @@ namespace NativeUnlockedSave {
     bool onLoaded(SaveDataHandleSequence* pSequence, UserFile* pWorkFile, SaveDataHandler* pHandler) {
         const int slot = PetariNative::UnlockedSave::slot;
         const Variant variant = getVariant();
+
+        if (sPhase == Phase_Load && variant == Variant_FeedGalaxyLumas) {
+            feedUserFiles(pSequence, pWorkFile, pHandler);
+            std::fprintf(stderr, "PETARI UNLOCKED SAVE: fed %d Hungry Luma(s); saving through the game's save sequence\n",
+                         static_cast< int >(sFeedNum));
+            std::fflush(stderr);
+            sPhase = Phase_Saving;
+            return true;
+        }
+
+        if (sPhase == Phase_Reload && variant == Variant_FeedGalaxyLumas) {
+            std::fprintf(stderr, "PETARI UNLOCKED SAVE: reloaded GameData.bin passed the game's header, size and checksum checks\n");
+            checkFedUserFiles(pSequence, pWorkFile);
+            finish();
+        }
 
         if (sPhase == Phase_Load) {
             pSequence->restoreUserFile(pWorkFile, slot, true);

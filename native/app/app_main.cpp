@@ -26,6 +26,7 @@
 #include <petari/mods.hpp>
 #include <petari/progress.hpp>
 #include <petari/camera_settings.hpp>
+#include <petari/efb_dump_mark.hpp>
 #include <petari/input.hpp>
 
 #include "host.hpp"
@@ -65,7 +66,9 @@ void usage() {
                "              loads (observatory progression otherwise); requires --user marked \"stage\"\n"
                "  --make-unlocked-save all-missions|complete-luigi|grand-finale  unlock file 1 of an isolated\n"
                "              --user holding .petari-make-unlocked-save, save, reload and verify it, then exit\n"
-               "              (native/SAVES.md; use native/tools/make_unlocked_save.py)\n",
+               "              (native/SAVES.md; use native/tools/make_unlocked_save.py)\n"
+               "  --make-unlocked-save feed-galaxy-lumas  in every file of an isolated --user, feed only the\n"
+               "              in-galaxy Hungry Lumas whose mission star the file holds; save, reload, verify, exit\n",
                stderr);
 }
 
@@ -128,7 +131,8 @@ bool resolvePaths(int argc, char** argv, App::Paths* paths) {
             fixture = stageFixture = true;
         } else if (std::strcmp(argv[i], "--make-unlocked-save") == 0 && i + 1 < argc &&
                    (std::strcmp(argv[i + 1], "all-missions") == 0 || std::strcmp(argv[i + 1], "complete-luigi") == 0 ||
-                    std::strcmp(argv[i + 1], "grand-finale") == 0)) {
+                    std::strcmp(argv[i + 1], "grand-finale") == 0 ||
+                    std::strcmp(argv[i + 1], "feed-galaxy-lumas") == 0)) {
             unlockedSave = argv[++i];
         } else {
             return false;
@@ -265,7 +269,9 @@ App::FrameStats::Phase framePhaseForPipelines() {
         testWarp.clear();
     }
     // Test driver (PETARI_CAMERA_TEST=1, with the Odyssey camera mod on): a fixed
-    // script of right-stick orbit, pitch, zoom, mouse drag and recentre during gameplay.
+    // script of right-stick orbit, pitch, zoom, mouse drag and recentre during gameplay,
+    // then a collision sweep: farthest zoom, camera below Mario, one full turn (the
+    // line of sight must hit the floor and nearby walls; XFB label "camera-sweep").
     static const bool cameraTest = std::getenv("PETARI_CAMERA_TEST") != nullptr;
     static long cameraFrames = 0;
     if (cameraTest && gameplay && PetariNative::CameraSettings::enabled()) {
@@ -278,6 +284,15 @@ App::FrameStats::Phase framePhaseForPipelines() {
         if (f == 380) Camera::zoomSteps(-6.0f);
         if (f >= 420 && f < 450) Camera::mouseDrag(-8.0f, 2.0f);
         if (f == 600) Camera::recenter();
+        if (f == 650) {
+            std::fputs("[camera-test] collision sweep\n", stderr);
+            PetariNative::EfbDump::mark("camera-sweep");
+            Camera::zoomSteps(20.0f);
+        }
+        if (f >= 650 && f < 700) Camera::stick(0.0f, -1.0f);
+        if (f >= 700 && f < 820) Camera::stick(1.0f, 0.0f);
+        if (f == 820) Camera::stick(0.0f, 0.0f);
+        if (f == 860) Camera::recenter();
     }
     static long gameplayFrames = 0;
     if (period > 1 && gameplay) {

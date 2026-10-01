@@ -21,6 +21,7 @@ unlocked = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(unlocked)
 
 SEED = ROOT / "build/observatory-user-2" / unlocked.SAVE_RELATIVE
+STAGE_DATA = ROOT / "build/game-data/RMGE01/files/StageData"
 # Game data sizes in SaveDataHandler's layout order (mario, luigi, config per file; sysconf).
 SPANS = [("mario", 0xF80), ("luigi", 0xF80), ("config", 0x60)]
 
@@ -68,6 +69,99 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(summary["mario1"]["galaxies"], 42)
 
 
+class GalaxyTicoFedTests(unittest.TestCase):
+    """Toy Time's comet started Mario in empty space: the save held Toy Time's
+    star but not its Hungry Luma's feeding, so CrossRingZone (SW_SLEEP 1005, the
+    TicoFat's SW_A) never woke. Both tables must list every in-galaxy TicoFat."""
+
+    def test_cpp_table_matches_python(self):
+        source = (ROOT / "src/Game/System/NativeUnlockedSave.cpp").read_text()
+        table = {int(seed): int(num) for _, seed, num in re.findall(r'\{"(\w+)", (\d+), (\d+), \{', source)}
+        self.assertEqual(table, unlocked.GALAXY_TICO_FED)
+
+    @unittest.skipUnless(STAGE_DATA.is_dir(), "no extracted disc in this checkout")
+    def test_table_lists_every_tico_fat_on_the_disc(self):
+        import sys
+        sys.path.insert(0, str(ROOT / "native/tools"))
+        from collect_pipeline_seed_inputs import field_hash
+        from stage_sweep import archive_tree, bcsv_rows
+        name, arg1, arg7 = field_hash("name"), field_hash("Obj_arg1"), field_hash("Obj_arg7")
+        found = {}
+        for archive in sorted(STAGE_DATA.glob("*.arc")):
+            for path, data in archive_tree(archive.read_bytes()):
+                if not path.endswith("objinfo"):
+                    continue
+                for row in bcsv_rows(data):
+                    if row.get(name) == "TicoFat" and row.get(arg7, -1) >= 0:
+                        found[row[arg7]] = row[arg1]
+        self.assertEqual(found, unlocked.GALAXY_TICO_FED)
+
+    def test_unfed_seed_is_rejected(self):
+        seeds = [0] * 8 + [400, 400, 600, 1200, 1600, 1000, 800, 0]
+        self.assertEqual(unlocked.unfed_tico_seeds({"tico_seeds": seeds}), sorted(unlocked.GALAXY_TICO_FED))
+        for seed, wanted in unlocked.GALAXY_TICO_FED.items():
+            seeds[seed] = wanted
+        self.assertEqual(unlocked.unfed_tico_seeds({"tico_seeds": seeds}), [])
+
+
+class FeedGalaxyLumasTests(unittest.TestCase):
+    """--feed-galaxy-lumas may only raise in-galaxy Luma counts to what feeding stores."""
+
+    def setUp(self):
+        self.save = next((ROOT / "build/saves" / v / unlocked.SAVE_RELATIVE for v in unlocked.VARIANTS
+                          if (ROOT / "build/saves" / v / unlocked.SAVE_RELATIVE).is_file()), None)
+        if self.save is None:
+            self.skipTest("no generated saves under build/saves")
+        self.before = self.unfed(self.save.read_bytes())
+
+    @staticmethod
+    def entry_offset(data: bytes, name: str) -> int:
+        for index in range(unlocked.FILE_ENTRIES):
+            entry, offset = struct.unpack_from("<12sI", data, 16 + index * 16)
+            if entry.split(b"\0", 1)[0].decode() == name:
+                return offset
+        raise KeyError(name)
+
+    def edit(self, data: bytes, position: int, value: int) -> bytes:
+        data = bytearray(data)
+        struct.pack_into("<H", data, position, value)
+        size = struct.unpack_from("<I", data, 12)[0]
+        struct.pack_into("<I", data, 0, unlocked.check_sum(bytes(data[4:size])))
+        return bytes(data)
+
+    def seed_position(self, data: bytes, seed: int) -> int:
+        offset = self.entry_offset(data, "mario1")
+        start = unlocked.chunk_ranges(unlocked.parse_entries(data)["mario1"])["PCE1"][0]
+        return offset + start + seed * 2
+
+    def unfed(self, data: bytes) -> bytes:
+        for seed in unlocked.GALAXY_TICO_FED:
+            data = self.edit(data, self.seed_position(data, seed), 0)
+        return data
+
+    def test_accepts_feeding(self):
+        after = self.edit(self.before, self.seed_position(self.before, 4), 50)
+        self.assertEqual(unlocked.check_feed(self.before, after), [("mario1", 4)])
+        self.assertEqual(unlocked.check_feed(self.before, self.before), [])
+
+    def test_rejects_anything_else(self):
+        for seed, value in ((4, 49), (4, 51), (8, 0), (0, 5)):
+            with self.subTest(seed=seed, value=value):
+                with self.assertRaises(ValueError):
+                    unlocked.check_feed(self.before, self.edit(self.before, self.seed_position(self.before, seed), value))
+        star = self.entry_offset(self.before, "mario1") + 0x10
+        with self.assertRaisesRegex(ValueError, "outside"):
+            unlocked.check_feed(self.before, self.edit(self.before, star, 0xFFFF))
+        sysconf = self.entry_offset(self.before, "sysconf")
+        start, end = unlocked.sysconf_time_sent(unlocked.parse_entries(self.before)["sysconf"])
+        self.assertEqual(unlocked.check_feed(self.before, self.edit(self.before, sysconf + start, 0x1234)), [])
+        with self.assertRaisesRegex(ValueError, "sysconf changed outside"):
+            unlocked.check_feed(self.before, self.edit(self.before, sysconf + end, 0x1234))
+        config = self.entry_offset(self.before, "config1")
+        with self.assertRaisesRegex(ValueError, "config1 changed"):
+            unlocked.check_feed(self.before, self.edit(self.before, config, 0x1234))
+
+
 class IsolationTests(unittest.TestCase):
     def test_refuses_existing_output_and_missing_seed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -109,8 +203,10 @@ class PublishedSaveTests(unittest.TestCase):
                     summary = unlocked.inspect(save)
                 self.assertEqual(summary, manifest["inspect"])
                 self.assertEqual(summary["mario1"]["star_bits"], 120)
+                self.assertEqual(unlocked.unfed_tico_seeds(summary["mario1"]), [])
                 if variant == "grand-finale":
                     self.assertEqual(summary["luigi1"]["star_bits"], 120)
+                    self.assertEqual(unlocked.unfed_tico_seeds(summary["luigi1"]), [])
         if checked == 0:
             self.skipTest("no generated saves under build/saves")
 

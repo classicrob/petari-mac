@@ -12,6 +12,9 @@ namespace PetariNative::UnlockedSave {
 //                   and galaxies open, every mission selectable.
 //   complete-luigi  all-missions plus the 120-star ending seen: Luigi playable.
 //   grand-finale    120 stars for both Mario and Luigi: Grand Finale Galaxy open.
+//   feed-galaxy-lumas  an existing save: in every file, record the in-galaxy
+//                   Hungry Lumas fed whose mission star the file holds (as the
+//                   game would have); nothing else changes.
 // Empty: not in use.
 inline std::string variant;
 inline int slot = 1;

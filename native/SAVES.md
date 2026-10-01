@@ -23,6 +23,11 @@ would be to change the game's rules, so these saves hold the stars. A mission
 whose star you already have can still be played in full. It gives a see-through
 star at the end.
 
+The Hungry Lumas inside galaxies count as fed, as they would be after their
+missions. Six galaxies have one: Space Junk, Battlerock, Dusty Dune, Sea Slide,
+Toy Time and Melty Molten. The planet each turns into is already there in
+later missions, for example Toy Time's comet, which starts on it.
+
 In every variant, the Grand Finale's own star is left uncollected. Tutorial and
 first power-up explanations are still unseen. Records such as best race times
 and coin scores are empty.
@@ -85,6 +90,30 @@ Luigi on file 1's character selection. `complete-luigi` unlocks the character,
 but his separate adventure has no collected stars yet. Grand Finale is reached
 through its observatory NPC, rather than one of the six dome maps. Hungry Luma
 and other observatory destinations also use their own entrances.
+
+## Fix a save made before 2026-10-01 (Hungry Lumas)
+
+Saves made from these variants before 2026-10-01 have the stars but not the
+Hungry Lumas fed inside galaxies. In those saves Toy Time's comet and hidden
+star start Mario in empty space, and Battlerock's bomb time attack has no
+planet. Other missions with a Hungry Luma in them ask you to feed it again. To
+fix a save you have been playing, without losing your progress, **quit Petari
+first** and run this from the repository root, with your save directory:
+
+```sh
+python3 native/tools/make_unlocked_save.py --feed-galaxy-lumas ~/Petari-playtest/all-missions
+```
+
+In every file, as Mario and as Luigi, it records a galaxy's Hungry Luma as fed
+when the file holds a star that shows it was fed: one from a mission the Luma
+appears in, or one won on the planet it turns into. Nothing else changes. Your
+stars, Star Bits, lives and records stay as they are. The game makes the change
+on a copy, saves it with its own save sequence and checks it on reload. The script
+then confirms that only those Star Bit counts changed, and copies your previous
+`GameData.bin` to `save-backups/` in the save directory. Only then does it
+replace the save. If anything fails, your save is not changed. A save that
+needs nothing is left untouched. To undo, copy the backup back over
+`NAND/title/00010000/524d4745/data/GameData.bin`.
 
 ## Making a save again
 

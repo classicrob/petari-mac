@@ -15,6 +15,12 @@ Variants (native/SAVES.md):
 
 Example (run one app at a time):
   python3 native/tools/make_unlocked_save.py --variant all-missions
+
+--feed-galaxy-lumas USER_DIR patches an existing save with real progress (quit
+Petari first): in every file, the in-galaxy Hungry Lumas whose mission star the
+file holds are recorded as fed, as the game would have. The app does it on a
+work copy; this script checks that only those Star Bit counts changed, keeps a
+timestamped backup of GameData.bin in USER_DIR/save-backups, then replaces it.
 """
 import argparse
 import hashlib
@@ -36,6 +42,9 @@ FILE_ENTRIES = 19
 GAME_DATA_SIZE = 0xF80
 # GameDataHolder chunk signatures in their fixed order.
 GAME_CHUNKS = ("PLAY", "FLG1", "PCE1", "SPN1", "VLE1", "GALA")
+# Hungry Lumas inside galaxies (TicoFat Obj_arg7 seed: Obj_arg1 star bits). Fed, they
+# turn into a planet later missions start on, e.g. Toy Time's comet (FactoryGalaxy).
+GALAXY_TICO_FED = {1: 20, 2: 50, 3: 40, 4: 50, 5: 80, 6: 30}
 
 
 def check_sum(data: bytes) -> int:
@@ -69,6 +78,16 @@ def parse_entries(data: bytes) -> dict:
         end = ordered[position + 1][1] if position + 1 < len(ordered) else size
         spans[name] = data[offset:end]
     return spans
+
+
+def chunk_ranges(blob: bytes) -> dict:
+    """Byte range of each chunk's payload in a game data blob."""
+    ranges, offset = {}, 4
+    for _ in range(blob[1]):
+        sig, _hash, size = struct.unpack_from("<3I", blob, offset)
+        ranges[signature(sig)] = (offset + 12, offset + size)
+        offset += size
+    return ranges
 
 
 def parse_game_data(blob: bytes) -> dict:
@@ -106,8 +125,10 @@ def summarize_game_data(chunks: dict) -> dict:
     flags = chunks["FLG1"]
     flags_on = sum(1 for (word,) in struct.iter_unpack("<H", flags) if word & 0x8000)
     story = chunks["PLAY"][0]
+    # StarPieceAlmsStorage: 16 host-order u16 star bit counts, seeds 0-7 in galaxies, 8+ observatory.
+    alms = list(struct.unpack_from("<16H", chunks["PCE1"], 0))
     return {"galaxies": galaxy_num, "star_bits": stars, "stored_flags": len(flags) // 2,
-            "stored_flags_on": flags_on, "story_progress": story}
+            "stored_flags_on": flags_on, "story_progress": story, "tico_seeds": alms}
 
 
 def inspect(path: Path) -> dict:
@@ -122,6 +143,113 @@ def inspect(path: Path) -> dict:
     return summary
 
 
+def unfed_tico_seeds(game_summary: dict) -> list:
+    seeds = game_summary["tico_seeds"]
+    return [seed for seed, wanted in sorted(GALAXY_TICO_FED.items()) if seeds[seed] < wanted]
+
+
+def sysconf_time_sent(blob: bytes) -> tuple:
+    """Byte range of SysConfigChunk mTimeSent (its 2nd attribute, the Wii Mail send
+    window's day; NWC24Function updateWiiMailSentSize) in a sysconf blob."""
+    if blob[:2] != b"\x01\x01" or blob[4:8] != b"CSYS":
+        raise ValueError(f"sysconf header {blob[:8].hex()}")
+    attributes = struct.unpack_from("<H", blob, 16)[0]
+    if attributes != 3:
+        raise ValueError(f"sysconf: {attributes} attributes")
+    record = 16 + 4 + attributes * 4
+    offset = struct.unpack_from("<HH", blob, 16 + 4 + 4)[1]
+    return record + offset, record + offset + 8
+
+
+def check_feed(before: bytes, after: bytes) -> list:
+    """The changes a feed-galaxy-lumas run made; raises ValueError on any other change.
+
+    Allowed: in a mario<N>/luigi<N> game data entry, PCE1 seeds listed in
+    GALAXY_TICO_FED raised from below to exactly their count. The game's save also
+    rewrites sysconf; there only its Wii Mail timestamp (mTimeSent) may change, as
+    it does in ordinary play. Returns [(entry, seed)]."""
+    old, new = parse_entries(before), parse_entries(after)
+    if list(old) != list(new) or any(len(old[name]) != len(new[name]) for name in old):
+        raise ValueError("entry layout changed")
+    if before[4:16] != after[4:16] or len(before) != len(after):
+        raise ValueError("file header changed")
+    fed = []
+    for name in old:
+        if old[name] == new[name]:
+            continue
+        if name == "sysconf":
+            start, end = sysconf_time_sent(old[name])
+            if old[name][:start] != new[name][:start] or old[name][end:] != new[name][end:]:
+                raise ValueError("sysconf changed outside its Wii Mail timestamp")
+            continue
+        if not (name.startswith("mario") or name.startswith("luigi")) or not any(old[name]):
+            raise ValueError(f"{name} changed")
+        start, end = chunk_ranges(old[name])["PCE1"]
+        if chunk_ranges(new[name])["PCE1"] != (start, end) or old[name][:start] != new[name][:start] or old[name][end:] != new[name][end:]:
+            raise ValueError(f"{name} changed outside the Star Bit (PCE1) counts")
+        seeds_old = struct.unpack_from("<16H", old[name], start)
+        seeds_new = struct.unpack_from("<16H", new[name], start)
+        for seed, (was, now) in enumerate(zip(seeds_old, seeds_new)):
+            if was == now:
+                continue
+            if seed not in GALAXY_TICO_FED or was >= GALAXY_TICO_FED[seed] or now != GALAXY_TICO_FED[seed]:
+                raise ValueError(f"{name} seed {seed} changed {was} -> {now}")
+            fed.append((name, seed))
+    return fed
+
+
+def feed_galaxy_lumas(user: Path, app: Path, disc: Path, timeout: float) -> list:
+    """Patch USER_DIR's save in place (see the module docstring); returns [(entry, seed)] fed."""
+    user = user.resolve(strict=True)
+    save = user / SAVE_RELATIVE
+    if not save.is_file():
+        raise ValueError(f"no saved file: {save}")
+    running = subprocess.run(["pgrep", "-f", f"Petari.*{user}"], capture_output=True, text=True).stdout.split()
+    if running:
+        raise ValueError(f"Petari is running with {user} (pids {' '.join(running)}); quit it first")
+    original = save.read_bytes()
+    parse_entries(original)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    work = user.with_name(f".{user.name}.feed-galaxy-lumas-{stamp}")
+    work.mkdir()
+    (work / SAVE_RELATIVE).parent.mkdir(parents=True)
+    shutil.copy2(save, work / SAVE_RELATIVE)
+    (work / MARKER).write_text("feed-galaxy-lumas\n")
+    log = work / "generation.log"
+    command = [str(app), "--disc", str(disc), "--user", str(work), "--make-unlocked-save", "feed-galaxy-lumas"]
+    with log.open("w") as stream:
+        stream.write("$ " + shlex.join(command) + "\n")
+        stream.flush()
+        try:
+            status = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout).returncode
+        except subprocess.TimeoutExpired:
+            status = "timeout"
+    text = log.read_text(errors="replace")
+    if status != 0 or "PETARI UNLOCKED SAVE: VERIFIED (feed-galaxy-lumas," not in text:
+        raise ValueError(f"app status {status}; see {log} (your save was not changed)")
+    patched = (work / SAVE_RELATIVE).read_bytes()
+    try:
+        fed = check_feed(original, patched)
+    except ValueError as error:
+        raise ValueError(f"{error}; see {work} (your save was not changed)") from None
+    if save.read_bytes() != original:
+        raise ValueError(f"{save} changed while patching; nothing replaced, see {work}")
+    for line in text.splitlines():
+        if line.startswith("PETARI UNLOCKED SAVE: file "):
+            print(line.removeprefix("PETARI UNLOCKED SAVE: "))
+    if fed:
+        backups = user / "save-backups"
+        backups.mkdir(exist_ok=True)
+        backup = backups / f"GameData.bin.before-feed-galaxy-lumas-{stamp}"
+        shutil.copy2(save, backup)
+        replacement = save.with_name(save.name + ".feed-galaxy-lumas")
+        replacement.write_bytes(patched)
+        replacement.replace(save)
+        print(f"Backup of the previous save: {backup}")
+    shutil.rmtree(work)
+    return fed
+
+
 def unlocked_entries(variant: str) -> tuple:
     """Entries the generator rewrites; sysconf is rewritten by every game save."""
     return ("mario1", "luigi1", "config1", "sysconf") if variant == "grand-finale" else ("mario1", "config1", "sysconf")
@@ -133,6 +261,10 @@ def check_against_seed(variant: str, save: Path, seed_save: Path) -> dict:
     for name in ("mario1", "luigi1"):
         if name in unlocked_entries(variant) and (summary[name] or {}).get("star_bits") != 120:
             raise ValueError(f"{name}: {summary[name]}, expected 120 star bits")
+        if name in unlocked_entries(variant):
+            unfed = unfed_tico_seeds(summary[name])
+            if unfed:
+                raise ValueError(f"{name}: hungry Lumas in galaxies not fed, seeds {unfed}: {summary[name]['tico_seeds']}")
     spans, seed_spans = parse_entries(save.read_bytes()), parse_entries(seed_save.read_bytes())
     changed = [name for name in spans if name not in unlocked_entries(variant) and spans[name] != seed_spans[name]]
     if changed:
@@ -208,8 +340,14 @@ def main() -> int:
     parser.add_argument("--disc", type=Path, default=root / "build/game-data/RMGE01")
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--inspect", type=Path, metavar="GAMEDATA_BIN", help="only check an existing GameData.bin")
+    parser.add_argument("--feed-galaxy-lumas", type=Path, metavar="USER_DIR",
+                        help="patch an existing save in place: feed the in-galaxy Hungry Lumas its stars imply")
     args = parser.parse_args()
     try:
+        if args.feed_galaxy_lumas:
+            fed = feed_galaxy_lumas(args.feed_galaxy_lumas, args.app.absolute(), args.disc.absolute(), args.timeout)
+            print(f"Fed {len(fed)} Hungry Luma(s)." if fed else "Nothing to feed; the save was not changed.")
+            return 0
         if args.inspect:
             print(json.dumps(inspect(args.inspect), indent=2))
             return 0
