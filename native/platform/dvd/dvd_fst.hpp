@@ -9,7 +9,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "petari/platform/dvd.hpp"
 
 namespace PetariNative::Platform::DVD {
 
@@ -44,6 +47,22 @@ public:
     // macOS metadata files (.DS_Store, AppleDouble "._*") are not part of discs
     // and are skipped.
     static bool fromDirectory(const std::filesystem::path& filesDirectory, Fst& out, std::string* error);
+
+    struct OverlayResult {
+        std::uint32_t replaced = 0, added = 0;
+        std::vector<std::string> skipped;  // "<path>: reason"
+    };
+    // Applies enabled mod files over the disc. A path (ASCII case-insensitive,
+    // normalized by the caller) that names a disc file replaces it: the new
+    // host file and size; the disc position is kept when the file did not grow
+    // and moves to the end of the disc otherwise. Other paths become new files
+    // (directories are created as needed, matching existing ones
+    // case-insensitively). Entry numbers change only when files are added. A
+    // path that would turn a file into a directory or the reverse is skipped.
+    // Not called without mods: the unmodified FST is never rebuilt.
+    bool applyOverlay(const std::vector<OverlayFile>& files, OverlayResult& result, std::string* error);
+    // The mod that supplies a file entry, or an empty string for a disc file.
+    const std::string& overlayMod(std::uint32_t index) const;
 
     std::uint32_t entryCount() const { return static_cast<std::uint32_t>(mEntries.size()); }
     std::uint32_t fileCount() const { return mFileCount; }
@@ -81,6 +100,7 @@ private:
     std::vector<FstEntry> mEntries;
     std::vector<char> mStrings;
     std::vector<std::filesystem::path> mHostPaths;
+    std::vector<std::string> mOverlayMods;  // empty, or one per entry after applyOverlay
     std::vector<Extent> mExtents;
     std::uint32_t mFileCount = 0;
     std::uint64_t mDiscEnd = 0;

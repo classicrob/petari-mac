@@ -2,6 +2,7 @@
 // feeds it observations and applies its presses.
 
 #include "smoke_domes.hpp"
+#include <petari/efb_dump_mark.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -893,6 +894,7 @@ void DomesDriver::dome(const Observation& o, Step& step) {
         if (handleTalk(o, step)) return;
         if (gameplayReady(o)) {
             mVisits[mVisit].readyFrames = mPhaseFrames;
+            PetariNative::EfbDump::mark("dome-ready");  // opt-in image dump (PETARI_XFB_DUMP); inert otherwise
             note("ready in " + visit->galaxy + " at " + text(position(o)) + (o.playerOnGround ? ", on the ground" : ", in the air"));
             mMoveX = o.playerX; mMoveY = o.playerY; mMoveZ = o.playerZ;
             tap(Button::StickUp, kMoveHold, step);

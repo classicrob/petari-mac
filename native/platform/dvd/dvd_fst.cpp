@@ -280,6 +280,186 @@ bool Fst::fromDirectory(const fs::path& filesDirectory, Fst& out, std::string* e
     return true;
 }
 
+namespace {
+struct OverlayNode {
+    std::string name;
+    bool isDir = false;
+    std::uint32_t position = 0;  // words
+    std::uint32_t length = 0;
+    fs::path host;
+    std::string mod;
+    std::vector<OverlayNode> children;
+};
+
+bool sameName(const std::string& a, const std::string& b) {
+    return asciiUpper(a) == asciiUpper(b);
+}
+}  // namespace
+
+bool Fst::applyOverlay(const std::vector<OverlayFile>& files, OverlayResult& result, std::string* error) {
+    OverlayNode root;
+    root.isDir = true;
+    // Existing tree, in FST order.
+    auto build = [&](auto&& self, std::uint32_t dir, OverlayNode& node) -> void {
+        for (std::uint32_t i = dir + 1; i < mEntries[dir].nextOrLength;) {
+            const FstEntry& e = mEntries[i];
+            OverlayNode child;
+            child.name = name(i);
+            child.isDir = e.isDir;
+            if (e.isDir) {
+                self(self, i, child);
+                i = e.nextOrLength;
+            } else {
+                child.position = e.parentOrPosition;
+                child.length = e.nextOrLength;
+                child.host = mHostPaths[i];
+                if (i < mOverlayMods.size()) child.mod = mOverlayMods[i];
+                ++i;
+            }
+            node.children.push_back(std::move(child));
+        }
+    };
+    build(build, 0, root);
+
+    std::uint64_t cursor = mDiscEnd;  // new and grown files go after the last file
+    for (const OverlayFile& overlayFile : files) {
+        const std::string& path = overlayFile.path;
+        const fs::path& host = overlayFile.host;
+        std::vector<std::string> parts;
+        for (std::size_t at = 0; at <= path.size();) {
+            const std::size_t slash = std::min(path.find('/', at), path.size());
+            parts.push_back(path.substr(at, slash - at));
+            at = slash + 1;
+        }
+        bool valid = !parts.empty();
+        for (const std::string& part : parts) {
+            valid = valid && isSafeComponent(part.c_str());
+        }
+        if (!valid) {
+            result.skipped.push_back(path + ": invalid path");
+            continue;
+        }
+        std::error_code ec;
+        const std::uintmax_t size = fs::file_size(host, ec);
+        if (ec || !fs::is_regular_file(host, ec)) {
+            result.skipped.push_back(path + ": cannot read " + host.string());
+            continue;
+        }
+        if (size > 0xFFFFFFFFu) {
+            result.skipped.push_back(path + ": exceeds the 4 GiB DVD file limit");
+            continue;
+        }
+        OverlayNode* dir = &root;
+        bool conflict = false;
+        bool createdDir = false;
+        for (std::size_t i = 0; i + 1 < parts.size() && !conflict; ++i) {
+            OverlayNode* next = nullptr;
+            for (OverlayNode& child : dir->children) {
+                if (sameName(child.name, parts[i])) {
+                    next = &child;
+                    break;
+                }
+            }
+            if (next == nullptr) {
+                dir->children.push_back({parts[i], true, 0, 0, {}, {}, {}});
+                next = &dir->children.back();
+                createdDir = true;
+            } else if (!next->isDir) {
+                conflict = true;
+            }
+            dir = next;
+        }
+        (void)createdDir;
+        if (conflict) {
+            result.skipped.push_back(path + ": a directory of this path is a file on the disc");
+            continue;
+        }
+        OverlayNode* file = nullptr;
+        for (OverlayNode& child : dir->children) {
+            if (sameName(child.name, parts.back())) {
+                file = &child;
+                break;
+            }
+        }
+        if (file != nullptr && file->isDir) {
+            result.skipped.push_back(path + ": is a directory on the disc");
+            continue;
+        }
+        const bool fits = file != nullptr && size <= file->length;
+        if (file == nullptr) {
+            dir->children.push_back({parts.back(), false, 0, 0, {}, {}, {}});
+            file = &dir->children.back();
+            ++result.added;
+        } else {
+            ++result.replaced;
+        }
+        if (!fits) {
+            file->position = static_cast<std::uint32_t>(cursor >> 2);
+            cursor += (size + kSyntheticAlignment - 1) / kSyntheticAlignment * kSyntheticAlignment;
+            if (cursor > kMaxDiscBytes) {
+                setError(error, "mod files exceed the addressable disc size");
+                return false;
+            }
+        }
+        file->length = static_cast<std::uint32_t>(size);
+        file->host = host;
+        file->mod = overlayFile.mod;
+    }
+
+    // Rebuild the tables.
+    std::vector<FstEntry> entries;
+    std::vector<fs::path> hosts;
+    std::vector<std::string> mods;
+    std::string strings;
+    auto addName = [&](const std::string& n) {
+        const std::size_t offset = strings.size();
+        strings += n;
+        strings += '\0';
+        return static_cast<std::uint32_t>(offset);
+    };
+    entries.push_back({true, 0, 0, 0});
+    hosts.emplace_back();
+    mods.emplace_back();
+    auto emit = [&](auto&& self, const OverlayNode& dir, std::uint32_t dirIndex) -> void {
+        for (const OverlayNode& child : dir.children) {
+            const std::uint32_t index = static_cast<std::uint32_t>(entries.size());
+            if (child.isDir) {
+                entries.push_back({true, addName(child.name), dirIndex, 0});
+                hosts.emplace_back();
+                mods.emplace_back();
+                self(self, child, index);
+                entries[index].nextOrLength = static_cast<std::uint32_t>(entries.size());
+            } else {
+                entries.push_back({false, addName(child.name), child.position, child.length});
+                hosts.push_back(child.host);
+                mods.push_back(child.mod);
+            }
+        }
+    };
+    emit(emit, root, 0);
+    entries[0].nameOffset = addName("");
+    entries[0].nextOrLength = static_cast<std::uint32_t>(entries.size());
+    if (strings.size() > kMaxStringOffset) {
+        setError(error, "file names exceed the 16 MiB FST string table limit");
+        return false;
+    }
+    Fst rebuilt;
+    rebuilt.mEntries = std::move(entries);
+    rebuilt.mHostPaths = std::move(hosts);
+    rebuilt.mOverlayMods = std::move(mods);
+    rebuilt.mStrings.assign(strings.begin(), strings.end());
+    if (!rebuilt.finish(error)) {
+        return false;
+    }
+    *this = std::move(rebuilt);
+    return true;
+}
+
+const std::string& Fst::overlayMod(std::uint32_t index) const {
+    static const std::string none;
+    return index < mOverlayMods.size() ? mOverlayMods[index] : none;
+}
+
 bool Fst::finish(std::string* error) {
     mExtents.clear();
     mFileCount = 0;

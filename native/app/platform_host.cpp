@@ -12,6 +12,7 @@
 #include <petari/platform/crash.hpp>
 #include <petari/platform/diagnostics.hpp>
 #include <petari/platform/dvd.hpp>
+#include <petari/platform/mod_folder.hpp>
 #include <petari/platform/nand.hpp>
 #include <petari/platform/os_host.hpp>
 #include <petari/platform/power.hpp>
@@ -75,7 +76,15 @@ bool preparePlatform(const Paths& paths, std::string* error) {
     Platform::Crash::install(crashes);
     Smoke::setHangReport(dumpHangState, crashes.string());
 
-    if (!Platform::DVD::mount({paths.disc}, error)) {
+    // Disc-file mods (native/MODS.md): none unless the player enabled one, in which
+    // case the disc is unchanged for every file the mods do not supply.
+    Platform::DVD::MountOptions mountOptions{paths.disc};
+    {
+        auto resolved = Platform::ModFolder::resolveForUser(paths.user);
+        for (const std::string& line : resolved.log) std::fprintf(stderr, "[mods] %s\n", line.c_str());
+        mountOptions.overlay = std::move(resolved.files);
+    }
+    if (!Platform::DVD::mount(mountOptions, error)) {
         *error = "disc " + paths.disc.string() + ": " + *error;
         return false;
     }

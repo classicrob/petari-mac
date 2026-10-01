@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace PetariNative::Platform::DVD {
 
@@ -20,6 +21,14 @@ enum class FstSource {
     DirectoryScan,
 };
 
+// One file of an enabled disc-file mod (native/MODS.md): the disc path it
+// replaces or adds, and the host file that supplies it.
+struct OverlayFile {
+    std::string path;                // disc path below files/, "/"-separated, no leading "/"
+    std::filesystem::path host;      // host file
+    std::string mod;                 // mod name, for the log
+};
+
 struct MountOptions {
     // Directory containing files/ (and normally sys/), or containing
     // DATA/files as produced by wit.
@@ -27,6 +36,9 @@ struct MountOptions {
     // Build the FST from files/ even when sys/fst.bin exists. Needed for
     // trees whose files were modified after extraction.
     bool ignoreDiscFst = false;
+    // Enabled mod files, already resolved by precedence (one entry per path).
+    // Empty (the default): the mounted disc is exactly the extracted tree.
+    std::vector<OverlayFile> overlay;
 };
 
 struct MountInfo {
@@ -36,6 +48,8 @@ struct MountInfo {
     std::uint32_t fileCount = 0;
     // False when sys/boot.bin was absent; DVDGetCurrentDiskID() is then all zero.
     bool hasDiskId = false;
+    std::uint32_t overlayReplaced = 0;  // disc files replaced by a mod file
+    std::uint32_t overlayAdded = 0;     // files that exist only in a mod
 };
 
 // Mounts an extracted disc. May be called before or after DVDInit(). Commands

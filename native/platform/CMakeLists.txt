@@ -55,6 +55,7 @@ endif()
 add_library(petari_platform_dvd STATIC
     dvd/dvd_fst.cpp
     dvd/dvd_host.cpp
+    dvd/mod_folder.cpp
     ${PETARI_REPO_ROOT}/src/RVL_SDK/dvd/dvdidutils.c)
 set_source_files_properties(${PETARI_REPO_ROOT}/src/RVL_SDK/dvd/dvdidutils.c PROPERTIES LANGUAGE CXX)
 target_include_directories(petari_platform_dvd PUBLIC include PRIVATE dvd os)
@@ -147,6 +148,10 @@ if(BUILD_TESTING)
     target_include_directories(petari_platform_dvd_tests PRIVATE dvd)
     target_link_libraries(petari_platform_dvd_tests PRIVATE petari_platform)
     add_test(NAME native_platform_dvd COMMAND petari_platform_dvd_tests)
+
+    add_executable(petari_mod_folder_tests ${PETARI_REPO_ROOT}/native/tests/mod_folder_tests.cpp)
+    target_link_libraries(petari_mod_folder_tests PRIVATE petari_platform)
+    add_test(NAME native_mod_folder COMMAND petari_mod_folder_tests)
 
     add_executable(petari_platform_os_tests ${PETARI_REPO_ROOT}/native/tests/platform_os_tests.cpp)
     target_include_directories(petari_platform_os_tests PRIVATE os dvd)

@@ -619,6 +619,68 @@ void testMountValidationAndScan() {
     PDVD::shutdown();
 }
 
+// Disc-file mods: replacement (same, smaller, larger), case-insensitive paths, new files and
+// directories, conflicts, and byte-identical behavior without an overlay.
+void testOverlay() {
+    TempDir tmp, mods;
+    const Node disc = sampleDisc();
+    makeExtractedDisc(tmp.path, disc);
+    const std::string bigger = pattern(70000, 9), smaller = pattern(10, 8), same = pattern(96, 7), added = pattern(123, 6);
+    writeBytes(mods.path / "bigger.arc", std::vector<std::uint8_t>(bigger.begin(), bigger.end()));
+    writeBytes(mods.path / "smaller.bin", std::vector<std::uint8_t>(smaller.begin(), smaller.end()));
+    writeBytes(mods.path / "same.bnr", std::vector<std::uint8_t>(same.begin(), same.end()));
+    writeBytes(mods.path / "added.arc", std::vector<std::uint8_t>(added.begin(), added.end()));
+
+    // No overlay: identical tables (entry count, positions) to the plain mount.
+    mountOrFail({tmp.path});
+    DVDInit();
+    const std::uint32_t plainEntries = PDVD::mountInfo().entryCount;
+    DVDFileInfo plain;
+    check(DVDOpen("/StageData/AstroGalaxy/AstroGalaxy.arc", &plain), "plain open");
+    const u32 plainStart = plain.startAddr;
+    check(PDVD::mountInfo().overlayReplaced == 0 && PDVD::mountInfo().overlayAdded == 0, "no overlay: nothing reported");
+    PDVD::shutdown();
+
+    PDVD::MountOptions options{tmp.path};
+    options.overlay = {
+        {"stagedata/ASTROGALAXY/astrogalaxy.ARC", mods.path / "bigger.arc", "ModA"},  // other case, grows
+        {"opening.bnr", mods.path / "same.bnr", "ModA"},                              // same size
+        {"AudioRes/Seq.arc", mods.path / "smaller.bin", "ModB"},                      // shrinks
+        {"StageData/NewGalaxy/NewGalaxy.arc", mods.path / "added.arc", "ModB"},       // new dir + file
+        {"StageData/AstroGalaxy/Extra.bin", mods.path / "added.arc", "ModB"},         // new file, existing dir
+        {"StageData/empty.bin/inside.bin", mods.path / "added.arc", "ModB"},          // dir where a file is: skipped
+        {"AudioRes", mods.path / "added.arc", "ModB"},                                // file where a dir is: skipped
+    };
+    mountOrFail(options);
+    DVDInit();
+    const PDVD::MountInfo info = PDVD::mountInfo();
+    check(info.overlayReplaced == 3 && info.overlayAdded == 2, "overlay counts replaced and added files");
+    check(info.entryCount == plainEntries + 3, "new file + new dir + new file add three entries");
+    DVDFileInfo f;
+    s32 result = 0;
+    check(DVDOpen("/StageData/AstroGalaxy/AstroGalaxy.arc", &f) && f.length == bigger.size(), "grown file reports the mod size");
+    check(readSync(f, static_cast<s32>(bigger.size()), 0, &result) == bigger && result == static_cast<s32>(bigger.size()),
+          "grown file reads the mod bytes");
+    check(f.startAddr != plainStart, "a grown file moves to the end of the disc");
+    check(DVDOpen("/opening.bnr", &f) && f.length == 96 && readSync(f, 96, 0) == same, "same-size replacement reads the mod bytes");
+    check(DVDOpen("/AudioRes/Seq.arc", &f) && f.length == 10 && readSync(f, 10, 0) == smaller, "smaller replacement reads the mod bytes");
+    check(DVDOpen("/AudioRes/Wave.aw", &f) && readSync(f, 64, 0) == disc.children[0].children[1].data.substr(0, 64),
+          "untouched disc files still read the disc");
+    check(DVDOpen("/STAGEDATA/newgalaxy/NEWGALAXY.ARC", &f) && f.length == 123 && readSync(f, 123, 0) == added,
+          "an added file is found case-insensitively and reads");
+    check(DVDOpen("/StageData/AstroGalaxy/Extra.bin", &f) && readSync(f, 123, 0) == added, "an added file in an existing directory");
+    check(!DVDOpen("/StageData/empty.bin/inside.bin", &f), "a path through a disc file is skipped");
+    check(DVDOpen("/AudioRes/Seq.arc", &f), "a file path equal to a disc directory is skipped");
+    // Absolute (disc offset) reads see the mod bytes too.
+    DVDCommandBlock block;
+    std::vector<char> buffer(32, 0);
+    check(DVDOpen("/opening.bnr", &f), "reopen");
+    check(DVDReadAbsAsyncPrio(&block, buffer.data(), 32, f.startAddr, nullptr, 2), "absolute read issues");
+    waitFor([&] { return DVDGetCommandBlockStatus(&block) == DVD_STATE_END; });
+    check(std::string(buffer.data(), 32) == same.substr(0, 32), "absolute disc reads map through the overlay");
+    PDVD::shutdown();
+}
+
 void testFatalError() {
     TempDir tmp;
     const Node disc = sampleDisc();
@@ -676,6 +738,7 @@ int main() {
     testAsyncQueue();
     testNoDiscThenMount();
     testMountValidationAndScan();
+    testOverlay();
     testFatalError();
     testMisuseAborts();
     std::printf("platform DVD tests passed (%d checks)\n", checks);

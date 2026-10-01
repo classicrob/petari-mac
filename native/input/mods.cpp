@@ -36,6 +36,8 @@ bool parseInto(const std::string& text, bool (&out)[kCount], std::string* error)
         const auto eq = line.find('=');
         const std::string key = line.substr(start, eq == std::string::npos ? std::string::npos : eq - start);
         const std::string value = eq == std::string::npos ? "" : line.substr(eq + 1);
+        // "Folder.<ModName>=on|off" belongs to the disc-file mods (platform/mod_folder.hpp).
+        if (key.rfind("Folder.", 0) == 0) continue;
         int index = -1;
         for (int i = 0; i < kCount; ++i) {
             if (key == kNames[i]) index = i;
@@ -128,8 +130,19 @@ bool save(std::string* error) {
     HostAllocationScope scope;
     std::lock_guard<std::mutex> lock(gFileMutex);
     if (gFile.empty()) return true;
+    // Keep the disc-file mods' "Folder." lines, which this file shares with them.
+    std::string folderLines;
+    {
+        std::ifstream in(gFile);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const auto start = line.find_first_not_of(" \t");
+            if (start != std::string::npos && line.compare(start, 7, "Folder.") == 0) folderLines += line.substr(start) + "\n";
+        }
+    }
     std::ofstream out(gFile, std::ios::trunc);
-    out << serialize();
+    out << serialize() << folderLines;
     if (!out) {
         *error = "cannot write " + gFile.string();
         return false;

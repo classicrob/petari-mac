@@ -50,6 +50,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "dvd_fst.hpp"
 #include "dvd_internal.hpp"
@@ -519,6 +520,18 @@ bool mount(const MountOptions& options, std::string* error) {
         }
         info.source = FstSource::DirectoryScan;
     }
+    if (!options.overlay.empty()) {
+        Fst::OverlayResult applied;
+        if (!fst->applyOverlay(options.overlay, applied, error)) {
+            return false;
+        }
+        for (const std::string& skipped : applied.skipped) {
+            std::fprintf(stderr, "[mods] skipped %s\n", skipped.c_str());
+        }
+        info.overlayReplaced = applied.replaced;
+        info.overlayAdded = applied.added;
+        std::fprintf(stderr, "[mods] disc overlay applied: %u files replaced, %u added\n", applied.replaced, applied.added);
+    }
     info.entryCount = fst->entryCount();
     info.fileCount = fst->fileCount();
 
@@ -683,6 +696,19 @@ BOOL DVDFastOpen(s32 entrynum, DVDFileInfo* fileInfo) {
     fileInfo->length = fst->entry(entrynum).nextOrLength;
     fileInfo->callback = nullptr;
     fileInfo->cb.state = DVD_STATE_END;
+    if (!fst->overlayMod(static_cast<u32>(entrynum)).empty()) {
+        // Mod files: the first open of each is logged, so a mod's effect is traceable.
+        PetariNative::HostAllocationScope host;
+        static std::mutex openedMutex;
+        static std::unordered_set<s32> opened;
+        std::lock_guard<std::mutex> lock(openedMutex);
+        if (opened.insert(entrynum).second) {
+            char path[256];
+            fst->convertEntrynumToPath(static_cast<u32>(entrynum), path, sizeof(path));
+            std::fprintf(stderr, "[mods] game opened %s from mod %s (%u bytes)\n", path,
+                         fst->overlayMod(static_cast<u32>(entrynum)).c_str(), fst->entry(entrynum).nextOrLength);
+        }
+    }
     return TRUE;
 }
 
