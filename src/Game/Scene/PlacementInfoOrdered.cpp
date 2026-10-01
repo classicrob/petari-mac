@@ -6,8 +6,46 @@
 #include "Game/Util/JMapUtil.hpp"
 #include "Game/Util/MemoryUtil.hpp"
 #include "Game/Util/SceneUtil.hpp"
+#ifdef PETARI_NATIVE
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#endif
 
 namespace {
+#ifdef PETARI_NATIVE
+    // PETARI_PLACEMENT_TRACE=Coin,StarPiece (or "all"): log each placed object of
+    // those names with its world position, e.g. to check a level edit took effect
+    // (native/MODS.md "Make a level edit"). Off: one cached getenv, nothing else.
+    bool isTracedPlacement(const char* pName) {
+        static const char* sNames = std::getenv("PETARI_PLACEMENT_TRACE");
+        if (sNames == nullptr || sNames[0] == '\0') {
+            return false;
+        }
+
+        if (std::strcmp(sNames, "all") == 0) {
+            return true;
+        }
+
+        const size_t length = std::strlen(pName);
+        for (const char* pPart = sNames; *pPart != '\0';) {
+            const char* pEnd = std::strchr(pPart, ',');
+            const size_t partLength = pEnd != nullptr ? static_cast< size_t >(pEnd - pPart) : std::strlen(pPart);
+            if (partLength == length && std::strncmp(pPart, pName, length) == 0) {
+                return true;
+            }
+
+            if (pEnd == nullptr) {
+                break;
+            }
+
+            pPart = pEnd + 1;
+        }
+
+        return false;
+    }
+#endif
+
     CreationFuncPtr getCreator(const PlacementInfoOrdered::Identifier& rIdentifier) {
         if (rIdentifier.mShapeId != -1) {
             return MR::getModelChangableObjCreator(rIdentifier.mName);
@@ -98,6 +136,16 @@ void PlacementInfoOrdered::initPlacement() {
                 MR::initLiveActorSystemInfo(rIter);
                 pObj->init(rIter);
                 MR::initLiveActorSystemInfo(rIter);
+#ifdef PETARI_NATIVE
+                if (isTracedPlacement(pSet->mName)) {
+                    TVec3f trans(0.0f, 0.0f, 0.0f);
+                    MR::getJMapInfoTrans(rIter, &trans);
+                    s32 linkId = -1;
+                    rIter.getValue< s32 >("l_id", &linkId);
+                    std::fprintf(stderr, "[placement] %s zone %d l_id %d at (%.1f, %.1f, %.1f)\n", pSet->mName,
+                                 static_cast< int >(MR::getPlacedZoneId(rIter)), static_cast< int >(linkId), trans.x, trans.y, trans.z);
+                }
+#endif
                 MR::clearCurrentPlacementZoneId();
             }
         }

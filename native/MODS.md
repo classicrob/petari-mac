@@ -226,3 +226,92 @@ the other way to show the game reads the mod's bytes.)
 - `native_input`: `Folder.` lines are accepted by the gameplay mods parser and kept when
   it saves. `native_home_menu` (`testModFolderPage`): the page, paging, toggles.
 - `native/tools/mod_smoke.py`: the live check above.
+
+## Make a level edit
+
+A level edit is a stage archive with changed placements, put in a mod folder. The
+game loads it in place of the disc's archive; nothing else is needed.
+
+**With Whitehole** (the usual Galaxy level editor): point it at your extracted disc,
+open the galaxy, move or add objects, and save. Whitehole writes the stage
+archive (for example `StageData/EggStarGalaxy.arc`, Yaz0-compressed). Copy that
+file into `<user folder>/mods/<YourMod>/files/StageData/`, under the same name, and
+switch the mod on (see "Make your first mod"). Work on a copy of the disc files:
+Whitehole saves in place.
+
+**With `native/tools/stage_edit.py`** (small edits from the command line, and
+the tests): it reads an archive (Yaz0 or plain), changes rows in its placement
+tables, and writes a new archive. The disc file is only read.
+
+1. See what is in a stage:
+
+   ```sh
+   A=build/game-data/RMGE01/files/StageData/EggStarGalaxy.arc
+   python3 native/tools/stage_edit.py tables $A
+   python3 native/tools/stage_edit.py show $A jmp/placement/common/objinfo
+   python3 native/tools/stage_edit.py show $A jmp/start/layera/startinfo
+   ```
+
+   Each row is printed as `#index  name  l_id  (x, y, z)`. Tables are per layer
+   (`common`, `layera`...): a scenario uses `common` plus its own layers.
+   Positions are in the stage's own space. Objects in a zone archive are moved
+   by that zone's placement in the galaxy.
+
+2. Make the edit: a ring of coins around Good Egg's first start point, and a
+   Launch Star moved up:
+
+   ```sh
+   M="<user folder>/mods/CoinRing/files/StageData"
+   python3 native/tools/stage_edit.py edit $A "$M/EggStarGalaxy.arc" \
+     --new jmp/placement/common/objinfo Coin -2914.6 -12961.3 -15332.0 \
+     --new jmp/placement/common/objinfo Coin -3614.6 -12961.3 -15332.0 \
+     --move jmp/placement/common/objinfo SuperSpinDriver@0 0 500 0
+   ```
+
+   - `--move TABLE ROW DX DY DZ` moves a row.
+   - `--set TABLE ROW FIELD=VALUE` sets any field (for example `Obj_arg0=3`, `name=Kuribo`).
+   - `--add TABLE ROW X Y Z` copies a row to a new place.
+   - `--new TABLE NAME X Y Z` adds a new object with default settings.
+
+   A ROW is `NAME@N` (the Nth row with that name, from 0) or `#N`. New rows get
+   an unused `l_id`. The output is Yaz0-compressed unless you pass `--plain`.
+   Everything you did not change stays byte for byte as on the disc.
+
+3. Switch the mod on (`Folder.CoinRing=on` in `mods.txt`, or the Mods page) and start
+   the game. To check what the game placed, start it with
+   `PETARI_PLACEMENT_TRACE=Coin,SuperSpinDriver` (or `all`). The log then lists each
+   placed object of those names with its world position:
+
+   ```
+   [mods] game opened /StageData/EggStarGalaxy.arc from mod CoinRing (25854 bytes)
+   [placement] Coin zone 0 l_id 125 at (-2914.6, -12961.3, -15332.0)
+   [placement] SuperSpinDriver zone 0 l_id 4 at (-12216.7, -14924.5, -3022.8)
+   ```
+
+A new object must be one the game knows (the names in
+`src/Game/NameObj/NameObjFactory.cpp`). Its model and sounds must be loadable in
+that stage; common objects such as `Coin`, `StarPiece` and `Kuribo` are. Some
+objects need their own settings (`Obj_arg`s, switches, a path) to do anything;
+copy a working one with `--add` and change it.
+
+### The live check
+
+`native/tools/level_edit_smoke.py` makes the CoinRing mod above at run time from
+your copy of the disc, so no Nintendo data is shipped. It launches Good Egg
+mission 1 twice:
+- with the mod present but off: no new coins, and the Launch Star where the disc
+  has it;
+- with it on: the overlay is applied, the game opens the mod's archive, and the
+  log shows the 8 coins and the moved Launch Star where the edit put them.
+
+Screens from the idle phase are kept in `<output>/<run>-xfb/`.
+
+```sh
+python3 native/tools/level_edit_smoke.py --app build/macos-gx/native/app/Petari.app/Contents/MacOS/Petari \
+  --output build/level-edit-smoke
+```
+
+`native_stage_edit` (ctest) covers the tool without Nintendo data: Yaz0 round trips,
+an unedited rebuild identical to its source, moves, field sets, added and new rows,
+unique `l_id`s, and errors. With an extracted disc in `build/game-data`, every stage
+archive must also rebuild byte for byte when unedited.
