@@ -308,6 +308,7 @@ Bindings Bindings::defaults() {
     b.bind(Action::One, Binding::key(Key::Num1));
     b.bind(Action::Two, Binding::key(Key::Num2));
     b.bind(Action::Home, Binding::key(Key::F1));
+    b.bind(Action::Home, Binding::key(Key::Grave));  // ` (under Escape), for keyboards without a usable F1
     b.bind(Action::TiltHold, Binding::key(Key::Tab));
     b.bind(Action::PostureToggle, Binding::key(Key::T));
     b.bind(Action::Walk, Binding::key(Key::LeftAlt));

@@ -21,7 +21,7 @@ selection have been exercised in the full game; later controls remain unverified
 
 Bindings are loaded from `controls.txt` in the app's user directory (normally
 `~/Library/Application Support/Petari`, overridden by `--user`). Mouse motion
-controls the Star Pointer by default. In the game, F1 then Controls lists
+controls the Star Pointer by default. In the game, F1 (or `, the key under Escape) then Controls lists
 every control as currently bound, remaps included. While the title screen asks
 for A and B, a bar at the top of the screen names the keys ("Keyboard: Return
 starts | F1: all controls").
@@ -32,7 +32,7 @@ have input-component tests but have not been approved through gameplay:
 | Input | Action |
 | --- | --- |
 | Arrow keys | D-pad; Up enters first-person view where supported, Down or Space leaves it |
-| F1 | Native Home menu: Resume, Controls (every key as currently bound), Mods, Restart from Title, Quit |
+| F1 or ` | Native Home menu: Resume, Controls (every key as currently bound), Mods, Restart from Title, Quit |
 | G / V | Optional mods (off by default; F1 → Mods): collect visible Star Bits / fire a Star Bit at the nearest enemy. See native/MODS.md |
 | Minus | Remote Minus (also pauses) |
 | 1 / 2 | Remote 1 / 2 (the game never needs them) |

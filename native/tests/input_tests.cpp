@@ -245,7 +245,7 @@ void testControlsSummary() {
         {"Pause", "Escape / -", "Start / Back"},
         {"Star Ball / Ray", "W A S D tilt while riding", "left stick tilts while riding"},
         {"Tilt the remote by hand", "Hold Tab + W A S D", ""},
-        {"This menu", "F1", "Guide"},
+        {"This menu", "F1 / `", "Guide"},
     };
     for (size_t i = 0; i < sizeof(expected) / sizeof(expected[0]) && i < d.size(); ++i) {
         const auto& e = expected[i];

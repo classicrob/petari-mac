@@ -124,7 +124,7 @@ controllers act as one.
 | Up / Down / Left / Right | +Control Pad (Up: first-person view) | provisional |
 | - | Minus | provisional |
 | 1 / 2 | 1 / 2 | provisional |
-| F1 | HOME | provisional |
+| F1, ` | HOME | provisional |
 | Tab (hold) | WASD tilt the remote | provisional |
 | T | Toggle upright posture | provisional |
 | Left Alt (hold) | Walk: half stick | provisional |
